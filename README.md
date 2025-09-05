@@ -16,7 +16,7 @@ RCEPayloadGen is a comprehensive Remote Code Execution payload generator designe
 
 ```bash
 # Clone the repository
-git clone https://github.com/ahmad-kabiri/rcpayloadgen.git
+git clone https://github.com/kabiri-labs/rcpayloadgen.git
 cd rcpayloadgen
 
 # Install dependencies (none required beyond standard Python libraries)
