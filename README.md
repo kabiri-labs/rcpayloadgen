@@ -1,22 +1,22 @@
-
 # RCEPayloadGen - Advanced RCE Payload Generator
 
-RCEPayloadGen is a comprehensive Remote Code Execution payload generator designed for penetration testers, security researchers, and red teamers. This tool generates a wide variety of RCE payloads tailored to different environments, contexts, and encoding methods.
+RCEPayloadGen is a comprehensive Remote Code Execution payload generator designed for penetration testers, security researchers, and red teamers. This tool generates a wide variety of RCE payloads tailored to different environments, contexts, encoding methods, and specific execution sinks.
 
 ## Features
 
-- **Multi-Environment Support**: Generate payloads for Unix, Windows, PHP, Python, Java, and JavaScript environments
+- **Multi-Environment Support**: Generate payloads for Unix, Windows, Node.js, Python, PHP, Java, .NET, Ruby, Perl, Go, and JavaScript environments
 - **Context-Aware**: Creates payloads for different injection contexts (HTML, JavaScript, SQL, etc.)
+- **Sink-Specific Payloads**: Detailed granularity for code execution sinks, including OS commands, template engines (SSTI), and language-specific execution methods with automatic constraint handling (e.g., escaping forbidden characters, adding quotes)
 - **Advanced Encoding**: Multiple encoding methods including Base64, Hex, ROT13, URL encoding, and more
 - **Customizable**: Fine-tune payload generation with various command-line options
-- **Production-Ready**: Robust error handling, logging, and performance optimization
 - **No Duplicates**: Intelligent duplicate detection to avoid redundant payloads
+- **Production-Ready**: Robust error handling, logging, and performance optimization
 
 ## Installation
 
 ```bash
 # Clone the repository
-git clone https://github.com/ahmad-kabiri/rcpayloadgen.git
+git clone https://github.com/kabiri-labs/rcpayloadgen.git
 cd rcpayloadgen
 
 # Install dependencies (none required beyond standard Python libraries)
@@ -80,9 +80,23 @@ python rce_payload_gen.py --attacker-ip 10.0.0.1 --attacker-domain evil.com
 - `basic_enum` - Basic enumeration commands
 - `file_operations` - File system operations
 - `network_operations` - Network reconnaissance
-- `code_execution` - Language-specific code execution
+- `code_execution` - Language-specific code execution (with sink-level granularity)
 - `download_execute` - Download and execute payloads
 - `reverse_shells` - Reverse shell payloads
+
+### Available Environments
+
+- `unix` - Unix-like systems
+- `windows` - Windows systems
+- `nodejs` - Node.js environment
+- `python` - Python environment
+- `php` - PHP environment
+- `java` - Java/JVM environment
+- `dotnet` - .NET environment
+- `ruby` - Ruby environment
+- `perl` - Perl environment
+- `go` - Go environment
+- `javascript` - JavaScript environment (legacy)
 
 ### Available Encoding Methods
 
@@ -102,9 +116,49 @@ RCEPayloadGen generates payloads across multiple categories:
 1. **Basic Enumeration**: Common system reconnaissance commands
 2. **File Operations**: File system interaction and sensitive file access
 3. **Network Operations**: Network configuration and discovery
-4. **Code Execution**: Language-specific code execution patterns
+4. **Code Execution**: Language-specific code execution patterns with sink-level details and constraint adjustments
 5. **Download & Execute**: Payloads that download and execute remote code
 6. **Reverse Shells**: Comprehensive reverse shell payloads for various environments
+
+## Detailed Code Execution Sinks
+
+For the `code_execution` category, payloads are generated at a sink-specific level, with automatic adjustments for constraints such as forbidden characters (escaped via URL encoding) and quote requirements. Below is a list of supported sinks per environment:
+
+### Node.js (`nodejs`)
+- `child_process_exec`: Executions using child_process module
+- `pug_ssti`: Pug template engine SSTI
+- `ejs_ssti`: EJS template engine SSTI
+- `handlebars_ssti`: Handlebars template engine SSTI
+
+### Python (`python`)
+- `os_system`: os.system executions
+- `subprocess`: subprocess module executions
+- `jinja2_ssti`: Jinja2 template engine SSTI
+
+### PHP (`php`)
+- `exec_system`: system/exec/shell_exec/passthru/eval/preg_replace executions
+
+### Java (`java`)
+- `runtime_exec`: Runtime.exec and ProcessBuilder
+- `freemarker_ssti`: Freemarker template engine SSTI
+- `velocity_ssti`: Velocity template engine SSTI
+- `thymeleaf_ssti`: Thymeleaf template engine SSTI
+
+### .NET (`dotnet`)
+- `process_start`: Process.Start executions
+
+### Ruby (`ruby`)
+- `kernel_system`: system/backticks/exec executions
+- `erb_ssti`: ERB template engine SSTI
+
+### Perl (`perl`)
+- `system_backticks`: system/backticks/exec executions
+
+### Go (`go`)
+- `os_exec`: exec.Command executions
+
+### JavaScript (`javascript`)
+- Legacy executions using require and eval
 
 ## Logging
 
@@ -125,8 +179,8 @@ This tool is intended for:
 
 Contributions are welcome! Please feel free to submit pull requests with:
 
-- New payload categories
-- Additional encoding methods
+- New payload categories or sinks
+- Additional encoding methods or constraint handlers
 - Bug fixes
 - Performance improvements
 - Documentation enhancements
