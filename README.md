@@ -4,11 +4,13 @@ RCEPayloadGen is a comprehensive Remote Code Execution payload generator designe
 
 ## Features
 
-- **Multi-Environment Support**: Generate payloads for Unix, Windows, Node.js, Python, PHP, Java, .NET, Ruby, Perl, Go, and JavaScript environments
+- **Multi-Environment Support**: Generate payloads for Unix, Windows, Node.js, Python, PHP, Java, .NET, Ruby, Perl, Go, JavaScript, containerized Docker workloads, and Kubernetes clusters
 - **Context-Aware**: Creates payloads for different injection contexts (HTML, JavaScript, SQL, etc.)
 - **Sink-Specific Payloads**: Detailed granularity for code execution sinks, including OS commands, template engines (SSTI), and language-specific execution methods with automatic constraint handling (e.g., escaping forbidden characters, adding quotes)
-- **Advanced Encoding**: Multiple encoding methods including Base64, Hex, ROT13, URL encoding, and more
+- **Advanced Encoding**: Multi-stage encoding, polymorphic mutations, Base64, Hex, ROT13, URL encoding, and more for evasion research
+- **Modular Templates**: Payload bases are stored in editable JSON/YAML templates so teams can extend coverage without touching Python source code
 - **Customizable**: Fine-tune payload generation with various command-line options
+- **Detection-Friendly Mode**: Quickly produce benign canary payloads for safe scanning with `--detection-only`
 - **No Duplicates**: Intelligent duplicate detection to avoid redundant payloads
 - **Production-Ready**: Robust error handling, logging, and performance optimization
 
@@ -31,9 +33,9 @@ python rce_payload_gen.py [OPTIONS]
 
 ### Basic Examples
 
-Generate all payloads with default settings:
+Generate all payloads with default settings (requires exploitation consent acknowledgement):
 ```bash
-python rce_payload_gen.py
+python rce_payload_gen.py --acknowledge-consent
 ```
 
 Generate only Unix reverse shells with base64 encoding:
@@ -43,12 +45,17 @@ python rce_payload_gen.py --categories reverse_shells --environments unix --enco
 
 Generate up to 1000 payloads for PHP contexts:
 ```bash
-python rce_payload_gen.py --contexts php --max-payloads 1000
+python rce_payload_gen.py --contexts php --max-payloads 1000 --acknowledge-consent
 ```
 
 Use custom attacker IP and domain:
 ```bash
-python rce_payload_gen.py --attacker-ip 10.0.0.1 --attacker-domain evil.com
+python rce_payload_gen.py --attacker-ip 10.0.0.1 --attacker-domain evil.com --acknowledge-consent
+```
+
+Run in safe detection mode with benign payloads:
+```bash
+python rce_payload_gen.py --detection-only
 ```
 
 ### Full Options
@@ -63,6 +70,9 @@ python rce_payload_gen.py --attacker-ip 10.0.0.1 --attacker-domain evil.com
 | `--categories` | Categories to generate (space-separated) | All categories |
 | `--encodings` | Encoding methods to apply (space-separated) | All encodings |
 | `--environments` | Environments to generate (space-separated) | All environments |
+| `--template-file` | Path to a JSON/YAML template bundle | `templates/payloads.json` |
+| `--detection-only` | Generate benign payloads for validation scans | Disabled |
+| `--acknowledge-consent` | Required confirmation before creating exploitation payloads | Disabled |
 
 ### Available Contexts
 
@@ -97,6 +107,8 @@ python rce_payload_gen.py --attacker-ip 10.0.0.1 --attacker-domain evil.com
 - `perl` - Perl environment
 - `go` - Go environment
 - `javascript` - JavaScript environment (legacy)
+- `docker` - Container escape research against Docker runtimes
+- `kubernetes` - Payloads targeting Kubernetes workloads and control planes
 
 ### Available Encoding Methods
 
@@ -108,6 +120,11 @@ python rce_payload_gen.py --attacker-ip 10.0.0.1 --attacker-domain evil.com
 - `rot13` - ROT13 encoding
 - `random_case` - Random case variation
 - `insert_special_chars` - Insert special characters
+- `base64_then_url` - Multi-stage base64 followed by URL encoding
+- `rot13_then_base64` - ROT13 transform with a base64 wrapper
+- `double_base64` - Nested base64 encoding layers
+- `xor_polymorphic` - XOR key obfuscation with key disclosure for analysis
+- `chunk_shuffle` - Chunk-level permutation for polymorphic variants
 
 ## Payload Types
 
@@ -119,6 +136,7 @@ RCEPayloadGen generates payloads across multiple categories:
 4. **Code Execution**: Language-specific code execution patterns with sink-level details and constraint adjustments
 5. **Download & Execute**: Payloads that download and execute remote code
 6. **Reverse Shells**: Comprehensive reverse shell payloads for various environments
+7. **Container Escape Research**: Docker and Kubernetes oriented payloads to validate hardening of container platforms
 
 ## Detailed Code Execution Sinks
 
@@ -160,9 +178,12 @@ For the `code_execution` category, payloads are generated at a sink-specific lev
 ### JavaScript (`javascript`)
 - Legacy executions using require and eval
 
-## Logging
+## Logging & Ethical Controls
 
-The tool generates detailed logs in `rce_generator.log` with timestamps and severity levels to help with debugging and monitoring the generation process.
+- Detailed execution logs are stored in `rce_generator.log` with timestamps and severity levels for monitoring.
+- Exploitation payload generation writes audit entries to `exploit_audit.log` with a unique watermark token.
+- Detection mode produces safe canary payloads suitable for authorized scanning and validation activities.
+- Exploitation payloads include embedded watermark comments/commands referencing the audit token to discourage misuse.
 
 ## Ethical Use
 

