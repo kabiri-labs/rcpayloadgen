@@ -10,6 +10,7 @@ detection mode must behave as documented.
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -1268,6 +1269,199 @@ class DoctorTestCase(unittest.TestCase):
             self.assertEqual(res.returncode, 1)
             self.assertIn("Refusing to run", res.stdout)
             self.assertFalse(out.exists())
+
+
+class NewSinkCoverageTestCase(unittest.TestCase):
+    """Sinks added from the real-world Vulhub evaluation. Each new payload must
+    carry the right machine-readable oracle so verification can confirm it."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+
+    def test_exec_ast_python_sink_confirms_via_command_oracle(self):
+        # Langflow-class sink: exec() of AST function-defs runs decorators and
+        # default-arg expressions. Payloads are function definitions; the existing
+        # command oracles must still attach.
+        records = list(self.gen.generate_payload_records(
+            selected_categories=["code_execution"], selected_environments=["python"],
+            selected_contexts=["raw"], selected_encodings=["none"],
+        ))
+        exec_ast = [r for r in records if r.sink == "exec_ast"]
+        self.assertTrue(exec_ast, "exec_ast sink must emit payloads")
+        self.assertTrue(all(("def " in r.payload or "@" in r.payload) for r in exec_ast))
+        self.assertTrue(any(r.match == r"uid=\d+" for r in exec_ast))
+        self.assertTrue(any(r.match and "root:" in r.match for r in exec_ast))
+
+    def test_expression_template_nodejs_sink_present_with_oracle(self):
+        # n8n-class sink: server-side {{ }} expression evaluation with a sandbox
+        # escape reaching child_process.
+        records = list(self.gen.generate_payload_records(
+            selected_categories=["code_execution"], selected_environments=["nodejs"],
+            selected_contexts=["raw"], selected_encodings=["none"],
+        ))
+        expr = [r for r in records if r.sink == "expression_template"]
+        self.assertTrue(expr, "expression_template sink must emit payloads")
+        self.assertTrue(any("this.process" in r.payload for r in expr))
+        self.assertTrue(any(r.match == r"uid=\d+" for r in expr))
+
+    def test_psql_meta_command_sink_carries_cr_bypass_and_oracle(self):
+        # pgAdmin-class sink: psql \! meta-command with a CR (\r) validator bypass.
+        records = list(self.gen.generate_payload_records(
+            selected_categories=["code_execution"], selected_environments=["postgres"],
+            selected_contexts=["raw"], selected_encodings=["none"],
+        ))
+        psql = [r for r in records if r.sink == "psql_meta_command"]
+        self.assertTrue(psql, "psql_meta_command sink must emit payloads")
+        self.assertTrue(any("\r" in r.payload and "\\!" in r.payload for r in psql),
+                        "a CR-separated \\! bypass variant must be present")
+        self.assertTrue(any(r.match == r"uid=\d+" for r in psql))
+
+    def test_math_canary_is_a_unique_product_not_49(self):
+        # The fixed 7*7=49 signature collides with any '49' on the page; the {math}
+        # canary must expand to a random product with a matching unique oracle.
+        seen_products = set()
+        for _ in range(5):
+            gen = RCEKit()
+            records = list(gen.generate_payload_records(
+                selected_categories=["code_execution"], selected_environments=["python"],
+                selected_contexts=["raw"], selected_encodings=["none"],
+            ))
+            math = [r for r in records if r.payload.strip().startswith("{{")
+                    and "*" in r.payload and "class" not in r.payload and "7*7" not in r.payload]
+            self.assertTrue(math, "a {math} canary payload must be emitted")
+            for r in math:
+                m = re.search(r"\{\{\s*(\d+)\*(\d+)\s*\}\}", r.payload)
+                self.assertIsNotNone(m, f"unexpected math payload: {r.payload!r}")
+                product = int(m.group(1)) * int(m.group(2))
+                self.assertRegex(str(product), r.match)
+                self.assertNotEqual(product, 49)
+                seen_products.add(product)
+        self.assertGreater(len(seen_products), 1, "products must be randomized per run")
+
+
+class EncodedOracleTestCase(unittest.TestCase):
+    """O5: the confirmation oracle must see through common output wrappers so a
+    sink that base64/hex/url/unicode-encodes command output is still confirmed."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+
+    def test_matches_output_through_common_wrappers(self):
+        import base64
+        out = "uid=0(root) gid=0(root)"
+        pat = r"uid=\d+"
+        self.assertTrue(self.gen._encoded_search(pat, out))
+        self.assertTrue(self.gen._encoded_search(pat, "b64:" + base64.b64encode(out.encode()).decode()))
+        self.assertTrue(self.gen._encoded_search(pat, "hex=" + out.encode().hex()))
+        self.assertTrue(self.gen._encoded_search(pat, "q=uid%3D0%28root%29"))
+
+    def test_no_false_positive_on_benign_body(self):
+        self.assertFalse(self.gen._encoded_search(r"uid=\d+", "welcome — 49 documents processed"))
+
+
+class VerifyChainTestCase(unittest.TestCase):
+    """O2: the session-aware multi-step chain runner reaches sinks a single
+    stateless request cannot — confirming in-band (match oracle) and out-of-band
+    (a {callback} URL received by the built-in listener)."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+
+    @staticmethod
+    def _free_port():
+        import socket
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+        return port
+
+    def test_chain_confirms_in_band_via_multi_step_flow(self):
+        import http.server, socketserver, threading, re as _re, urllib.parse as up
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):  # token page whose value a later step must reuse
+                self.send_response(200); self.end_headers()
+                self.wfile.write(b"session TOKEN=abc123 ready")
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length).decode()
+                cmd = up.parse_qs(body).get("cmd", [""])[0]
+                pipe = os.popen("echo " + cmd + " 2>&1")  # command injection sink
+                out = pipe.read(); pipe.close()
+                self.send_response(200); self.end_headers()
+                try:
+                    self.wfile.write(out.encode(errors="replace"))
+                except BrokenPipeError:
+                    pass
+
+        server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            chain = {
+                "base": f"http://127.0.0.1:{port}",
+                "confirm_step": "run",
+                "steps": [
+                    {"name": "tok", "method": "GET", "path": "/session",
+                     "extract": {"tok": r"TOKEN=(\w+)"}},
+                    {"name": "run", "method": "POST", "path": "/run",
+                     "form": {"session": "{tok}", "cmd": "FUZZ"}},
+                ],
+            }
+            records = list(self.gen.generate_payload_records(
+                selected_categories=["basic_enum"], selected_environments=["unix"],
+                selected_contexts=["raw"], selected_encodings=["none"]))
+            results = self.gen.run_verification_chain(records, chain)
+            confirmed = [r for r in results if r["verdict"] == "confirmed"]
+            self.assertTrue(confirmed, "the chain must confirm at least one RCE")
+            self.assertTrue(any(r["payload"] == "; id" for r in confirmed))
+        finally:
+            server.shutdown(); server.server_close()
+
+    def test_chain_confirms_out_of_band_via_builtin_listener(self):
+        import http.server, socketserver, threading, re as _re, urllib.request
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length).decode()
+                # Simulate blind execution: the "command" fetches the callback URL.
+                m = _re.search(r"https?://\S+", body)
+                if m:
+                    try:
+                        urllib.request.urlopen(m.group(0).strip("'\""), timeout=3).read()
+                    except Exception:
+                        pass
+                self.send_response(200); self.end_headers(); self.wfile.write(b"queued")
+
+        server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        listen_port = self._free_port()
+        try:
+            chain = {
+                "base": f"http://127.0.0.1:{port}",
+                "callback_host": "127.0.0.1",
+                "listen_port": listen_port,
+                "steps": [
+                    {"name": "exec", "method": "POST", "path": "/exec", "body": "cmd=FUZZ"},
+                ],
+            }
+            rec = make_record(payload="run {callback}", category="oob",
+                              expected_channel="response", match=None)
+            results = self.gen.run_verification_chain([rec], chain)
+            self.assertEqual(results[0]["verdict"], "confirmed")
+            self.assertIn("callback", results[0]["detail"])
+        finally:
+            server.shutdown(); server.server_close()
 
 
 if __name__ == "__main__":
