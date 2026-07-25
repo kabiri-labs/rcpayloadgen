@@ -1326,12 +1326,13 @@ class NewSinkCoverageTestCase(unittest.TestCase):
                 selected_categories=["code_execution"], selected_environments=["python"],
                 selected_contexts=["raw"], selected_encodings=["none"],
             ))
-            math = [r for r in records if r.payload.strip().startswith("{{")
-                    and "*" in r.payload and "class" not in r.payload and "7*7" not in r.payload]
+            # The canary is a multi-digit product ({{ 1234*5678 }}); match it
+            # precisely so it is never confused with the fixed {{7*7}} probe.
+            math = [r for r in records
+                    if re.fullmatch(r"\{\{\s*\d{3,}\*\d{3,}\s*\}\}", r.payload.strip())]
             self.assertTrue(math, "a {math} canary payload must be emitted")
             for r in math:
-                m = re.search(r"\{\{\s*(\d+)\*(\d+)\s*\}\}", r.payload)
-                self.assertIsNotNone(m, f"unexpected math payload: {r.payload!r}")
+                m = re.search(r"(\d+)\*(\d+)", r.payload)
                 product = int(m.group(1)) * int(m.group(2))
                 self.assertRegex(str(product), r.match)
                 self.assertNotEqual(product, 49)
