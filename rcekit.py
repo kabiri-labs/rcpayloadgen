@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.7.0"
+__version__ = "2.8.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -812,6 +812,7 @@ class RCEKit:
                 working = payload
                 token: Optional[str] = None
                 oob_host: Optional[str] = None
+                math_match: Optional[str] = None
                 exp_channel = expected_channel
                 ind = indicator
                 if "{oob}" in working and oob_domain:
@@ -823,6 +824,16 @@ class RCEKit:
                 elif "{canary}" in working:
                     token = self._generate_canary()
                     working = working.replace("{canary}", token)
+                elif "{math}" in working:
+                    # Randomized arithmetic canary for template/expression sinks.
+                    # A fixed 7*7=49 collides with any '49' already in the page
+                    # (dates, counters, ids) and is reported inconclusive; a random
+                    # 4-digit product is effectively unique, so its appearance is
+                    # proof the engine evaluated the expression, not a coincidence.
+                    a = random.randint(1000, 9999)
+                    b = random.randint(1000, 9999)
+                    working = working.replace("{math}", f"{a}*{b}")
+                    math_match = rf"(^|\D){a * b}(\D|$)"
 
                 # Decide separator-validity on the canonical payload, before any
                 # encoding hides (or spuriously reveals) the leading separator.
@@ -855,6 +866,8 @@ class RCEKit:
                 # matches the response regardless of how the payload was encoded.
                 if exp_channel in {"interactsh", "timing"}:
                     match = None
+                elif math_match is not None:
+                    match = math_match
                 elif token is not None:
                     match = re.escape(token)
                 else:
@@ -1428,8 +1441,8 @@ class RCEKit:
         if status is None:
             return "error", body[:80]
         if record.match:
-            if re.search(record.match, body):
-                if control_body and re.search(record.match, control_body):
+            if self._encoded_search(record.match, body):
+                if control_body and self._encoded_search(record.match, control_body):
                     if record.token:
                         return "inconclusive", ("canary reflected by the target in an inert control "
                                                 "(no execution needed), so the match is not proof")
@@ -1437,6 +1450,42 @@ class RCEKit:
                 return "confirmed", f"matched /{record.match}/"
             return "no-match", ""
         return "no-signature", "no machine-readable oracle for this payload"
+
+    def _encoded_search(self, pattern: str, body: str) -> bool:
+        """Match ``pattern`` against the response body AND against it after peeling
+        common output wrappers. A sink that base64/hex-encodes, URL-encodes,
+        HTML-escapes, or JSON/unicode-escapes the command output would otherwise
+        hide a genuine hit (e.g. ``dWlkPTA=`` instead of ``uid=0``). Every decode
+        is best-effort and additive: the raw body is always checked first, so this
+        only ever turns a missed confirmation into a hit, never the reverse."""
+        import base64, binascii, html as _html, urllib.parse, codecs
+        if re.search(pattern, body):
+            return True
+        candidates: List[str] = []
+        try:
+            candidates.append(urllib.parse.unquote(body))
+        except Exception:
+            pass
+        try:
+            candidates.append(_html.unescape(body))
+        except Exception:
+            pass
+        try:
+            candidates.append(codecs.decode(body, "unicode_escape"))
+        except Exception:
+            pass
+        for token in re.findall(r"[A-Za-z0-9+/]{16,}={0,2}", body):
+            try:
+                decoded = base64.b64decode(token + "=" * (-len(token) % 4)).decode("utf-8", "replace")
+                candidates.append(decoded)
+            except (binascii.Error, ValueError):
+                continue
+        for token in re.findall(r"(?:[0-9a-fA-F]{2}){8,}", body):
+            try:
+                candidates.append(bytes.fromhex(token).decode("utf-8", "replace"))
+            except ValueError:
+                continue
+        return any(re.search(pattern, c) for c in candidates)
 
     def run_verification(self, records: Iterator[PayloadRecord], url: str, method: str = "GET",
                          data: Optional[str] = None, headers: Optional[List[str]] = None,
