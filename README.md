@@ -1,6 +1,6 @@
 # RCEKit — RCE Testing Toolkit
 
-**Version 2.7.0** · MIT · Python 3.8+ · no third-party dependencies
+**Version 2.8.0** · MIT · Python 3.8+ · no third-party dependencies
 
 RCEKit is an offensive **RCE testing toolkit** for authorised penetration
 testing, red teaming, and security research. It covers the full loop, not just
@@ -171,8 +171,9 @@ Non-runnable transforms (ROT13, XOR/chunk shuffling, byte splicing) were removed
 <details>
 <summary><b>Code-execution sinks</b> (for <code>--categories code_execution</code>)</summary>
 
-- **nodejs** — `child_process_exec`, `pug_ssti`, `ejs_ssti`, `handlebars_ssti`, `vm_eval`, `deserialization`
-- **python** — `os_system`, `subprocess`, `jinja2_ssti`
+- **nodejs** — `child_process_exec`, `pug_ssti`, `ejs_ssti`, `handlebars_ssti`, `vm_eval`, `deserialization`, `expression_template` (server-side `{{ }}` expression sandbox escape, e.g. n8n)
+- **python** — `os_system`, `subprocess`, `jinja2_ssti`, `exec_ast` (function-definition / decorator / default-arg execution in `exec`-of-AST validators, e.g. Langflow)
+- **postgres** — `psql_meta_command` (`\!` shell meta-command, including the CR (`\r`) validator bypass, e.g. pgAdmin restore)
 - **php** — `exec_system`, `eval`, `deserialize`
 - **java** — `runtime_exec`, `freemarker_ssti`, `velocity_ssti`, `thymeleaf_ssti`, `spel`, `ognl`, `groovy`, `deserialization`, `expression`
 - **dotnet** — `process_start`, `deserialize`
