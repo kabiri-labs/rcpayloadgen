@@ -10,6 +10,7 @@ detection mode must behave as documented.
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -1268,6 +1269,95 @@ class DoctorTestCase(unittest.TestCase):
             self.assertEqual(res.returncode, 1)
             self.assertIn("Refusing to run", res.stdout)
             self.assertFalse(out.exists())
+
+
+class NewSinkCoverageTestCase(unittest.TestCase):
+    """Sinks added from the real-world Vulhub evaluation. Each new payload must
+    carry the right machine-readable oracle so verification can confirm it."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+
+    def test_exec_ast_python_sink_confirms_via_command_oracle(self):
+        # Langflow-class sink: exec() of AST function-defs runs decorators and
+        # default-arg expressions. Payloads are function definitions; the existing
+        # command oracles must still attach.
+        records = list(self.gen.generate_payload_records(
+            selected_categories=["code_execution"], selected_environments=["python"],
+            selected_contexts=["raw"], selected_encodings=["none"],
+        ))
+        exec_ast = [r for r in records if r.sink == "exec_ast"]
+        self.assertTrue(exec_ast, "exec_ast sink must emit payloads")
+        self.assertTrue(all(("def " in r.payload or "@" in r.payload) for r in exec_ast))
+        self.assertTrue(any(r.match == r"uid=\d+" for r in exec_ast))
+        self.assertTrue(any(r.match and "root:" in r.match for r in exec_ast))
+
+    def test_expression_template_nodejs_sink_present_with_oracle(self):
+        # n8n-class sink: server-side {{ }} expression evaluation with a sandbox
+        # escape reaching child_process.
+        records = list(self.gen.generate_payload_records(
+            selected_categories=["code_execution"], selected_environments=["nodejs"],
+            selected_contexts=["raw"], selected_encodings=["none"],
+        ))
+        expr = [r for r in records if r.sink == "expression_template"]
+        self.assertTrue(expr, "expression_template sink must emit payloads")
+        self.assertTrue(any("this.process" in r.payload for r in expr))
+        self.assertTrue(any(r.match == r"uid=\d+" for r in expr))
+
+    def test_psql_meta_command_sink_carries_cr_bypass_and_oracle(self):
+        # pgAdmin-class sink: psql \! meta-command with a CR (\r) validator bypass.
+        records = list(self.gen.generate_payload_records(
+            selected_categories=["code_execution"], selected_environments=["postgres"],
+            selected_contexts=["raw"], selected_encodings=["none"],
+        ))
+        psql = [r for r in records if r.sink == "psql_meta_command"]
+        self.assertTrue(psql, "psql_meta_command sink must emit payloads")
+        self.assertTrue(any("\r" in r.payload and "\\!" in r.payload for r in psql),
+                        "a CR-separated \\! bypass variant must be present")
+        self.assertTrue(any(r.match == r"uid=\d+" for r in psql))
+
+    def test_math_canary_is_a_unique_product_not_49(self):
+        # The fixed 7*7=49 signature collides with any '49' on the page; the {math}
+        # canary must expand to a random product with a matching unique oracle.
+        seen_products = set()
+        for _ in range(5):
+            gen = RCEKit()
+            records = list(gen.generate_payload_records(
+                selected_categories=["code_execution"], selected_environments=["python"],
+                selected_contexts=["raw"], selected_encodings=["none"],
+            ))
+            # The canary is a multi-digit product ({{ 1234*5678 }}); match it
+            # precisely so it is never confused with the fixed {{7*7}} probe.
+            math = [r for r in records
+                    if re.fullmatch(r"\{\{\s*\d{3,}\*\d{3,}\s*\}\}", r.payload.strip())]
+            self.assertTrue(math, "a {math} canary payload must be emitted")
+            for r in math:
+                m = re.search(r"(\d+)\*(\d+)", r.payload)
+                product = int(m.group(1)) * int(m.group(2))
+                self.assertRegex(str(product), r.match)
+                self.assertNotEqual(product, 49)
+                seen_products.add(product)
+        self.assertGreater(len(seen_products), 1, "products must be randomized per run")
+
+
+class EncodedOracleTestCase(unittest.TestCase):
+    """O5: the confirmation oracle must see through common output wrappers so a
+    sink that base64/hex/url/unicode-encodes command output is still confirmed."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+
+    def test_matches_output_through_common_wrappers(self):
+        import base64
+        out = "uid=0(root) gid=0(root)"
+        pat = r"uid=\d+"
+        self.assertTrue(self.gen._encoded_search(pat, out))
+        self.assertTrue(self.gen._encoded_search(pat, "b64:" + base64.b64encode(out.encode()).decode()))
+        self.assertTrue(self.gen._encoded_search(pat, "hex=" + out.encode().hex()))
+        self.assertTrue(self.gen._encoded_search(pat, "q=uid%3D0%28root%29"))
+
+    def test_no_false_positive_on_benign_body(self):
+        self.assertFalse(self.gen._encoded_search(r"uid=\d+", "welcome — 49 documents processed"))
 
 
 if __name__ == "__main__":
