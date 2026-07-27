@@ -1,6 +1,6 @@
 # RCEKit — RCE Testing Toolkit
 
-**Version 2.11.0** · MIT · Python 3.8+ · no third-party dependencies
+**Version 2.12.0** · MIT · Python 3.8+ · no third-party dependencies
 
 RCEKit is an offensive **RCE testing toolkit** for authorised penetration
 testing, red teaming, and security research. It covers the full loop, not just
@@ -26,6 +26,7 @@ auto-confirms a blind Log4Shell RCE via an OOB DNS callback:
 - **Auto-verification** — `--verify-url` fires payloads at an authorised target and reports which executed, using each payload's built-in oracle: a `match` regex, a reflected canary, or a timing delay. Confirmation is **differential**, so `confirmed` means execution and not coincidence: a timing hit must clear a noise-aware margin over a multi-sample baseline *and* reproduce on a re-fire, a reflected canary is re-checked against a paired same-token control so a target that merely echoes input is not mistaken for execution, and a command-output signature already present in the payload-free response is reported `inconclusive` instead of a false positive.
 - **Raw request input** — `-r request.txt` injects into a captured HTTP request (proxy/Burp style) instead of a hand-built URL. Mark the point with `FUZZ`/`*` or pick a parameter with `-p NAME`; RCEKit reuses the request's method, path, headers, body and cookies and **encodes each injection point for the context it lands in** (query / form / JSON / header / cookie).
 - **Results-based detection** — `--methods reflected` confirms RCE by forcing the target's shell to compute an arithmetic value on **random operands** (`$((a+b))` plus a `$(echo TAG)` substitution collapse) and checking that value appears in the response but not in a payload-free control. A target that merely echoes the payload returns the literal `$((a+b))`, never the sum, so reflection cannot fake a `confirmed`. Confirmed (execution proven) and needs-review (candidate) verdicts are reported as **separate tiers, never merged**.
+- **No-egress detection** — `--methods file` confirms RCE on internal targets with **no outbound connectivity**: the probe writes a random token to a web-reachable file and a followup request fetches it back, proving execution *and* a write primitive through the target's own web server — no external listener. State-changing and gated on `--webroot` + `--web-base-url`; every finding prints a **cleanup command**.
 - **Built-in OOB listener** — `--listen` receives HTTP/DNS callbacks and correlates each back to the exact payload, closing the blind-RCE loop without a separate interactsh/Collaborator.
 - **Tooling integrations** — export as context-split Burp wordlists, a ready-to-run ffuf attack (`request.txt` + `run.sh`) when a target profile is given, or runnable Nuclei templates with built-in OOB / time-based / reflection oracles.
 - **Safe by default** — a benign `--detection-only` canary mode, safety tiers, a consent gate, and audit logging.
@@ -96,7 +97,9 @@ nothing. Run `python rcekit.py --doctor` to check corpus integrity.
 | `-r`, `--request-file <path>` | Raw HTTP request to inject into (alternative to `--verify-url`); mark with `FUZZ`/`*` or select with `-p` | None |
 | `-p`, `--param <name>` | Parameter/field/header/cookie to inject into for `-r` (query > body > header > cookie) | None |
 | `--request-scheme {http,https}` | Scheme for the URL built from `-r` (default: https if Host is `:443`, else http) | auto |
-| `--methods <list>` | Run named detection methods against `--verify-url`/`-r` instead of the classic per-payload oracle (`reflected`). Opt-in and additive | None |
+| `--methods <list>` | Run named detection methods against `--verify-url`/`-r` instead of the classic per-payload oracle (`reflected`, `file`). Opt-in and additive | None |
+| `--webroot <path>` | (file-based) server-side directory the target can write to and serve | None |
+| `--web-base-url <url>` | (file-based) base URL that serves `--webroot` | None |
 | `--verify-active-risk` | Highest safety tier `--verify-url` may fire (`safe`/`intrusive`/`stateful`) | `safe` |
 | `--verify-allow-destructive` | Let verification fire destructive payloads (persistence/backdoors); skipped by default | Off |
 | `--verify-chain <profile.json>` | Deliver each payload through a multi-step, session-aware flow (login/CSRF → prerequisites → payload delivery → trigger) and confirm in-band or out-of-band | None |
@@ -339,6 +342,34 @@ input is reported `negative`, and a value that also appears without the payload 
 `confirmed` (execution proven) and `needs-review` (candidate), and never merged.
 Unix and Windows (`set /a`) shells are covered; the method is opt-in, so omitting
 `--methods` leaves the classic `--verify-url` behaviour unchanged.
+
+### No-egress detection (`--methods file`)
+
+When the target is internal and cannot reach out (no OOB callback possible),
+`--methods file` confirms execution through the target's **own** web server:
+the probe writes a random token to a file under the web root, and a followup
+request fetches it back. The token appears only if the command ran *and* the
+write landed — proving execution plus a write primitive.
+
+```bash
+python rcekit.py --acknowledge-consent --environments unix \
+  --verify-url "https://target.example/lookup?host=FUZZ" \
+  --methods file --webroot /var/www/html --web-base-url https://target.example
+```
+
+```
+[detect] file-based method WRITES to /var/www/html on the target and fetches via https://target.example; each confirmed finding lists a cleanup command.
+
+[detect] CONFIRMED execution (1):
+  [file/unix/raw] ; echo RK... > /var/www/html/rcekit-<rand>.txt   (target wrote and served token ...)
+      cleanup: rm -f /var/www/html/rcekit-<rand>.txt
+```
+
+This method **changes target state** (one file per confirmed probe), so it is
+gated on both `--webroot` (where the target can write) and `--web-base-url` (the
+URL that serves it), and every finding prints the exact `rm`/`del` command to
+undo the write. The random filename and token mean a stale file can never pass
+as a fresh confirmation.
 
 **Safe by default.** Verification fires only low-impact proofs (enumeration,
 file reads, code-execution and WAF-bypass signatures). Reverse shells,

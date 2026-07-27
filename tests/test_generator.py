@@ -21,9 +21,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import rcekit  # noqa: E402
 from rcekit import (  # noqa: E402
+    FileBased,
     Observation,
     OOBListener,
     PayloadRecord,
+    Probe,
     RCEKit,
     ReflectedMath,
     build_request_inputs,
@@ -1704,6 +1706,123 @@ class RawRequestInputTestCase(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
+
+
+class FileBasedTestCase(unittest.TestCase):
+    """Phase 3 — the FileBased (self-OOB) detection method. Confirmation requires
+    the target to WRITE a random token to a web-reachable file and then serve it
+    back; a target that does not execute never produces the file, so it stays
+    unconfirmed. State-changing, so every finding carries a cleanup command."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+        self.config = {"webroot": "/var/www/html", "web_base_url": "https://t.example"}
+
+    def test_not_applicable_without_config(self):
+        rec = make_record(environment="unix", context="raw")
+        self.assertFalse(FileBased(self.gen).applicable(rec))
+        self.assertTrue(FileBased(self.gen, self.config).applicable(rec))
+
+    def test_build_probe_writes_token_and_carries_followup(self):
+        import random as _random
+        method = FileBased(self.gen, self.config)
+        probe = method.build_probes(make_record(environment="unix", context="raw"),
+                                    _random.Random(3))[0]
+        self.assertIn("echo", probe.payload)
+        self.assertIn("/var/www/html/", probe.payload)
+        self.assertIn(probe.expected, probe.payload)  # the token is what gets written
+        self.assertTrue(probe.followup["url"].startswith("https://t.example/"))
+        self.assertIn("rm -f", probe.followup["cleanup"])
+
+    def test_confirm_requires_the_token_in_the_fetched_file(self):
+        method = FileBased(self.gen, self.config)
+        probe = Probe(payload="; echo TOK123 > /var/www/html/x.txt", expected="TOK123",
+                      followup={"url": "https://t.example/x.txt", "cleanup": "rm -f x"})
+        # Fetched file contains the token -> confirmed.
+        self.assertEqual(
+            method.confirm(Observation(200, "ok", followup_body="TOK123\n"), probe).status,
+            "confirmed")
+        # File served but without the token (e.g. 404 body) -> negative.
+        self.assertEqual(
+            method.confirm(Observation(200, "ok", followup_body="not found"), probe).status,
+            "negative")
+        # Fetch failed entirely -> negative, never confirmed.
+        self.assertEqual(
+            method.confirm(Observation(200, "ok", followup_body=None), probe).status,
+            "negative")
+        # Token also present without the payload -> not attributable to execution.
+        self.assertEqual(
+            method.confirm(Observation(200, "ok", control_body="TOK123",
+                                       followup_body="TOK123"), probe).status,
+            "inconclusive")
+
+    def test_file_based_end_to_end_writes_and_confirms(self):
+        # /vuln executes the injected command (which writes the token file); any
+        # other path serves files from the web root. A non-executing sink never
+        # creates the file, so it stays unconfirmed.
+        import http.server
+        import os
+        import pathlib
+        import socketserver
+        import tempfile
+        import threading
+        import urllib.parse as up
+
+        webroot = tempfile.mkdtemp()
+
+        def make_handler(execute):
+            class Handler(http.server.BaseHTTPRequestHandler):
+                def log_message(self, *a):
+                    pass
+
+                def do_GET(self):
+                    parsed = up.urlparse(self.path)
+                    if parsed.path == "/vuln":
+                        cmd = up.parse_qs(parsed.query).get("host", [""])[0]
+                        if execute:
+                            os.popen("echo " + cmd + " 2>&1").read()
+                        self.send_response(200)
+                        self.end_headers()
+                        self.wfile.write(b"ok")
+                        return
+                    served = pathlib.Path(webroot) / parsed.path.lstrip("/")
+                    if served.is_file():
+                        self.send_response(200)
+                        self.end_headers()
+                        self.wfile.write(served.read_bytes())
+                    else:
+                        self.send_response(404)
+                        self.end_headers()
+                        self.wfile.write(b"not found")
+            return Handler
+
+        def run(execute):
+            server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), make_handler(execute))
+            port = server.server_address[1]
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            try:
+                rec = make_record(environment="unix", context="raw")
+                return self.gen.run_detection(
+                    [rec], url=f"http://127.0.0.1:{port}/vuln?host=FUZZ", methods=["file"],
+                    config={"webroot": webroot, "web_base_url": f"http://127.0.0.1:{port}"})
+            finally:
+                server.shutdown()
+                server.server_close()
+
+        confirmed = [r for r in run(execute=True) if r["verdict"] == "confirmed"]
+        self.assertTrue(confirmed, "an executing+serving sink must confirm file-based RCE")
+        self.assertTrue(all(r.get("cleanup") for r in confirmed), "each finding needs a cleanup command")
+        self.assertTrue(os.listdir(webroot), "the token file must actually be written")
+
+        self.assertFalse([r for r in run(execute=False) if r["verdict"] == "confirmed"],
+                         "a non-executing sink must never be confirmed")
+
+    def test_methods_flag_file_requires_webroot(self):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--verify-url", "http://127.0.0.1:9/x?q=FUZZ",
+             "--methods", "file", "--acknowledge-consent"],
+            cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=120)
+        self.assertIn("--webroot", result.stdout)
 
 
 if __name__ == "__main__":
