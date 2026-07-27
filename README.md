@@ -1,6 +1,6 @@
 # RCEKit — RCE Testing Toolkit
 
-**Version 2.10.0** · MIT · Python 3.8+ · no third-party dependencies
+**Version 2.11.0** · MIT · Python 3.8+ · no third-party dependencies
 
 RCEKit is an offensive **RCE testing toolkit** for authorised penetration
 testing, red teaming, and security research. It covers the full loop, not just
@@ -24,6 +24,7 @@ auto-confirms a blind Log4Shell RCE via an OOB DNS callback:
 - **Executable-only output** — every payload runs as-is on its channel/sink or carries its own decoder; non-runnable transforms are removed and decoder-required blobs are opt-in, so you never copy a payload that silently does nothing.
 - **Sink-aware target profiles** — describe the target once (denied characters, max length, needs-separator, blind, decodes-input) and emit only payloads that could actually fire.
 - **Auto-verification** — `--verify-url` fires payloads at an authorised target and reports which executed, using each payload's built-in oracle: a `match` regex, a reflected canary, or a timing delay. Confirmation is **differential**, so `confirmed` means execution and not coincidence: a timing hit must clear a noise-aware margin over a multi-sample baseline *and* reproduce on a re-fire, a reflected canary is re-checked against a paired same-token control so a target that merely echoes input is not mistaken for execution, and a command-output signature already present in the payload-free response is reported `inconclusive` instead of a false positive.
+- **Raw request input** — `-r request.txt` injects into a captured HTTP request (proxy/Burp style) instead of a hand-built URL. Mark the point with `FUZZ`/`*` or pick a parameter with `-p NAME`; RCEKit reuses the request's method, path, headers, body and cookies and **encodes each injection point for the context it lands in** (query / form / JSON / header / cookie).
 - **Results-based detection** — `--methods reflected` confirms RCE by forcing the target's shell to compute an arithmetic value on **random operands** (`$((a+b))` plus a `$(echo TAG)` substitution collapse) and checking that value appears in the response but not in a payload-free control. A target that merely echoes the payload returns the literal `$((a+b))`, never the sum, so reflection cannot fake a `confirmed`. Confirmed (execution proven) and needs-review (candidate) verdicts are reported as **separate tiers, never merged**.
 - **Built-in OOB listener** — `--listen` receives HTTP/DNS callbacks and correlates each back to the exact payload, closing the blind-RCE loop without a separate interactsh/Collaborator.
 - **Tooling integrations** — export as context-split Burp wordlists, a ready-to-run ffuf attack (`request.txt` + `run.sh`) when a target profile is given, or runnable Nuclei templates with built-in OOB / time-based / reflection oracles.
@@ -92,7 +93,10 @@ nothing. Run `python rcekit.py --doctor` to check corpus integrity.
 | `--verify-data` / `--verify-header` / `--verify-method` | Body (with `FUZZ`) / repeatable header / HTTP method | — |
 | `--verify-url-location` / `--verify-body-location` | How to encode the payload at the URL / body injection point | `query_value` / auto |
 | `--verify-delay` / `--verify-timeout` | Seconds between requests / per-request timeout | `0` / `8` |
-| `--methods <list>` | Run named detection methods against `--verify-url` instead of the classic per-payload oracle (phase 1: `reflected`). Opt-in and additive | None |
+| `-r`, `--request-file <path>` | Raw HTTP request to inject into (alternative to `--verify-url`); mark with `FUZZ`/`*` or select with `-p` | None |
+| `-p`, `--param <name>` | Parameter/field/header/cookie to inject into for `-r` (query > body > header > cookie) | None |
+| `--request-scheme {http,https}` | Scheme for the URL built from `-r` (default: https if Host is `:443`, else http) | auto |
+| `--methods <list>` | Run named detection methods against `--verify-url`/`-r` instead of the classic per-payload oracle (`reflected`). Opt-in and additive | None |
 | `--verify-active-risk` | Highest safety tier `--verify-url` may fire (`safe`/`intrusive`/`stateful`) | `safe` |
 | `--verify-allow-destructive` | Let verification fire destructive payloads (persistence/backdoors); skipped by default | Off |
 | `--verify-chain <profile.json>` | Deliver each payload through a multi-step, session-aware flow (login/CSRF → prerequisites → payload delivery → trigger) and confirm in-band or out-of-band | None |
@@ -283,6 +287,27 @@ is re-checked against a paired **same-token control** (the token in an inert,
 non-executing carrier at the same injection point), so a target that merely
 echoes input cannot pass as execution, and a command-output signature is checked
 against the payload-free baseline response.
+
+### Injecting into a captured request (`-r`)
+
+Point RCEKit at a raw HTTP request saved from a proxy instead of rebuilding the
+URL, body and headers by hand. Mark the injection point with `FUZZ` or `*`, or
+select a parameter with `-p NAME` (searched in this order: query → body →
+header → cookie):
+
+```bash
+# request.txt is a proxy-captured request; inject into the `host` parameter
+python rcekit.py --acknowledge-consent --environments unix \
+  -r request.txt -p host --methods reflected
+```
+
+The request's method, path, headers, body and cookies are reused as-is; only the
+chosen point carries the payload, encoded for **its** context — a query value is
+percent-encoded, a JSON field is JSON-escaped, a form field is form-encoded, a
+header/cookie value is kept single-line. The scheme defaults to `https` when the
+`Host` is on `:443` and `http` otherwise (override with `--request-scheme`); the
+`Host` and `Content-Length` headers are recomputed automatically. One injection
+point per run in this release — `--all-params` enumeration is planned.
 
 ### Results-based detection (`--methods reflected`)
 
