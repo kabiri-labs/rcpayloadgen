@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.15.0"
+__version__ = "2.15.1"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -168,9 +168,12 @@ class RCEKit:
         self.default_encodings = ["none", "url_encode", "double_url_encode", "random_case", "base64_decode_exec"]
 
     def _load_template_payloads(self) -> None:
-        """Load payload templates from JSON/YAML files. Records the reason in
+        """Load payload templates from a JSON file. Records the reason in
         ``self.template_error`` (``None`` on success) so callers can hard-fail
-        on a missing or corrupt corpus instead of silently generating nothing."""
+        on a missing or corrupt corpus instead of silently generating nothing.
+
+        Templates are JSON only: RCEKit is standard-library-only (no third-party
+        dependencies), and a YAML parser is not in the stdlib."""
         self.template_error: Optional[str] = None
         if not self.template_path.exists():
             message = f"template file not found: {self.template_path}"
@@ -180,21 +183,18 @@ class RCEKit:
             self.template_error = message
             return
 
+        if self.template_path.suffix in {".yml", ".yaml"}:
+            message = (f"YAML templates are not supported: {self.template_path}. RCEKit is "
+                       "stdlib-only (no third-party dependencies); convert the template to JSON.")
+            logger.error("%s", message)
+            self.payload_categories = {}
+            self.detection_payloads = {}
+            self.template_error = message
+            return
+
         try:
             with open(self.template_path, "r", encoding="utf-8") as template_file:
-                content = template_file.read()
-
-            if self.template_path.suffix in {".yml", ".yaml"}:
-                try:
-                    import yaml  # type: ignore
-
-                    data = yaml.safe_load(content)
-                except Exception as exc:  # pragma: no cover - optional dependency
-                    logger.error("Failed to parse YAML template %s: %s", self.template_path, exc)
-                    raise
-            else:
-                data = json.loads(content)
-
+                data = json.loads(template_file.read())
             self.payload_categories = data.get("payload_categories", {})
             self.detection_payloads = data.get("detection_payloads", {})
         except Exception as exc:
@@ -2629,7 +2629,7 @@ def main():
     parser.add_argument("--environments", nargs="+", default=None,
                        help="Environments to generate (default: all)")
     parser.add_argument("--template-file", type=str, default=None,
-                        help="Path to a custom payload template file (JSON or YAML)")
+                        help="Path to a custom JSON payload template file")
     parser.add_argument("--detection-only", action="store_true",
                         help="Generate benign payloads for detection and validation")
     parser.add_argument("--output-format", choices=["text", "jsonl", "burp", "ffuf", "nuclei"], default="text",

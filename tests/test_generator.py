@@ -169,6 +169,17 @@ class GeneratorTestCase(unittest.TestCase):
         self.assertIn("basic_enum", self.gen.payload_categories)
         self.assertTrue(self.gen.detection_payloads, "detection payloads should load")
 
+    def test_yaml_template_is_rejected_without_a_third_party_parser(self):
+        # RCEKit is stdlib-only: a YAML template must fail with a clear error
+        # rather than attempting to import a third-party YAML parser.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "corpus.yaml"
+            path.write_text("payload_categories: {}\n", encoding="utf-8")
+            gen = RCEKit(template_path=path)
+            self.assertFalse(gen.payload_categories)
+            self.assertIsNotNone(gen.template_error)
+            self.assertIn("YAML templates are not supported", gen.template_error)
+
     def test_removed_encodings_are_gone(self):
         removed = {"rot13", "rot13_then_base64", "insert_special_chars",
                    "xor_polymorphic", "chunk_shuffle"}
