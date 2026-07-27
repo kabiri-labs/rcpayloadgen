@@ -1,6 +1,6 @@
 # RCEKit — RCE Testing Toolkit
 
-**Version 2.13.0** · MIT · Python 3.8+ · no third-party dependencies
+**Version 2.14.0** · MIT · Python 3.8+ · no third-party dependencies
 
 RCEKit is an offensive **RCE testing toolkit** for authorised penetration
 testing, red teaming, and security research. It covers the full loop, not just
@@ -27,6 +27,7 @@ auto-confirms a blind Log4Shell RCE via an OOB DNS callback:
 - **Raw request input** — `-r request.txt` injects into a captured HTTP request (proxy/Burp style) instead of a hand-built URL. Mark the point with `FUZZ`/`*` or pick a parameter with `-p NAME`; RCEKit reuses the request's method, path, headers, body and cookies and **encodes each injection point for the context it lands in** (query / form / JSON / header / cookie).
 - **Results-based detection** — `--methods reflected` confirms RCE by forcing the target's shell to compute an arithmetic value on **random operands** (`$((a+b))` plus a `$(echo TAG)` substitution collapse) and checking that value appears in the response but not in a payload-free control. A target that merely echoes the payload returns the literal `$((a+b))`, never the sum, so reflection cannot fake a `confirmed`. Confirmed (execution proven) and needs-review (candidate) verdicts are reported as **separate tiers, never merged**.
 - **No-egress detection** — `--methods file` confirms RCE on internal targets with **no outbound connectivity**: the probe writes a random token to a web-reachable file and a followup request fetches it back, proving execution *and* a write primitive through the target's own web server — no external listener. State-changing and gated on `--webroot` + `--web-base-url`; every finding prints a **cleanup command**.
+- **Expression / template injection** — `--methods eval` confirms SSTI / SpEL / OGNL / Groovy / raw-`eval` sinks by injecting `a*b` on **random operands** wrapped in each common syntax (`${…}`, `{{…}}`, `#{…}`, `%{…}`, `<%= … %>`, `@(…)`, bare) and checking the **product** appears while the literal `a*b` does not. Same computed-value invariant as results-based detection, for an expression evaluator instead of a shell.
 - **Hardened blind timing** — `--methods time` fires a controlled `0/N/2N` delay series and requires the response time to track the injected delay **linearly** (a monotonic increase whose extra latency matches the sleep within a noise margin), so jitter cannot fake it. Timing has no computed value, so it is reported `needs-review`, **never** `confirmed` on its own — pair it with `--methods reflected` for an execution proof it corroborates.
 - **Built-in OOB listener** — `--listen` receives HTTP/DNS callbacks and correlates each back to the exact payload, closing the blind-RCE loop without a separate interactsh/Collaborator.
 - **Tooling integrations** — export as context-split Burp wordlists, a ready-to-run ffuf attack (`request.txt` + `run.sh`) when a target profile is given, or runnable Nuclei templates with built-in OOB / time-based / reflection oracles.
@@ -98,7 +99,7 @@ nothing. Run `python rcekit.py --doctor` to check corpus integrity.
 | `-r`, `--request-file <path>` | Raw HTTP request to inject into (alternative to `--verify-url`); mark with `FUZZ`/`*` or select with `-p` | None |
 | `-p`, `--param <name>` | Parameter/field/header/cookie to inject into for `-r` (query > body > header > cookie) | None |
 | `--request-scheme {http,https}` | Scheme for the URL built from `-r` (default: https if Host is `:443`, else http) | auto |
-| `--methods <list>` | Run named detection methods against `--verify-url`/`-r` instead of the classic per-payload oracle (`reflected`, `file`). Opt-in and additive | None |
+| `--methods <list>` | Run named detection methods against `--verify-url`/`-r` instead of the classic per-payload oracle (`reflected`, `eval`, `file`, `time`). Opt-in and additive | None |
 | `--webroot <path>` | (file-based) server-side directory the target can write to and serve | None |
 | `--web-base-url <url>` | (file-based) base URL that serves `--webroot` | None |
 | `--time-base <seconds>` | (time-based) base delay `N`; the regression fires `0/N/2N` and requires the response time to track it | `2.0` |
@@ -344,6 +345,26 @@ input is reported `negative`, and a value that also appears without the payload 
 `confirmed` (execution proven) and `needs-review` (candidate), and never merged.
 Unix and Windows (`set /a`) shells are covered; the method is opt-in, so omitting
 `--methods` leaves the classic `--verify-url` behaviour unchanged.
+
+### Expression / template injection (`--methods eval`)
+
+The same computed-value idea, aimed at **expression evaluators** rather than a
+shell — server-side template injection (Jinja2, Twig, Freemarker, Thymeleaf),
+SpEL, OGNL/Struts, Groovy, and raw `eval()` sinks. It injects `a*b` on random
+operands wrapped in each common syntax and confirms only when the target returns
+the **product**:
+
+```bash
+python rcekit.py --acknowledge-consent --environments python \
+  --verify-url "https://target.example/render?name=FUZZ" --methods eval
+```
+
+Probes cover `${a*b}`, `{{a*b}}`, `#{a*b}`, `%{a*b}`, `<%= a*b %>`, `@(a*b)` and
+a bare `a*b`. A template that renders the payload verbatim echoes `a*b` and never
+the product, so reflection can't fake it; the product is matched on digit
+boundaries and differenced against the payload-free control, so a coincidental
+number in the page is reported `inconclusive`, not `confirmed`. Probe payloads
+depend only on the injection context, so each syntax is tried once per context.
 
 ### No-egress detection (`--methods file`)
 

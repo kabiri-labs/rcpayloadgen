@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import rcekit  # noqa: E402
 from rcekit import (  # noqa: E402
+    EvalExpr,
     FileBased,
     Observation,
     OOBListener,
@@ -1919,6 +1920,100 @@ class ParametricTimeTestCase(unittest.TestCase):
 
         flat = run(vulnerable=False)
         self.assertEqual(flat[0]["verdict"], "negative")
+
+
+class EvalExprTestCase(unittest.TestCase):
+    """Phase 5 — code/expression injection (SSTI, SpEL, OGNL, Groovy, raw eval).
+    Inject a*b on random operands in each common template syntax and confirm the
+    product appears while the literal a*b does not — the computed-value invariant
+    for an expression evaluator."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+        self.method = EvalExpr(self.gen)
+
+    def test_build_probes_cover_common_expression_syntaxes(self):
+        import random as _random
+        probes = self.method.build_probes(make_record(environment="python", context="raw", sink="ssti"),
+                                          _random.Random(5))
+        joined = " ".join(p.payload for p in probes)
+        for delim in ("${", "{{", "#{", "%{", "<%=", "@("):
+            self.assertIn(delim, joined)
+        for probe in probes:
+            # expected is the product; forbidden is the literal expression, which
+            # is present in the payload but must be absent from a confirmed body.
+            self.assertNotIn(probe.expected, probe.payload)
+            self.assertIn(probe.forbidden, probe.payload)
+
+    def test_confirm_evaluation_vs_reflection_vs_boundary(self):
+        import random as _random
+        probe = self.method.build_probes(make_record(environment="python", context="raw"),
+                                         _random.Random(5))[1]
+        # Evaluated: product present, literal absent.
+        self.assertEqual(
+            self.method.confirm(Observation(200, f"= {probe.expected} =", control_body="x"), probe).status,
+            "confirmed")
+        # Reflected: literal echoed, product never produced.
+        self.assertEqual(
+            self.method.confirm(Observation(200, f"= {probe.forbidden} =", control_body="x"), probe).status,
+            "negative")
+        # Product embedded in a longer digit run must not match (digit boundary).
+        self.assertEqual(
+            self.method.confirm(Observation(200, f"id={probe.expected}00", control_body="x"), probe).status,
+            "negative")
+        # Present without the payload too -> inconclusive.
+        self.assertEqual(
+            self.method.confirm(Observation(200, probe.expected, control_body=probe.expected), probe).status,
+            "inconclusive")
+
+    def test_eval_end_to_end_against_evaluating_sink(self):
+        # /ssti evaluates a bare `a*b` (or one wrapped in ${...}/{{...}}/...);
+        # /reflect echoes input verbatim. EvalExpr must confirm on the former only.
+        import http.server
+        import re as _re
+        import socketserver
+        import threading
+        import urllib.parse as up
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                parsed = up.urlparse(self.path)
+                raw = up.parse_qs(parsed.query).get("q", [""])[0]
+                self.send_response(200)
+                self.end_headers()
+                if parsed.path == "/ssti":
+                    # Simulate an expression evaluator: strip common delimiters,
+                    # then evaluate a pure `int*int` expression.
+                    expr = _re.sub(r"^[\$#%@]?\(?\{*=?\s*|\s*\}*\)?%?>?\s*$", "", raw)
+                    expr = expr.strip("${}#%@()<>= ")
+                    match = _re.fullmatch(r"(\d+)\*(\d+)", expr)
+                    out = str(int(match.group(1)) * int(match.group(2))) if match else raw
+                else:
+                    out = raw
+                try:
+                    self.wfile.write(out.encode(errors="replace"))
+                except BrokenPipeError:
+                    pass
+
+        server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            rec = make_record(environment="python", context="raw", sink="ssti")
+            evaluated = self.gen.run_detection(
+                [rec], url=f"http://127.0.0.1:{port}/ssti?q=FUZZ", methods=["eval"])
+            self.assertTrue([r for r in evaluated if r["verdict"] == "confirmed"],
+                            "EvalExpr must confirm against an expression evaluator")
+            reflected = self.gen.run_detection(
+                [rec], url=f"http://127.0.0.1:{port}/reflect?q=FUZZ", methods=["eval"])
+            self.assertFalse([r for r in reflected if r["verdict"] == "confirmed"],
+                             "a target that only echoes input must never be confirmed")
+        finally:
+            server.shutdown()
+            server.server_close()
 
 
 if __name__ == "__main__":
