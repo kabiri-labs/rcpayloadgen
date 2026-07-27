@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.14.0"
+__version__ = "2.15.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -2119,11 +2119,22 @@ class DetectionMethod:
         blurring into an adjacent digit run (e.g. an arithmetic result)."""
         return "RK" + "".join(rng.choice(string.ascii_uppercase) for _ in range(5))
 
-    def _wrap(self, record: "PayloadRecord", core: str, windows: bool = False) -> str:
+    def _wrap(self, record: "PayloadRecord", core: str, windows: bool = False,
+              evade: bool = True) -> str:
         """Break out of the running command with a separator, then escape the
         probe for the record's serialization context — reusing the same
-        context/escape machinery the generator uses for every other payload."""
-        return self._wrap_context(record, f"{' & ' if windows else '; '}{core}")
+        context/escape machinery the generator uses for every other payload.
+
+        With ``--evade low`` and ``evade=True``, apply a single low-touch WAF
+        transform to Unix command probes — substitute ``${IFS}`` for spaces —
+        drawn from the existing shell-bypass vocabulary. It is deliberately
+        minimal, not aggressive/noisy evasion. Callers whose command uses a
+        redirect (``>``) pass ``evade=False``: ``${IFS}`` around ``>`` yields an
+        ambiguous redirect, so those stay canonical."""
+        body = f"{' & ' if windows else '; '}{core}"
+        if evade and not windows and self.config.get("evade") == "low":
+            body = body.replace(" ", "${IFS}")
+        return self._wrap_context(record, body)
 
     def _wrap_context(self, record: "PayloadRecord", body: str) -> str:
         """Escape ``body`` for the record's serialization context and apply the
@@ -2228,7 +2239,9 @@ class FileBased(DetectionMethod):
             core = f"echo {token} > {write_path}"
             cleanup = f"rm -f {write_path}"
         followup = {"url": f"{base}/{name}", "cleanup": cleanup, "path": write_path}
-        return [Probe(payload=self._wrap(record, core, windows=windows),
+        # The write uses a `>` redirect, which ${IFS} would turn into an ambiguous
+        # redirect, so this probe stays canonical even under --evade low.
+        return [Probe(payload=self._wrap(record, core, windows=windows, evade=False),
                       expected=token, forbidden=None, followup=followup)]
 
     def confirm(self, obs: "Observation", probe: "Probe") -> Verdict:
@@ -2671,6 +2684,12 @@ def main():
     parser.add_argument("--time-base", type=float, default=2.0,
                         help="(time-based detection) base delay N in seconds; the regression fires "
                              "0/N/2N and requires the response time to track it (default: 2.0).")
+    parser.add_argument("--evade", choices=["none", "low"], default="none",
+                        help="WAF posture for --methods shell probes. 'none' (default) sends clean, "
+                             "canonical payloads: fewer variants, clearer confirmation, lowest false "
+                             "positives — assumes authorised, WAF-free access. 'low' applies a single "
+                             "low-touch transform (${IFS} for spaces on Unix); deliberately minimal, not "
+                             "aggressive evasion.")
     parser.add_argument("--methods", default=None,
                         help="Comma-separated RCE detection methods to run against --verify-url/-r instead of "
                              "the classic per-payload oracle. Available: reflected (results-based execution "
@@ -2969,7 +2988,7 @@ def main():
                       f"Available: {', '.join(sorted(DETECTION_METHODS))}.")
                 return
             detection_config = {"webroot": args.webroot, "web_base_url": args.web_base_url,
-                                "time_base": args.time_base}
+                                "time_base": args.time_base, "evade": args.evade}
             if "file" in method_names:
                 if not (args.webroot and args.web_base_url):
                     print("[!] --methods file writes a file to the target and fetches it back, so it "

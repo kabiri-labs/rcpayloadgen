@@ -2016,5 +2016,74 @@ class EvalExprTestCase(unittest.TestCase):
             server.server_close()
 
 
+class EvadeTestCase(unittest.TestCase):
+    """Phase 6 — `--evade low`. Default is clean canonical payloads; `low` applies
+    a single low-touch transform (${IFS} for spaces) to Unix shell command probes
+    only, and never to the file-write redirect (which ${IFS} would break)."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+        self.rec = make_record(environment="unix", context="raw")
+
+    def test_default_is_canonical_no_obfuscation(self):
+        import random as _random
+        probe = ReflectedMath(self.gen).build_probes(self.rec, _random.Random(1))[0]
+        self.assertNotIn("${IFS}", probe.payload)
+        self.assertIn(" ", probe.payload)
+
+    def test_evade_low_substitutes_ifs_for_reflected_and_time(self):
+        import random as _random
+        reflected = ReflectedMath(self.gen, {"evade": "low"}).build_probes(self.rec, _random.Random(1))[0]
+        self.assertIn("${IFS}", reflected.payload)
+        self.assertNotIn(" ", reflected.payload)
+        timing = ParametricTime(self.gen, {"evade": "low", "time_base": 2}).build_probes(
+            self.rec, _random.Random(1))[-1]
+        self.assertIn("${IFS}", timing.payload)
+        self.assertNotIn(" ", timing.payload)
+
+    def test_file_write_stays_canonical_under_evade(self):
+        import random as _random
+        config = {"evade": "low", "webroot": "/var/www", "web_base_url": "http://t"}
+        probe = FileBased(self.gen, config).build_probes(self.rec, _random.Random(1))[0]
+        # The `>` redirect must not be broken by ${IFS}.
+        self.assertNotIn("${IFS}", probe.payload)
+        self.assertIn(" > ", probe.payload)
+
+    def test_evade_low_still_confirms_against_shell_sink(self):
+        import http.server
+        import os
+        import socketserver
+        import threading
+        import urllib.parse as up
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                cmd = up.parse_qs(up.urlparse(self.path).query).get("host", [""])[0]
+                out = os.popen("echo " + cmd + " 2>&1").read()
+                self.send_response(200)
+                self.end_headers()
+                try:
+                    self.wfile.write(out.encode(errors="replace"))
+                except BrokenPipeError:
+                    pass
+
+        server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            results = self.gen.run_detection(
+                [self.rec], url=f"http://127.0.0.1:{port}/vuln?host=FUZZ", methods=["reflected"],
+                config={"evade": "low"})
+            confirmed = [r for r in results if r["verdict"] == "confirmed"]
+            self.assertTrue(confirmed, "the ${IFS} variant must still execute and confirm")
+            self.assertIn("${IFS}", confirmed[0]["payload"])
+        finally:
+            server.shutdown()
+            server.server_close()
+
+
 if __name__ == "__main__":
     unittest.main()
