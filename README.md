@@ -1,6 +1,6 @@
 # RCEKit — RCE Testing Toolkit
 
-**Version 2.14.0** · MIT · Python 3.8+ · no third-party dependencies
+**Version 2.15.0** · MIT · Python 3.8+ · no third-party dependencies
 
 RCEKit is an offensive **RCE testing toolkit** for authorised penetration
 testing, red teaming, and security research. It covers the full loop, not just
@@ -103,6 +103,7 @@ nothing. Run `python rcekit.py --doctor` to check corpus integrity.
 | `--webroot <path>` | (file-based) server-side directory the target can write to and serve | None |
 | `--web-base-url <url>` | (file-based) base URL that serves `--webroot` | None |
 | `--time-base <seconds>` | (time-based) base delay `N`; the regression fires `0/N/2N` and requires the response time to track it | `2.0` |
+| `--evade {none,low}` | WAF posture for `--methods` shell probes; `low` applies a minimal `${IFS}`-for-spaces transform (not aggressive evasion) | `none` |
 | `--verify-active-risk` | Highest safety tier `--verify-url` may fire (`safe`/`intrusive`/`stateful`) | `safe` |
 | `--verify-allow-destructive` | Let verification fire destructive payloads (persistence/backdoors); skipped by default | Off |
 | `--verify-chain <profile.json>` | Deliver each payload through a multi-step, session-aware flow (login/CSRF → prerequisites → payload delivery → trigger) and confirm in-band or out-of-band | None |
@@ -416,6 +417,25 @@ alongside `--methods reflected`: if the results-based method confirms, you have 
 execution proof, and the linear timing response corroborates it. This keeps the
 two tiers honest — a blind timing candidate is never dressed up as proven
 execution.
+
+### WAF posture (`--evade`)
+
+By default the detection methods send **clean, canonical payloads** — fewer
+variants, clearer confirmation, and the lowest false-positive rate. This assumes
+authorised, WAF-free access (ask the org for a WAF-bypass path rather than
+fighting the filter). `--evade low` opts into a **single, low-touch** transform
+for the Unix shell probes — `${IFS}` in place of spaces — drawn from the existing
+shell-bypass vocabulary:
+
+```bash
+python rcekit.py --acknowledge-consent --environments unix \
+  --verify-url "https://target.example/lookup?host=FUZZ" --methods reflected --evade low
+```
+
+This is deliberately minimal, not aggressive or noisy evasion. It applies to the
+shell command probes (`reflected`, `time`); the file-write probe stays canonical
+because `${IFS}` around its `>` redirect would break it, and expression probes
+(`eval`) are unaffected.
 
 **Safe by default.** Verification fires only low-impact proofs (enumeration,
 file reads, code-execution and WAF-bypass signatures). Reverse shells,
