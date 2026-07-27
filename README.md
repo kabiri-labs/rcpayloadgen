@@ -12,10 +12,16 @@ execution could produce* — random arithmetic, a template evaluation, a written
 token — checked against a payload-free control. Reflection, coincidence, and
 jitter can't fake it, so `confirmed` is something you can put in a report.
 
-![RCEKit auto-confirming a blind Log4Shell RCE via an OOB DNS callback, correlating the DNS hit back to the exact payload](confirmation-gifs/oob-confirm.gif)
+RCEKit confirms RCE through **multiple methods** under one CLI — results-based,
+expression, file-based, timing, and out-of-band. Two of them in action:
 
-> *Watch it confirm a blind Log4Shell RCE via an out-of-band callback and correlate
-> the DNS hit back to the exact payload — one of several confirmation modes.*
+*Results-based, expression, file and timing methods proving execution in-band — no external infrastructure:*
+
+![RCEKit confirming RCE with four in-band detection methods: reflected, eval, file, and time](confirmation-gifs/non-oob-confirm.png)
+
+*Out-of-band — auto-confirming a blind Log4Shell via a DNS callback, correlated back to the exact payload:*
+
+![RCEKit auto-confirming a blind Log4Shell RCE via an OOB DNS callback, correlating the DNS hit back to the exact payload](confirmation-gifs/oob-confirm.gif)
 
 ---
 
