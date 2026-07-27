@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.15.1"
+__version__ = "2.15.2"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -2096,23 +2096,27 @@ class DetectionMethod:
 
     def _confirm_computed(self, obs: "Observation", probe: "Probe",
                           noun: str = "computed value", boundary: bool = False) -> Verdict:
-        """Shared confirmation for methods that make the target compute a value
-        on random inputs: the value must be present, the literal expression that
-        only reflection would echo must be absent, and the value must be absent
-        from the payload-free control."""
+        """Shared confirmation for methods that make the target compute a value on
+        random inputs. The value RCEKit computed must be present in the response
+        and absent from the payload-free control — reflection cannot produce it
+        (a tag-bracketed sum / a boundary-fenced product on random operands is
+        unforgeable), so its presence is proof of execution.
+
+        A ``forbidden`` literal (the pre-execution expression, e.g. ``$((a+b))``)
+        may also appear when the target echoes the payload verbatim — the single
+        most common command-injection pattern (``PING <input> ...``). That is NOT
+        a reason to withhold confirmation: the computed value is already proof, so
+        the reflected literal is only noted, never a downgrade."""
         if obs.status is None and not obs.body:
             return Verdict("inconclusive", "no response from target (delivery error)")
         if not self._search(probe.expected, obs.body, boundary=boundary):
             return Verdict("negative", f"{noun} absent from the response")
-        if probe.forbidden and self._search(probe.forbidden, obs.body):
-            # The literal expression survived next to the value: the sink echoed
-            # the payload rather than evaluating it. Refuse to confirm.
-            return Verdict("needs-review",
-                           f"{noun} present, but the literal expression was also reflected")
         if obs.control_body and self._search(probe.expected, obs.control_body, boundary=boundary):
             return Verdict("inconclusive", f"{noun} also present in the payload-free control")
-        return Verdict("confirmed",
-                       f"target computed {probe.expected!r} (random operands, absent from control)")
+        evidence = f"target computed {probe.expected!r} (random operands, absent from control)"
+        if probe.forbidden and self._search(probe.forbidden, obs.body):
+            evidence += "; target also reflects the payload verbatim"
+        return Verdict("confirmed", evidence)
 
     def _tag(self, rng: "random.Random") -> str:
         """A distinctive letters-only boundary marker. Letters keep it from
