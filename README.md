@@ -1,6 +1,6 @@
 # RCEKit — RCE Testing Toolkit
 
-**Version 2.15.1** · MIT · Python 3.8+ · no third-party dependencies
+**Version 2.15.2** · MIT · Python 3.8+ · no third-party dependencies
 
 RCEKit is an offensive **RCE testing toolkit** for authorised penetration
 testing, red teaming, and security research. It covers the full loop, not just

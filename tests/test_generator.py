@@ -1541,16 +1541,18 @@ class DetectionMethodTestCase(unittest.TestCase):
             self.method.confirm(Observation(200, exec_body, control_body=exec_body), probe).status,
             "inconclusive")
 
-    def test_confirm_needs_review_when_literal_also_reflected(self):
+    def test_confirm_holds_when_target_also_echoes_the_payload(self):
         import random as _random
         rec = make_record(environment="unix", context="raw")
         probe = self.method.build_probes(rec, _random.Random(9))[0]
-        # Computed value present, but so is the raw expression — the sink echoed
-        # the payload rather than running it cleanly, so it is not confirmed.
+        # The computed value AND the raw expression are both present — the classic
+        # command-injection sink that echoes the input (e.g. "PING <input>") while
+        # also executing it. The computed value is unforgeable proof of execution,
+        # so this must stay `confirmed`; the reflection is only noted.
         body = f"{probe.expected} but also {probe.forbidden}"
         verdict = self.method.confirm(Observation(200, body, control_body="idle"), probe)
-        self.assertEqual(verdict.status, "needs-review")
-        self.assertEqual(self.method.tier, "confirmed")  # tier is the method's ceiling
+        self.assertEqual(verdict.status, "confirmed")
+        self.assertIn("reflects the payload verbatim", verdict.evidence)
 
     def test_reflected_math_confirms_on_executing_target_only(self):
         # /vuln runs the injected string through a shell (real execution);
@@ -1598,6 +1600,42 @@ class DetectionMethodTestCase(unittest.TestCase):
                 [rec], url=f"http://127.0.0.1:{port}/reflect?cmd=FUZZ", methods=["reflected"])
             self.assertFalse([r for r in reflect if r["verdict"] == "confirmed"],
                              "a target that only echoes input must never be confirmed")
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_confirms_echo_back_command_injection(self):
+        # Regression for the most common real-world sink: a tool that echoes the
+        # input back (e.g. "PING <input> ...") AND executes it. The reflected
+        # literal `$((a+b))` must NOT downgrade the genuine RCE — the tag-wrapped
+        # computed value is still unforgeable proof of execution.
+        import http.server
+        import os
+        import socketserver
+        import threading
+        import urllib.parse as up
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                ip = up.parse_qs(up.urlparse(self.path).query).get("ip", [""])[0]
+                out = os.popen("ping -c 1 " + ip + " 2>&1").read()  # injection sink
+                self.send_response(200)
+                self.end_headers()
+                # Echoes the raw input verbatim next to the executed output.
+                self.wfile.write(f"PING {ip}\n{out}".encode(errors="replace"))
+
+        server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            rec = make_record(environment="unix", context="raw")
+            results = self.gen.run_detection(
+                [rec], url=f"http://127.0.0.1:{port}/ping?ip=FUZZ", methods=["reflected"])
+            confirmed = [r for r in results if r["verdict"] == "confirmed"]
+            self.assertTrue(confirmed, "echo-back command injection must be confirmed, not downgraded")
         finally:
             server.shutdown()
             server.server_close()
