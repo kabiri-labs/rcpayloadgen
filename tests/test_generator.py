@@ -45,6 +45,53 @@ def make_record(**overrides):
     base.update(overrides)
     return PayloadRecord(**base)
 
+
+import contextlib  # noqa: E402
+
+
+@contextlib.contextmanager
+def local_target(route):
+    """Spin up a throwaway local HTTP target for detection tests. ``route`` is
+    ``route(method, path, params, headers, body) -> (status, text)`` and stands
+    in for the vulnerable app. Yields the base URL; tears the server down after."""
+    import http.server
+    import socketserver
+    import threading
+    import urllib.parse as up
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _handle(self, method):
+            parsed = up.urlparse(self.path)
+            params = {k: v[0] for k, v in up.parse_qs(parsed.query).items()}
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length).decode(errors="replace") if length else ""
+            status, text = route(method, parsed.path, params, dict(self.headers), body)
+            self.send_response(status)
+            self.end_headers()
+            try:
+                self.wfile.write(text.encode(errors="replace"))
+            except BrokenPipeError:
+                pass
+
+        def do_GET(self):
+            self._handle("GET")
+
+        def do_POST(self):
+            self._handle("POST")
+
+    server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "rcekit.py"
 
@@ -2132,6 +2179,89 @@ class EvadeTestCase(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
+
+
+class DetectionRobustnessTestCase(unittest.TestCase):
+    """Supplementary regression tests distilled from validating RCEKit against a
+    local VulnHub-class range: guarantees not otherwise locked in — encoding
+    resilience, probe redundancy, and (most importantly) false-positive
+    resistance, the tool's core promise."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+        self.rec = make_record(environment="unix", context="raw")
+
+    def test_confirms_through_base64_encoded_output(self):
+        # A sink whose command output is base64-encoded must still confirm:
+        # _encoded_search peels the wrapper and finds the computed value.
+        import base64
+        import os
+
+        def route(method, path, params, headers, body):
+            pipe = os.popen("echo " + params.get("host", "") + " 2>&1")
+            out = pipe.read()
+            pipe.close()
+            return 200, base64.b64encode(out.encode()).decode()
+
+        with local_target(route) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/b64?host=FUZZ", methods=["reflected"])
+            self.assertTrue([r for r in results if r["verdict"] == "confirmed"],
+                            "base64-encoded command output must still confirm")
+
+    def test_backtick_variant_survives_a_dollar_paren_filter(self):
+        # A sink that strips "$(" defeats the $((..)) probe but not the backtick
+        # `expr` variant — probe redundancy keeps the detection alive.
+        import os
+
+        def route(method, path, params, headers, body):
+            ip = params.get("ip", "").replace("$(", "")
+            pipe = os.popen("ping -c 1 " + ip + " 2>&1")
+            out = pipe.read()
+            pipe.close()
+            return 200, "PING " + ip + "\n" + out
+
+        with local_target(route) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/filter?ip=FUZZ", methods=["reflected"])
+            self.assertTrue([r for r in results if r["verdict"] == "confirmed"],
+                            "the backtick variant must survive a $( filter")
+
+    def test_eval_is_not_fooled_by_random_numbers_in_the_page(self):
+        # A page full of large random numbers (session ids, timestamps) must not
+        # trick EvalExpr: the product is boundary-fenced and differenced against
+        # the payload-free control.
+        import random as _random
+
+        def route(method, path, params, headers, body):
+            return 200, f"session={_random.randint(10**7, 10**8)} ts={_random.randint(10**7, 10**8)}"
+
+        with local_target(route) as base:
+            results = self.gen.run_detection(
+                [make_record(environment="python", context="raw")],
+                url=f"{base}/x?q=FUZZ", methods=["eval"])
+            self.assertFalse([r for r in results if r["verdict"] == "confirmed"],
+                             "random numbers on the page must not be a false positive")
+
+    def test_timing_is_not_fooled_by_random_latency(self):
+        # A target with random per-request latency (but no injection) must not
+        # confirm: the regression needs the response time to track the injected
+        # delay linearly, which jitter cannot.
+        import random as _random
+        import time as _time
+
+        def route(method, path, params, headers, body):
+            _time.sleep(_random.uniform(0, 0.2))
+            return 200, "ok"
+
+        with local_target(route) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/x?q=FUZZ", methods=["time"],
+                config={"time_base": 0.6})
+            self.assertFalse([r for r in results if r["verdict"] == "confirmed"],
+                             "random latency must never be confirmed")
+            self.assertTrue(all(r["verdict"] == "negative" for r in results),
+                            "a non-linear latency response is negative, not even a candidate")
 
 
 if __name__ == "__main__":
