@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.10.0"
+__version__ = "2.11.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -2189,6 +2189,166 @@ def build_verification_plan(records: List[PayloadRecord], method: str, url: str,
     return lines, to_send
 
 
+# ===========================================================================
+# Raw HTTP request input (`-r`)
+#
+# Parse a captured HTTP request and place the FUZZ marker at a chosen injection
+# point, then hand the resulting (url, method, data, headers) to the existing
+# verify/detect engine. Each injection point is encoded downstream for the
+# context it lands in (query / form / JSON / header / cookie), reusing the same
+# per-location escaping every other payload goes through.
+# ===========================================================================
+
+def parse_raw_request(text: str) -> Dict[str, Any]:
+    """Split a raw HTTP request (request line, headers, blank line, optional
+    body) into its parts. Returns ``method``, ``target`` (path?query),
+    ``version``, ``headers`` (ordered ``[name, value]`` pairs), ``body``, and
+    ``host`` (from the Host header)."""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    head, _, body = text.partition("\n\n")
+    lines = head.split("\n")
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    if not lines:
+        raise ValueError("empty request")
+    parts = lines[0].split()
+    if len(parts) < 2:
+        raise ValueError(f"malformed request line: {lines[0]!r}")
+    method, target = parts[0], parts[1]
+    version = parts[2] if len(parts) > 2 else "HTTP/1.1"
+    headers: List[List[str]] = []
+    host = ""
+    for line in lines[1:]:
+        if not line.strip():
+            continue
+        name, sep, value = line.partition(":")
+        if not sep:
+            continue
+        name, value = name.strip(), value.strip()
+        headers.append([name, value])
+        if name.lower() == "host":
+            host = value
+    return {"method": method, "target": target, "version": version,
+            "headers": headers, "body": body, "host": host}
+
+
+def _mark_urlencoded_param(blob: str, param: str, mark: str) -> Optional[str]:
+    """Replace ``param``'s value with ``mark`` in a ``a=1&b=2`` blob (query or
+    form body). Returns the rewritten blob, or None if ``param`` is absent."""
+    if not blob:
+        return None
+    found = False
+    out: List[str] = []
+    for pair in blob.split("&"):
+        key, _, _value = pair.partition("=")
+        if key == param:
+            out.append(f"{key}={mark}")
+            found = True
+        else:
+            out.append(pair)
+    return "&".join(out) if found else None
+
+
+def _mark_json_field(body: str, param: str, mark: str) -> Optional[str]:
+    """Set top-level JSON field ``param`` to ``mark``. Returns the re-serialised
+    body, or None if the body is not a JSON object containing ``param``."""
+    try:
+        obj = json.loads(body)
+    except (ValueError, TypeError):
+        return None
+    if isinstance(obj, dict) and param in obj:
+        obj[param] = mark
+        return json.dumps(obj)
+    return None
+
+
+def _mark_cookie(value: str, param: str, mark: str) -> Optional[str]:
+    """Replace cookie ``param``'s value with ``mark`` in a Cookie header value.
+    Returns the rewritten value, or None if ``param`` is absent."""
+    found = False
+    out: List[str] = []
+    for cookie in value.split(";"):
+        key, _, _value = cookie.strip().partition("=")
+        if key.strip() == param:
+            out.append(f"{key.strip()}={mark}")
+            found = True
+        else:
+            out.append(cookie.strip())
+    return "; ".join(out) if found else None
+
+
+def _place_param_marker(target, headers, body, param, mark):
+    """Insert ``mark`` at parameter ``param``, trying query > body > header >
+    cookie. Returns ``(target, headers, body, description)`` or raises if the
+    parameter is nowhere to be found."""
+    path, sep, query = target.partition("?")
+    if sep:
+        marked_query = _mark_urlencoded_param(query, param, mark)
+        if marked_query is not None:
+            return f"{path}?{marked_query}", headers, body, f"query param '{param}'"
+    stripped = body.strip()
+    if stripped[:1] in "{[":
+        marked = _mark_json_field(body, param, mark)
+        if marked is not None:
+            return target, headers, marked, f"JSON field '{param}'"
+    if "=" in body:
+        marked = _mark_urlencoded_param(body, param, mark)
+        if marked is not None:
+            return target, headers, marked, f"body param '{param}'"
+    for i, (name, _value) in enumerate(headers):
+        if name.lower() == param.lower() and name.lower() != "cookie":
+            new_headers = [list(h) for h in headers]
+            new_headers[i][1] = mark
+            return target, new_headers, body, f"header '{name}'"
+    for i, (name, value) in enumerate(headers):
+        if name.lower() == "cookie":
+            marked = _mark_cookie(value, param, mark)
+            if marked is not None:
+                new_headers = [list(h) for h in headers]
+                new_headers[i][1] = marked
+                return target, new_headers, body, f"cookie '{param}'"
+    raise ValueError(f"parameter '{param}' not found in query, body, headers, or cookies")
+
+
+def build_request_inputs(text: str, param: Optional[str] = None,
+                         scheme: Optional[str] = None, mark: str = "FUZZ"
+                         ) -> Tuple[str, str, Optional[str], List[str], str]:
+    """Build ``(url, method, data, headers, injection)`` from a raw HTTP request,
+    with ``mark`` placed at the injection point. Precedence: an inline ``FUZZ``
+    already in the request, then an inline ``*`` marker, then ``-p NAME``."""
+    inline = False
+    if mark in text:
+        inline = True
+    elif "*" in text:
+        # First `*` is the injection marker (commix-style). A request that
+        # legitimately contains `*` (e.g. `Accept: */*`) should use FUZZ or -p.
+        text = text.replace("*", mark, 1)
+        inline = True
+
+    req = parse_raw_request(text)
+    method, target, headers, body, host = (
+        req["method"], req["target"], req["headers"], req["body"], req["host"])
+    if not host:
+        raise ValueError("raw request has no Host header; cannot build an absolute URL")
+
+    if inline:
+        injection = "inline marker"
+    elif param:
+        target, headers, body, injection = _place_param_marker(target, headers, body, param, mark)
+    else:
+        raise ValueError("no injection point: add a FUZZ or * marker, or pass -p NAME")
+
+    if scheme is None:
+        scheme = "https" if host.endswith(":443") else "http"
+    url = f"{scheme}://{host}{target}"
+    # Drop Host and Content-Length: urllib recomputes both from the URL and the
+    # (marker-lengthened) body.
+    out_headers = [f"{name}: {value}" for name, value in headers
+                   if name.lower() not in {"host", "content-length"}]
+    data = body if body else None
+    return url, method, data, out_headers, injection
+
+
 def load_token_manifest(path: str) -> Dict[str, Dict[str, Any]]:
     """Load a .map.jsonl manifest into a token -> entry dict."""
     tokens: Dict[str, Dict[str, Any]] = {}
@@ -2260,6 +2420,18 @@ def main():
                              "back reverse shells, download-execute, credential access, lateral movement, "
                              "container escape, cloud-metadata and OOB payloads; pass 'intrusive' to include "
                              "them. Independent of --max-safety, which only governs file output")
+    parser.add_argument("-r", "--request-file", default=None,
+                        help="Raw HTTP request file (as captured by a proxy) to inject into, as an "
+                             "alternative to --verify-url. Mark the injection point with FUZZ or *, or "
+                             "select a parameter with -p. The request's method, path, headers, body and "
+                             "cookies are reused, each encoded for the context it lands in.")
+    parser.add_argument("-p", "--param", action="append", default=None,
+                        help="Parameter/field/header/cookie to inject into for -r (precedence: query > body "
+                             "> header > cookie). One injection point per run in this release; --all-params "
+                             "enumeration is planned.")
+    parser.add_argument("--request-scheme", choices=["http", "https"], default=None,
+                        help="Scheme for the URL built from -r (default: https when the Host is on :443, "
+                             "otherwise http).")
     parser.add_argument("--methods", default=None,
                         help="Comma-separated RCE detection methods to run against --verify-url instead of "
                              "the classic per-payload oracle. Available: reflected (results-based execution "
@@ -2459,19 +2631,45 @@ def main():
             print("\n[verify-chain] No execution confirmed.")
         return
 
-    if args.verify_url:
+    if args.verify_url or args.request_file:
         if not args.acknowledge_consent:
-            print("[!] --verify-url actively sends payloads to the target. Re-run with "
+            print("[!] Verification actively sends payloads to the target. Re-run with "
                   "--acknowledge-consent to confirm you are authorised to test it.")
             return
-        if "FUZZ" not in args.verify_url and not (args.verify_data and "FUZZ" in args.verify_data) \
-                and not any("FUZZ" in h for h in (args.verify_header or [])):
-            print("[!] No FUZZ marker found in --verify-url/--verify-data/--verify-header; "
-                  "add FUZZ where the payload should be injected.")
-            return
-        method = args.verify_method or ("POST" if args.verify_data else "GET")
+        # Source the request from a raw capture (-r) or the --verify-* flags.
+        if args.request_file:
+            try:
+                with open(args.request_file, "r", encoding="utf-8") as request_fh:
+                    raw_request = request_fh.read()
+            except OSError as exc:
+                print(f"[!] Unable to read --request-file {args.request_file}: {exc}")
+                return
+            params = args.param or []
+            if len(params) > 1:
+                print("[!] -r supports a single injection point in this release; pass one -p "
+                      "(or a FUZZ/* marker). --all-params enumeration is not yet available.")
+                return
+            try:
+                verify_url, method, verify_data, verify_headers, injection = build_request_inputs(
+                    raw_request, param=(params[0] if params else None), scheme=args.request_scheme)
+            except ValueError as exc:
+                print(f"[!] Could not build a request from {args.request_file}: {exc}")
+                return
+            method = args.verify_method or method
+            print(f"[verify] loaded request from {args.request_file}: {method} {verify_url} "
+                  f"(injecting at {injection})")
+        else:
+            verify_url = args.verify_url
+            verify_data = args.verify_data
+            verify_headers = args.verify_header
+            if "FUZZ" not in verify_url and not (verify_data and "FUZZ" in verify_data) \
+                    and not any("FUZZ" in h for h in (verify_headers or [])):
+                print("[!] No FUZZ marker found in --verify-url/--verify-data/--verify-header; "
+                      "add FUZZ where the payload should be injected.")
+                return
+            method = args.verify_method or ("POST" if verify_data else "GET")
         verify_token = ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(8))
-        generator.log_exploitation_usage(f"VERIFY:{verify_token} url={args.verify_url}", args)
+        generator.log_exploitation_usage(f"VERIFY:{verify_token} url={verify_url}", args)
         # Safe by default: verification fires only low-impact proofs unless the
         # operator explicitly raises the ceiling. This holds back reverse shells,
         # download-execute, credential access, lateral movement, container
@@ -2506,7 +2704,7 @@ def main():
         # execution plan before anything is fired.
         records = list(records)
         plan_lines, to_send = build_verification_plan(
-            records, method, args.verify_url,
+            records, method, verify_url,
             attacker_ip=generator.attacker_ip, attacker_domain=generator.attacker_domain,
             max_payloads=args.max_payloads)
         for line in plan_lines:
@@ -2517,7 +2715,7 @@ def main():
         if verify_max_safety == "safe":
             print("[plan] low-impact (safe) payloads only; pass --verify-active-risk intrusive to also "
                   "fire reverse shells, download-execute, credential access, lateral movement and OOB.")
-        print(f"[verify] {method} {args.verify_url}  (authorised target)")
+        print(f"[verify] {method} {verify_url}  (authorised target)")
         # Opt-in, method-driven detection. Additive: without --methods the
         # classic per-payload oracle below runs exactly as before. Confirmed and
         # needs-review tiers are reported separately and never merged.
@@ -2529,8 +2727,8 @@ def main():
                       f"Available: {', '.join(sorted(DETECTION_METHODS))}.")
                 return
             results = generator.run_detection(
-                to_send, url=args.verify_url, methods=method_names, method=method,
-                data=args.verify_data, headers=args.verify_header, delay=args.verify_delay,
+                to_send, url=verify_url, methods=method_names, method=method,
+                data=verify_data, headers=verify_headers, delay=args.verify_delay,
                 timeout=args.verify_timeout, max_payloads=args.max_payloads,
                 url_location=args.verify_url_location, body_location=args.verify_body_location,
             )
@@ -2558,8 +2756,8 @@ def main():
                       "may not fit its sink/context (try --environments/--contexts).")
             return
         results = generator.run_verification(
-            to_send, url=args.verify_url, method=method, data=args.verify_data,
-            headers=args.verify_header, delay=args.verify_delay, timeout=args.verify_timeout,
+            to_send, url=verify_url, method=method, data=verify_data,
+            headers=verify_headers, delay=args.verify_delay, timeout=args.verify_timeout,
             max_payloads=args.max_payloads,
             url_location=args.verify_url_location, body_location=args.verify_body_location,
         )

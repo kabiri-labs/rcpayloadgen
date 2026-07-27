@@ -26,6 +26,8 @@ from rcekit import (  # noqa: E402
     PayloadRecord,
     RCEKit,
     ReflectedMath,
+    build_request_inputs,
+    parse_raw_request,
 )
 
 
@@ -1592,6 +1594,116 @@ class DetectionMethodTestCase(unittest.TestCase):
              "--methods", "bogus", "--acknowledge-consent"],
             cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=120)
         self.assertIn("Unknown --methods", result.stdout)
+
+
+class RawRequestInputTestCase(unittest.TestCase):
+    """Phase 2 — the `-r` raw HTTP request input layer. Each injection point is
+    marked with FUZZ and routed into the existing verify/detect engine, which
+    encodes it for the context it lands in."""
+
+    def test_parse_raw_request_splits_line_headers_and_body(self):
+        raw = "POST /api HTTP/1.1\r\nHost: t.example\r\nContent-Type: application/json\r\n\r\n{\"a\":1}"
+        req = parse_raw_request(raw)
+        self.assertEqual(req["method"], "POST")
+        self.assertEqual(req["target"], "/api")
+        self.assertEqual(req["host"], "t.example")
+        self.assertEqual(req["body"], '{"a":1}')
+        self.assertIn(["Content-Type", "application/json"], req["headers"])
+
+    def test_query_param_marker_preserves_other_params(self):
+        raw = "GET /lookup?host=example.com&x=1 HTTP/1.1\r\nHost: t.example\r\n\r\n"
+        url, method, data, headers, injection = build_request_inputs(raw, param="host")
+        self.assertEqual(url, "http://t.example/lookup?host=FUZZ&x=1")
+        self.assertEqual(method, "GET")
+        self.assertIsNone(data)
+        self.assertIn("query param", injection)
+
+    def test_json_field_marker(self):
+        raw = ("POST /api HTTP/1.1\r\nHost: t.example\r\nContent-Type: application/json\r\n\r\n"
+               '{"host": "a", "y": 2}')
+        url, method, data, headers, injection = build_request_inputs(raw, param="host")
+        self.assertEqual(method, "POST")
+        self.assertIn('"host": "FUZZ"', data)
+        self.assertIn('"y": 2', data)
+
+    def test_form_body_and_cookie_and_header_markers(self):
+        form = "POST /f HTTP/1.1\r\nHost: t.example\r\nContent-Type: application/x-www-form-urlencoded\r\n\r\na=1&b=2"
+        _, _, data, _, inj = build_request_inputs(form, param="b")
+        self.assertEqual(data, "a=1&b=FUZZ")
+        self.assertIn("body param", inj)
+
+        cookie = "GET / HTTP/1.1\r\nHost: t.example\r\nCookie: sid=abc; role=user\r\n\r\n"
+        _, _, _, headers, inj = build_request_inputs(cookie, param="role")
+        self.assertIn("Cookie: sid=abc; role=FUZZ", headers)
+        self.assertIn("cookie", inj)
+
+        header = "GET / HTTP/1.1\r\nHost: t.example\r\nX-Api: key123\r\n\r\n"
+        _, _, _, headers, inj = build_request_inputs(header, param="X-Api")
+        self.assertIn("X-Api: FUZZ", headers)
+
+    def test_inline_marker_and_scheme_inference(self):
+        # `*` marks the point; Host on :443 infers https; Host/Content-Length dropped.
+        raw = ("POST /api HTTP/1.1\r\nHost: t.example:443\r\nContent-Type: application/json\r\n"
+               "Content-Length: 12\r\n\r\n{\"host\": \"*\"}")
+        url, method, data, headers, injection = build_request_inputs(raw)
+        self.assertTrue(url.startswith("https://t.example:443/api"))
+        self.assertEqual(data, '{"host": "FUZZ"}')
+        self.assertEqual(injection, "inline marker")
+        self.assertFalse(any(h.lower().startswith(("host:", "content-length:")) for h in headers))
+
+    def test_existing_fuzz_marker_is_respected(self):
+        raw = "GET /q?a=FUZZ HTTP/1.1\r\nHost: t.example\r\n\r\n"
+        url, _, _, _, injection = build_request_inputs(raw)
+        self.assertEqual(url, "http://t.example/q?a=FUZZ")
+        self.assertEqual(injection, "inline marker")
+
+    def test_missing_marker_and_missing_param_raise(self):
+        with self.assertRaises(ValueError):
+            build_request_inputs("GET /q?a=1 HTTP/1.1\r\nHost: t.example\r\n\r\n")
+        with self.assertRaises(ValueError):
+            build_request_inputs("GET /q?a=1 HTTP/1.1\r\nHost: t.example\r\n\r\n", param="nope")
+        with self.assertRaises(ValueError):
+            build_request_inputs("GET /q?a=* HTTP/1.1\r\n\r\n")  # no Host
+
+    def test_raw_request_drives_detection_end_to_end(self):
+        # A raw request marked with -p, routed through run_detection, confirms
+        # against an executing sink — proving the -r layer feeds the engine.
+        import http.server
+        import os
+        import socketserver
+        import threading
+        import urllib.parse as up
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                cmd = up.parse_qs(up.urlparse(self.path).query).get("host", [""])[0]
+                out = os.popen("echo " + cmd + " 2>&1").read()
+                self.send_response(200)
+                self.end_headers()
+                try:
+                    self.wfile.write(out.encode(errors="replace"))
+                except BrokenPipeError:
+                    pass
+
+        server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            raw = (f"GET /vuln?host=example.com HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n")
+            url, method, data, headers, injection = build_request_inputs(raw, param="host")
+            self.assertEqual(injection, "query param 'host'")
+            gen = RCEKit()
+            rec = make_record(environment="unix", context="raw")
+            results = gen.run_detection([rec], url=url, methods=["reflected"],
+                                        method=method, data=data, headers=headers)
+            self.assertTrue([r for r in results if r["verdict"] == "confirmed"],
+                            "the -r request must reach the sink and confirm execution")
+        finally:
+            server.shutdown()
+            server.server_close()
 
 
 if __name__ == "__main__":
