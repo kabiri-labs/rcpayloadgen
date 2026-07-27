@@ -20,7 +20,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import rcekit  # noqa: E402
-from rcekit import OOBListener, PayloadRecord, RCEKit  # noqa: E402
+from rcekit import (  # noqa: E402
+    Observation,
+    OOBListener,
+    PayloadRecord,
+    RCEKit,
+    ReflectedMath,
+)
 
 
 def make_record(**overrides):
@@ -1463,6 +1469,129 @@ class VerifyChainTestCase(unittest.TestCase):
             self.assertIn("callback", results[0]["detail"])
         finally:
             server.shutdown(); server.server_close()
+
+
+class DetectionMethodTestCase(unittest.TestCase):
+    """Phase 1 — the ReflectedMath detection method and the method-driven engine.
+
+    The confirmation invariant: a ``confirmed`` verdict requires a value the
+    target *computed* (arithmetic on random operands), never a literal the
+    payload already carried. Proven end-to-end against a live ``/vuln`` sink
+    that executes vs a ``/reflect`` sink that only echoes — the direct
+    false-positive-resistance gate from the design brief.
+    """
+
+    def setUp(self):
+        self.gen = RCEKit()
+        self.method = ReflectedMath(self.gen)
+
+    def test_build_probes_carry_a_computed_expected_value(self):
+        import random as _random
+        rec = make_record(environment="unix", context="raw")
+        probes = self.method.build_probes(rec, _random.Random(1))
+        self.assertTrue(probes)
+        for probe in probes:
+            # The expected value is a sum the payload never spells out literally,
+            # so only execution can put it in the response.
+            self.assertNotIn(probe.expected, probe.payload)
+            # `forbidden` is the un-executed literal, which IS in the payload;
+            # its survival in a response means reflection, not execution.
+            self.assertIsNotNone(probe.forbidden)
+            self.assertIn(probe.forbidden, probe.payload)
+
+    def test_windows_probe_uses_cmd_arithmetic(self):
+        import random as _random
+        rec = make_record(environment="windows", context="raw")
+        probes = self.method.build_probes(rec, _random.Random(1))
+        self.assertTrue(probes)
+        self.assertIn("set /a", probes[0].payload)
+
+    def test_confirm_distinguishes_execution_reflection_and_control(self):
+        import random as _random
+        rec = make_record(environment="unix", context="raw")
+        probe = self.method.build_probes(rec, _random.Random(7))[0]
+        # Execution: the computed value is present, the literal is gone.
+        exec_body = f"output: {probe.expected} done"
+        self.assertEqual(
+            self.method.confirm(Observation(200, exec_body, control_body="idle"), probe).status,
+            "confirmed")
+        # Reflection: the target echoes the payload; the sum is never produced.
+        self.assertEqual(
+            self.method.confirm(Observation(200, probe.payload, control_body="idle"), probe).status,
+            "negative")
+        # Value also present without the payload -> not attributable to execution.
+        self.assertEqual(
+            self.method.confirm(Observation(200, exec_body, control_body=exec_body), probe).status,
+            "inconclusive")
+
+    def test_confirm_needs_review_when_literal_also_reflected(self):
+        import random as _random
+        rec = make_record(environment="unix", context="raw")
+        probe = self.method.build_probes(rec, _random.Random(9))[0]
+        # Computed value present, but so is the raw expression — the sink echoed
+        # the payload rather than running it cleanly, so it is not confirmed.
+        body = f"{probe.expected} but also {probe.forbidden}"
+        verdict = self.method.confirm(Observation(200, body, control_body="idle"), probe)
+        self.assertEqual(verdict.status, "needs-review")
+        self.assertEqual(self.method.tier, "confirmed")  # tier is the method's ceiling
+
+    def test_reflected_math_confirms_on_executing_target_only(self):
+        # /vuln runs the injected string through a shell (real execution);
+        # /reflect echoes it verbatim without executing. ReflectedMath must
+        # confirm on the former and never on the latter.
+        import http.server
+        import os
+        import socketserver
+        import threading
+        import urllib.parse as up
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                parsed = up.urlparse(self.path)
+                cmd = up.parse_qs(parsed.query).get("cmd", [""])[0]
+                self.send_response(200)
+                self.end_headers()
+                if parsed.path == "/vuln":
+                    pipe = os.popen("echo " + cmd + " 2>&1")  # command-injection sink
+                    out = pipe.read()
+                    pipe.close()
+                else:  # /reflect: echo input, never execute
+                    out = cmd
+                try:
+                    self.wfile.write(out.encode(errors="replace"))
+                except BrokenPipeError:
+                    pass
+
+        server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            rec = make_record(environment="unix", context="raw")
+            vuln = self.gen.run_detection(
+                [rec], url=f"http://127.0.0.1:{port}/vuln?cmd=FUZZ", methods=["reflected"])
+            confirmed = [r for r in vuln if r["verdict"] == "confirmed"]
+            self.assertTrue(confirmed, "ReflectedMath must confirm against an executing sink")
+            self.assertTrue(all(r["tier"] == "confirmed" and r["method"] == "reflected"
+                                for r in confirmed))
+
+            reflect = self.gen.run_detection(
+                [rec], url=f"http://127.0.0.1:{port}/reflect?cmd=FUZZ", methods=["reflected"])
+            self.assertFalse([r for r in reflect if r["verdict"] == "confirmed"],
+                             "a target that only echoes input must never be confirmed")
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_methods_flag_rejects_unknown_method(self):
+        # The CLI validates --methods before firing anything at the target.
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--verify-url", "http://127.0.0.1:9/x?q=FUZZ",
+             "--methods", "bogus", "--acknowledge-consent"],
+            cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=120)
+        self.assertIn("Unknown --methods", result.stdout)
 
 
 if __name__ == "__main__":

