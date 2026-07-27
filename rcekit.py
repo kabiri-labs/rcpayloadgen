@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.13.0"
+__version__ = "2.14.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -2080,14 +2080,39 @@ class DetectionMethod:
         called for methods with ``aggregate = True``."""
         raise NotImplementedError
 
-    def _search(self, literal: str, body: str) -> bool:
+    def _search(self, literal: str, body: str, boundary: bool = False) -> bool:
         """Encoded-aware literal search. Reuse the generator's ``_encoded_search``
         (additive: raw body first, then common output wrappers) so a sink that
         base64/hex/url/html-encodes the output still confirms. ``literal`` is
-        matched verbatim, not as a regex."""
+        matched verbatim, not as a regex. With ``boundary=True`` the match is
+        fenced by non-digit boundaries, so a bare number (e.g. an arithmetic
+        product) does not spuriously match inside a longer digit run."""
         if not literal or not body:
             return False
-        return self.gen._encoded_search(re.escape(literal), body)
+        pattern = re.escape(literal)
+        if boundary:
+            pattern = r"(?<!\d)" + pattern + r"(?!\d)"
+        return self.gen._encoded_search(pattern, body)
+
+    def _confirm_computed(self, obs: "Observation", probe: "Probe",
+                          noun: str = "computed value", boundary: bool = False) -> Verdict:
+        """Shared confirmation for methods that make the target compute a value
+        on random inputs: the value must be present, the literal expression that
+        only reflection would echo must be absent, and the value must be absent
+        from the payload-free control."""
+        if obs.status is None and not obs.body:
+            return Verdict("inconclusive", "no response from target (delivery error)")
+        if not self._search(probe.expected, obs.body, boundary=boundary):
+            return Verdict("negative", f"{noun} absent from the response")
+        if probe.forbidden and self._search(probe.forbidden, obs.body):
+            # The literal expression survived next to the value: the sink echoed
+            # the payload rather than evaluating it. Refuse to confirm.
+            return Verdict("needs-review",
+                           f"{noun} present, but the literal expression was also reflected")
+        if obs.control_body and self._search(probe.expected, obs.control_body, boundary=boundary):
+            return Verdict("inconclusive", f"{noun} also present in the payload-free control")
+        return Verdict("confirmed",
+                       f"target computed {probe.expected!r} (random operands, absent from control)")
 
     def _tag(self, rng: "random.Random") -> str:
         """A distinctive letters-only boundary marker. Letters keep it from
@@ -2098,8 +2123,13 @@ class DetectionMethod:
         """Break out of the running command with a separator, then escape the
         probe for the record's serialization context — reusing the same
         context/escape machinery the generator uses for every other payload."""
+        return self._wrap_context(record, f"{' & ' if windows else '; '}{core}")
+
+    def _wrap_context(self, record: "PayloadRecord", body: str) -> str:
+        """Escape ``body`` for the record's serialization context and apply the
+        context break-out prefix/suffix — the same machinery the generator uses
+        for every other payload. No command separator is added."""
         ctx = self.gen.contexts.get(record.context, {"prefix": "", "suffix": "", "escape": "none"})
-        body = f"{' & ' if windows else '; '}{core}"
         escaped = self.gen._escape_for_context(body, ctx.get("escape", "none"))
         return f"{ctx.get('prefix', '')}{escaped}{ctx.get('suffix', '')}"
 
@@ -2159,21 +2189,7 @@ class ReflectedMath(DetectionMethod):
         return probes
 
     def confirm(self, obs: "Observation", probe: "Probe") -> Verdict:
-        if obs.status is None and not obs.body:
-            return Verdict("inconclusive", "no response from target (delivery error)")
-        if not self._search(probe.expected, obs.body):
-            return Verdict("negative", "computed value absent from the response")
-        if probe.forbidden and self._search(probe.forbidden, obs.body):
-            # The literal expression survived next to the value: the sink echoed
-            # the payload rather than running it cleanly. Refuse to confirm.
-            return Verdict("needs-review",
-                           "computed value present, but the literal expression was also reflected")
-        if obs.control_body and self._search(probe.expected, obs.control_body):
-            # Present without the payload too — not attributable to execution.
-            return Verdict("inconclusive",
-                           "computed value also present in the payload-free control")
-        return Verdict("confirmed",
-                       f"target computed {probe.expected!r} (random operands, absent from control)")
+        return self._confirm_computed(obs, probe)
 
 
 class FileBased(DetectionMethod):
@@ -2291,12 +2307,59 @@ class ParametricTime(DetectionMethod):
                        "candidate — pair with --methods reflected for an execution proof")
 
 
+class EvalExpr(DetectionMethod):
+    """Code / expression injection (SSTI, SpEL, OGNL, Groovy, raw eval). Inject
+    ``a*b`` on random operands wrapped in each common template/expression
+    syntax, and confirm the *product* appears in the response while the literal
+    ``a*b`` does not — the same computed-value invariant as ReflectedMath, but
+    for an expression evaluator rather than a shell.
+
+    A template that renders the payload verbatim echoes ``a*b``, never the
+    product, so reflection cannot fake it. Probe payloads depend only on the
+    injection context (not the environment), so the engine's per-payload
+    de-duplication fires each syntax once per context."""
+    name = "eval"
+    tier = "confirmed"
+
+    # Delimiters for the common expression/template evaluators, plus a bare form
+    # for raw eval() sinks. {expr} is substituted with the random arithmetic.
+    _FORMS = (
+        "{expr}",            # raw eval (Python/JS/Ruby eval, etc.)
+        "${{{expr}}}",       # Freemarker / JSP EL / SpEL  -> ${a*b}
+        "{{{{{expr}}}}}",    # Jinja2 / Twig / Nunjucks     -> {{a*b}}
+        "#{{{expr}}}",       # SpEL / Thymeleaf             -> #{a*b}
+        "%{{{expr}}}",       # OGNL / Struts                -> %{a*b}
+        "<%= {expr} %>",     # ERB / JSP scriptlet
+        "@({expr})",         # Razor
+    )
+
+    def applicable(self, record: "PayloadRecord") -> bool:
+        return True
+
+    def build_probes(self, record: "PayloadRecord", rng: "random.Random") -> List[Probe]:
+        a = rng.randint(1000, 9999)
+        b = rng.randint(1000, 9999)
+        expr = f"{a}*{b}"
+        expected = str(a * b)
+        probes: List[Probe] = []
+        for form in self._FORMS:
+            probes.append(Probe(payload=self._wrap_context(record, form.format(expr=expr)),
+                                expected=expected, forbidden=expr))
+        return probes
+
+    def confirm(self, obs: "Observation", probe: "Probe") -> Verdict:
+        # Digit boundaries: the product is a bare number, so fence it so it does
+        # not match inside a longer digit run in the page.
+        return self._confirm_computed(obs, probe, boundary=True)
+
+
 # The detection methods RCEKit can run, keyed by their --methods name. Adding a
 # phase = adding a class above and an entry here.
 DETECTION_METHODS = {
     ReflectedMath.name: ReflectedMath,
     FileBased.name: FileBased,
     ParametricTime.name: ParametricTime,
+    EvalExpr.name: EvalExpr,
 }
 
 
@@ -2611,7 +2674,8 @@ def main():
     parser.add_argument("--methods", default=None,
                         help="Comma-separated RCE detection methods to run against --verify-url/-r instead of "
                              "the classic per-payload oracle. Available: reflected (results-based execution "
-                             "proof via computed arithmetic); file (self-OOB write+fetch, needs --webroot and "
+                             "proof via computed arithmetic); eval (SSTI/SpEL/OGNL/Groovy/raw-eval via a "
+                             "computed product); file (self-OOB write+fetch, needs --webroot and "
                              "--web-base-url); time (hardened blind-timing regression, needs-review only). "
                              "Opt-in and additive: when omitted, verification keeps its existing behaviour "
                              "unchanged.")
