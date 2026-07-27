@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.12.0"
+__version__ = "2.13.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -1653,6 +1653,33 @@ class RCEKit:
             for record in carriers:
                 if not meth.applicable(record):
                     continue
+                if getattr(meth, "aggregate", False):
+                    # Fire the whole probe series (e.g. a timing regression) and
+                    # decide once. Each fire's timeout is stretched past its
+                    # intended delay so a genuine sleep completes instead of
+                    # timing out.
+                    series: List[Tuple[Probe, Observation]] = []
+                    for probe in meth.build_probes(record, rng):
+                        req_timeout = timeout + (probe.delay_s or 0.0) + 2.0
+                        status, body, elapsed = self._fire(
+                            probe.payload, url, method, data, headers, url_location,
+                            resolved_body_location, req_timeout)
+                        series.append((probe, Observation(
+                            status=status, body=body, control_body=control_body, elapsed=elapsed)))
+                        if delay:
+                            time.sleep(delay)
+                    verdict = meth.confirm_series(series)
+                    probe = series[-1][0] if series else Probe(payload="", expected="")
+                    results.append({
+                        "verdict": verdict.status, "detail": verdict.evidence,
+                        "status": None, "payload": probe.payload,
+                        "method": meth.name, "tier": meth.tier,
+                        "environment": record.environment, "context": record.context,
+                        "category": "detection", "expected": probe.expected,
+                    })
+                    if max_payloads and len(results) >= max_payloads:
+                        return results
+                    continue
                 for probe in meth.build_probes(record, rng):
                     if probe.payload in seen:
                         continue
@@ -2030,6 +2057,10 @@ class DetectionMethod:
     unchanged on Python 3.8."""
     name = "base"
     tier = "confirmed"
+    # Aggregate methods observe a whole *set* of probes together (e.g. a timing
+    # regression across several controlled delays) and decide once via
+    # confirm_series, instead of one Verdict per probe.
+    aggregate = False
 
     def __init__(self, gen: "RCEKit", config: Optional[Dict[str, Any]] = None):
         self.gen = gen
@@ -2042,6 +2073,11 @@ class DetectionMethod:
         raise NotImplementedError
 
     def confirm(self, obs: "Observation", probe: "Probe") -> Verdict:
+        raise NotImplementedError
+
+    def confirm_series(self, series: "List[Tuple[Probe, Observation]]") -> Verdict:
+        """Decide from all of this method's probe observations at once. Only
+        called for methods with ``aggregate = True``."""
         raise NotImplementedError
 
     def _search(self, literal: str, body: str) -> bool:
@@ -2191,11 +2227,76 @@ class FileBased(DetectionMethod):
                        f"target wrote and served token {probe.expected!r} (execution + write primitive)")
 
 
+class ParametricTime(DetectionMethod):
+    """Hardened blind timing. Instead of a single margin over one slow response,
+    fire a controlled series of delays (``d ∈ {0, N, 2N}``, each repeated) and
+    require the response time to track the injected delay **linearly** — a
+    monotonic increase whose extra latency at each step matches the intended
+    sleep within a noise margin. Jitter cannot fake a linear response to a
+    controlled delay.
+
+    Timing has no value the target *computed*, so by design this never confirms
+    on its own — its ceiling is ``needs-review``. Pair it with ``--methods
+    reflected`` for an execution proof; a linear timing response then corroborates
+    the results-based confirmation."""
+    name = "time"
+    tier = "needs-review"
+    aggregate = True
+
+    def applicable(self, record: "PayloadRecord") -> bool:
+        return (record.environment in UNIX_SHELL_ENVIRONMENTS
+                or record.environment == "windows")
+
+    def build_probes(self, record: "PayloadRecord", rng: "random.Random") -> List[Probe]:
+        base = float(self.config.get("time_base", 2.0))
+        repeats = max(1, int(self.config.get("time_repeats", 2)))
+        windows = record.environment == "windows"
+        probes: List[Probe] = []
+        for multiplier in (0, 1, 2):
+            delay = base * multiplier
+            for _ in range(repeats):
+                if windows:
+                    # `ping -n k` waits ~(k-1)s; +1 so d=0 is a single instant ping.
+                    core = f"ping 127.0.0.1 -n {int(round(delay)) + 1} >nul"
+                else:
+                    core = f"sleep {delay:g}"
+                probes.append(Probe(payload=self._wrap(record, core, windows=windows),
+                                    expected="", delay_s=delay))
+        return probes
+
+    def confirm_series(self, series: "List[Tuple[Probe, Observation]]") -> Verdict:
+        import statistics
+        by_delay: Dict[float, List[float]] = {}
+        for probe, obs in series:
+            by_delay.setdefault(probe.delay_s or 0.0, []).append(obs.elapsed)
+        delays = sorted(by_delay)
+        if len(delays) < 2:
+            return Verdict("negative", "insufficient timing samples for a regression")
+        median = {d: statistics.median(samples) for d, samples in by_delay.items()}
+        baseline = median[delays[0]]
+        spread0 = max(by_delay[delays[0]]) - min(by_delay[delays[0]])
+        noise = max(0.15, 3 * spread0)
+        summary = ", ".join(f"d={d:g}s→{median[d]:.2f}s" for d in delays)
+        previous = baseline
+        for delay in delays[1:]:
+            extra = median[delay] - baseline
+            tolerance = max(0.4, noise, 0.5 * delay)
+            if median[delay] <= previous:
+                return Verdict("negative", f"response time not monotonic in the delay ({summary})")
+            if abs(extra - delay) > tolerance:
+                return Verdict("negative", f"response time does not track the delay ({summary})")
+            previous = median[delay]
+        return Verdict("needs-review",
+                       f"response time tracks the controlled delay linearly ({summary}); blind timing "
+                       "candidate — pair with --methods reflected for an execution proof")
+
+
 # The detection methods RCEKit can run, keyed by their --methods name. Adding a
 # phase = adding a class above and an entry here.
 DETECTION_METHODS = {
     ReflectedMath.name: ReflectedMath,
     FileBased.name: FileBased,
+    ParametricTime.name: ParametricTime,
 }
 
 
@@ -2504,12 +2605,16 @@ def main():
     parser.add_argument("--web-base-url", default=None,
                         help="(file-based detection) base URL that serves --webroot, e.g. "
                              "https://target.example. Required with --methods file.")
+    parser.add_argument("--time-base", type=float, default=2.0,
+                        help="(time-based detection) base delay N in seconds; the regression fires "
+                             "0/N/2N and requires the response time to track it (default: 2.0).")
     parser.add_argument("--methods", default=None,
                         help="Comma-separated RCE detection methods to run against --verify-url/-r instead of "
                              "the classic per-payload oracle. Available: reflected (results-based execution "
                              "proof via computed arithmetic); file (self-OOB write+fetch, needs --webroot and "
-                             "--web-base-url). Opt-in and additive: when omitted, verification keeps its "
-                             "existing behaviour unchanged.")
+                             "--web-base-url); time (hardened blind-timing regression, needs-review only). "
+                             "Opt-in and additive: when omitted, verification keeps its existing behaviour "
+                             "unchanged.")
     parser.add_argument("--verify-chain", default=None,
                         help="Path to a JSON chain profile: deliver each payload through a multi-step, "
                              "session-aware flow (login/CSRF -> prerequisites -> payload delivery -> trigger) "
@@ -2799,7 +2904,8 @@ def main():
                 print(f"[!] Unknown --methods: {', '.join(unknown)}. "
                       f"Available: {', '.join(sorted(DETECTION_METHODS))}.")
                 return
-            detection_config = {"webroot": args.webroot, "web_base_url": args.web_base_url}
+            detection_config = {"webroot": args.webroot, "web_base_url": args.web_base_url,
+                                "time_base": args.time_base}
             if "file" in method_names:
                 if not (args.webroot and args.web_base_url):
                     print("[!] --methods file writes a file to the target and fetches it back, so it "

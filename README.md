@@ -1,6 +1,6 @@
 # RCEKit — RCE Testing Toolkit
 
-**Version 2.12.0** · MIT · Python 3.8+ · no third-party dependencies
+**Version 2.13.0** · MIT · Python 3.8+ · no third-party dependencies
 
 RCEKit is an offensive **RCE testing toolkit** for authorised penetration
 testing, red teaming, and security research. It covers the full loop, not just
@@ -27,6 +27,7 @@ auto-confirms a blind Log4Shell RCE via an OOB DNS callback:
 - **Raw request input** — `-r request.txt` injects into a captured HTTP request (proxy/Burp style) instead of a hand-built URL. Mark the point with `FUZZ`/`*` or pick a parameter with `-p NAME`; RCEKit reuses the request's method, path, headers, body and cookies and **encodes each injection point for the context it lands in** (query / form / JSON / header / cookie).
 - **Results-based detection** — `--methods reflected` confirms RCE by forcing the target's shell to compute an arithmetic value on **random operands** (`$((a+b))` plus a `$(echo TAG)` substitution collapse) and checking that value appears in the response but not in a payload-free control. A target that merely echoes the payload returns the literal `$((a+b))`, never the sum, so reflection cannot fake a `confirmed`. Confirmed (execution proven) and needs-review (candidate) verdicts are reported as **separate tiers, never merged**.
 - **No-egress detection** — `--methods file` confirms RCE on internal targets with **no outbound connectivity**: the probe writes a random token to a web-reachable file and a followup request fetches it back, proving execution *and* a write primitive through the target's own web server — no external listener. State-changing and gated on `--webroot` + `--web-base-url`; every finding prints a **cleanup command**.
+- **Hardened blind timing** — `--methods time` fires a controlled `0/N/2N` delay series and requires the response time to track the injected delay **linearly** (a monotonic increase whose extra latency matches the sleep within a noise margin), so jitter cannot fake it. Timing has no computed value, so it is reported `needs-review`, **never** `confirmed` on its own — pair it with `--methods reflected` for an execution proof it corroborates.
 - **Built-in OOB listener** — `--listen` receives HTTP/DNS callbacks and correlates each back to the exact payload, closing the blind-RCE loop without a separate interactsh/Collaborator.
 - **Tooling integrations** — export as context-split Burp wordlists, a ready-to-run ffuf attack (`request.txt` + `run.sh`) when a target profile is given, or runnable Nuclei templates with built-in OOB / time-based / reflection oracles.
 - **Safe by default** — a benign `--detection-only` canary mode, safety tiers, a consent gate, and audit logging.
@@ -100,6 +101,7 @@ nothing. Run `python rcekit.py --doctor` to check corpus integrity.
 | `--methods <list>` | Run named detection methods against `--verify-url`/`-r` instead of the classic per-payload oracle (`reflected`, `file`). Opt-in and additive | None |
 | `--webroot <path>` | (file-based) server-side directory the target can write to and serve | None |
 | `--web-base-url <url>` | (file-based) base URL that serves `--webroot` | None |
+| `--time-base <seconds>` | (time-based) base delay `N`; the regression fires `0/N/2N` and requires the response time to track it | `2.0` |
 | `--verify-active-risk` | Highest safety tier `--verify-url` may fire (`safe`/`intrusive`/`stateful`) | `safe` |
 | `--verify-allow-destructive` | Let verification fire destructive payloads (persistence/backdoors); skipped by default | Off |
 | `--verify-chain <profile.json>` | Deliver each payload through a multi-step, session-aware flow (login/CSRF → prerequisites → payload delivery → trigger) and confirm in-band or out-of-band | None |
@@ -370,6 +372,29 @@ gated on both `--webroot` (where the target can write) and `--web-base-url` (the
 URL that serves it), and every finding prints the exact `rm`/`del` command to
 undo the write. The random filename and token mean a stale file can never pass
 as a fresh confirmation.
+
+### Hardened blind timing (`--methods time`)
+
+When there is no output channel and no egress at all, the only signal left is
+*how long* the target takes to respond. Naive time-based checks false-positive on
+jitter; `--methods time` instead fires a **controlled series** — delays `0`, `N`,
+`2N` (set `N` with `--time-base`), each repeated — and requires the response
+time to track the injected delay **linearly**: monotonic, with the extra latency
+at each step matching the sleep within a noise margin. A random slow response
+fails that regression.
+
+```bash
+python rcekit.py --acknowledge-consent --environments unix \
+  --verify-url "https://target.example/lookup?host=FUZZ" \
+  --methods reflected,time --time-base 3
+```
+
+Because a delay proves only that the target *waited* — not a value it computed —
+timing is reported `needs-review`, **never** `confirmed` on its own. Run it
+alongside `--methods reflected`: if the results-based method confirms, you have an
+execution proof, and the linear timing response corroborates it. This keeps the
+two tiers honest — a blind timing candidate is never dressed up as proven
+execution.
 
 **Safe by default.** Verification fires only low-impact proofs (enumeration,
 file reads, code-execution and WAF-bypass signatures). Reverse shells,

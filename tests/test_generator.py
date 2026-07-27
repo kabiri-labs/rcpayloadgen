@@ -24,6 +24,7 @@ from rcekit import (  # noqa: E402
     FileBased,
     Observation,
     OOBListener,
+    ParametricTime,
     PayloadRecord,
     Probe,
     RCEKit,
@@ -1823,6 +1824,101 @@ class FileBasedTestCase(unittest.TestCase):
              "--methods", "file", "--acknowledge-consent"],
             cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=120)
         self.assertIn("--webroot", result.stdout)
+
+
+class ParametricTimeTestCase(unittest.TestCase):
+    """Phase 4 — hardened blind timing. A controlled 0/N/2N delay series must
+    produce a linear response-time increase; jitter cannot fake it. Timing has
+    no computed value, so its ceiling is `needs-review` — it never confirms on
+    its own (I2/I3)."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+        self.method = ParametricTime(self.gen, {"time_base": 2.0, "time_repeats": 2})
+
+    def _series(self, mapping):
+        series = []
+        for delay, elapseds in mapping.items():
+            for elapsed in elapseds:
+                series.append((Probe(payload="x", expected="", delay_s=delay),
+                               Observation(status=200, body="", elapsed=elapsed)))
+        return series
+
+    def test_tier_is_needs_review_and_method_is_aggregate(self):
+        self.assertEqual(self.method.tier, "needs-review")
+        self.assertTrue(self.method.aggregate)
+
+    def test_build_probes_cover_zero_n_and_two_n(self):
+        import random as _random
+        probes = self.method.build_probes(make_record(environment="unix", context="raw"),
+                                          _random.Random(1))
+        delays = sorted({p.delay_s for p in probes})
+        self.assertEqual(delays, [0.0, 2.0, 4.0])
+        self.assertTrue(all("sleep" in p.payload for p in probes))
+
+    def test_confirm_series_linear_response_is_needs_review(self):
+        verdict = self.method.confirm_series(
+            self._series({0: [0.10, 0.12], 2.0: [2.11, 2.09], 4.0: [4.12, 4.08]}))
+        self.assertEqual(verdict.status, "needs-review")
+
+    def test_confirm_series_rejects_flat_jitter_and_nonmonotonic(self):
+        flat = self.method.confirm_series(
+            self._series({0: [0.10, 0.12], 2.0: [0.11, 0.13], 4.0: [0.10, 0.12]}))
+        self.assertEqual(flat.status, "negative")
+        jitter = self.method.confirm_series(
+            self._series({0: [0.10, 0.12], 2.0: [3.9, 0.2], 4.0: [0.3, 0.25]}))
+        self.assertEqual(jitter.status, "negative")
+        nonmono = self.method.confirm_series(
+            self._series({0: [0.1, 0.1], 2.0: [4.1, 4.0], 4.0: [2.1, 2.0]}))
+        self.assertEqual(nonmono.status, "negative")
+
+    def test_end_to_end_sleeping_sink_is_needs_review_never_confirmed(self):
+        # The sink sleeps for the injected `sleep N`; a linear response must be
+        # reported needs-review, never confirmed.
+        import http.server
+        import re as _re
+        import socketserver
+        import threading
+        import time as _time
+        import urllib.parse as up
+
+        def make_handler(vulnerable):
+            class Handler(http.server.BaseHTTPRequestHandler):
+                def log_message(self, *a):
+                    pass
+
+                def do_GET(self):
+                    cmd = up.parse_qs(up.urlparse(self.path).query).get("host", [""])[0]
+                    match = _re.search(r"sleep ([0-9.]+)", cmd)
+                    if vulnerable and match:
+                        _time.sleep(float(match.group(1)))
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(b"ok")
+            return Handler
+
+        def run(vulnerable):
+            server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), make_handler(vulnerable))
+            port = server.server_address[1]
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            try:
+                rec = make_record(environment="unix", context="raw", expected_channel="timing")
+                return self.gen.run_detection(
+                    [rec], url=f"http://127.0.0.1:{port}/x?host=FUZZ", methods=["time"],
+                    config={"time_base": 0.6, "time_repeats": 2})
+            finally:
+                server.shutdown()
+                server.server_close()
+
+        vuln = run(vulnerable=True)
+        self.assertTrue(vuln)
+        self.assertEqual(vuln[0]["verdict"], "needs-review")
+        self.assertEqual(vuln[0]["tier"], "needs-review")
+        self.assertFalse([r for r in vuln if r["verdict"] == "confirmed"],
+                         "timing must never self-confirm")
+
+        flat = run(vulnerable=False)
+        self.assertEqual(flat[0]["verdict"], "negative")
 
 
 if __name__ == "__main__":
