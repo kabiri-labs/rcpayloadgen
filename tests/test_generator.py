@@ -1627,6 +1627,35 @@ class DetectionMethodTestCase(unittest.TestCase):
         self.assertTrue(file_probe.payload.startswith("echo "))
         self.assertFalse(file_probe.payload.lstrip().startswith(";"))
 
+    def test_delivery_error_is_error_not_negative(self):
+        # status=None means the request never reached the target (delivery/TLS
+        # failure). Reporting that as `negative` would read as "not vulnerable",
+        # so every method must return `error` instead.
+        import random as _random
+        rec = make_record(environment="unix", context="raw")
+        probe = self.method.build_probes(rec, _random.Random(5))[0]
+        self.assertEqual(
+            self.method.confirm(Observation(None, "<urlopen error ...>"), probe).status,
+            "error")
+        fb = FileBased(self.gen, {"webroot": "/var/www", "web_base_url": "http://t"})
+        fprobe = fb.build_probes(rec, _random.Random(5))[0]
+        self.assertEqual(
+            fb.confirm(Observation(None, "err", followup_body=None), fprobe).status, "error")
+        pt = ParametricTime(self.gen, {"time_base": 1})
+        series = [(p, Observation(None, "err", elapsed=0.0))
+                  for p in pt.build_probes(rec, _random.Random(5))]
+        self.assertEqual(pt.confirm_series(series).status, "error")
+
+    def test_insecure_is_opt_in(self):
+        # Default keeps certificate verification (context None = urllib default);
+        # --insecure disables it, like curl -k, only when the operator opts in.
+        import ssl
+        self.assertIsNone(self.gen._verify_ssl_context())
+        self.gen.insecure = True
+        ctx = self.gen._verify_ssl_context()
+        self.assertEqual(ctx.verify_mode, ssl.CERT_NONE)
+        self.assertFalse(ctx.check_hostname)
+
     def test_reflected_math_confirms_on_executing_target_only(self):
         # /vuln runs the injected string through a shell (real execution);
         # /reflect echoes it verbatim without executing. ReflectedMath must
