@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.16.0"
+__version__ = "2.17.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -1501,14 +1501,32 @@ class RCEKit:
         target, body, hdrs = self._build_verify_request(
             payload, url, data, headers, url_location, body_location)
         request = urllib.request.Request(target, data=body, headers=hdrs, method=method)
+        context = self._verify_ssl_context()
         start = time.time()
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
                 return response.status, response.read().decode(errors="replace"), time.time() - start
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read().decode(errors="replace"), time.time() - start
         except Exception as exc:  # network error, timeout, etc.
             return None, str(exc), time.time() - start
+
+    def _verify_ssl_context(self):
+        """SSL context for verification/detection requests. Returns ``None``
+        (urllib's default, certificate-verifying) unless ``--insecure`` was set,
+        in which case certificate verification is disabled — self-signed or
+        hostname-mismatched certs are the norm on internal pentest targets, so
+        this is an explicit operator opt-in, not a default. Ignored for HTTP."""
+        if not getattr(self, "insecure", False):
+            return None
+        ctx = getattr(self, "_insecure_ctx", None)
+        if ctx is None:
+            import ssl
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            self._insecure_ctx = ctx
+        return ctx
 
     def run_verification(self, records: Iterator[PayloadRecord], url: str, method: str = "GET",
                          data: Optional[str] = None, headers: Optional[List[str]] = None,
@@ -2031,8 +2049,11 @@ class Probe:
 @dataclass
 class Verdict:
     """A method's decision. ``status`` is one of ``confirmed`` (execution
-    proven), ``needs-review`` (candidate), ``negative`` (no evidence), or
-    ``inconclusive`` (evidence not attributable to execution)."""
+    proven), ``needs-review`` (candidate), ``negative`` (reached the target, no
+    evidence), ``inconclusive`` (evidence not attributable to execution), or
+    ``error`` (the request never reached the target — a delivery/TLS failure,
+    which is deliberately NOT a ``negative`` so a connectivity problem is never
+    read as 'not vulnerable')."""
     status: str
     evidence: str
 
@@ -2107,8 +2128,8 @@ class DetectionMethod:
         most common command-injection pattern (``PING <input> ...``). That is NOT
         a reason to withhold confirmation: the computed value is already proof, so
         the reflected literal is only noted, never a downgrade."""
-        if obs.status is None and not obs.body:
-            return Verdict("inconclusive", "no response from target (delivery error)")
+        if obs.status is None:
+            return Verdict("error", f"request never reached the target ({obs.body[:120]})")
         if not self._search(probe.expected, obs.body, boundary=boundary):
             return Verdict("negative", f"{noun} absent from the response")
         if obs.control_body and self._search(probe.expected, obs.control_body, boundary=boundary):
@@ -2258,6 +2279,8 @@ class FileBased(DetectionMethod):
                       expected=token, forbidden=None, followup=followup)]
 
     def confirm(self, obs: "Observation", probe: "Probe") -> Verdict:
+        if obs.status is None:
+            return Verdict("error", f"write request never reached the target ({obs.body[:120]})")
         if obs.followup_body is None:
             return Verdict("negative",
                            "could not fetch the written file (no write, wrong web root, or blocked)")
@@ -2308,6 +2331,9 @@ class ParametricTime(DetectionMethod):
 
     def confirm_series(self, series: "List[Tuple[Probe, Observation]]") -> Verdict:
         import statistics
+        if any(obs.status is None for _, obs in series):
+            return Verdict("error", "one or more timing probes never reached the target "
+                                    "(delivery/TLS failure); regression not judged")
         by_delay: Dict[float, List[float]] = {}
         for probe, obs in series:
             by_delay.setdefault(probe.delay_s or 0.0, []).append(obs.elapsed)
@@ -2661,6 +2687,10 @@ def main():
                         help="Seconds to wait between verification requests (rate limiting)")
     parser.add_argument("--verify-timeout", type=float, default=8.0,
                         help="Per-request timeout for verification (seconds)")
+    parser.add_argument("--insecure", action="store_true",
+                        help="Skip TLS certificate verification for verification/detection requests "
+                             "(self-signed or hostname-mismatched certs on internal targets). Opt-in, "
+                             "like curl -k; ignored for HTTP targets")
     parser.add_argument("--verify-url-location", choices=["query_value", "url_path", "raw"], default="query_value",
                         help="How to encode the payload where FUZZ appears in --verify-url "
                              "(default query_value: percent-encoded, as a query parameter)")
@@ -2821,6 +2851,7 @@ def main():
         attacker_domain=args.attacker_domain,
         template_path=template_path,
     )
+    generator.insecure = args.insecure
 
     if args.doctor:
         ok, report = generator.check_integrity()
@@ -3044,8 +3075,14 @@ def main():
                     print(f"  [{result['method']}/{result['environment']}/{result['context']}] "
                           f"{result['payload']}   ({result['detail']})")
             if not confirmed:
-                print("\n[detect] No execution confirmed. The target may be patched, or the probes "
-                      "may not fit its sink/context (try --environments/--contexts).")
+                errored = [r for r in results if r["verdict"] == "error"]
+                if errored:
+                    print(f"\n[detect] {len(errored)} of {len(results)} probe(s) NEVER REACHED THE TARGET "
+                          f"(a delivery error is not a negative): {errored[0]['detail']}")
+                    print("[detect] check connectivity/auth; for a self-signed HTTPS cert add --insecure.")
+                if len(errored) < len(results):
+                    print("\n[detect] No execution confirmed. The target may be patched, or the probes "
+                          "may not fit its sink/context (try --environments/--contexts).")
             return
         results = generator.run_verification(
             to_send, url=verify_url, method=method, data=verify_data,

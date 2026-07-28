@@ -1,6 +1,6 @@
 # RCEKit — prove RCE, don't guess it
 
-**Version 2.16.0** · MIT · Python 3.8+ · zero third-party dependencies
+**Version 2.17.0** · MIT · Python 3.8+ · zero third-party dependencies
 
 RCEKit is an **RCE detection &amp; confirmation toolkit** for authorised penetration
 testing, red teaming, and security research. Point it at a target you are allowed
@@ -192,8 +192,11 @@ python rcekit.py --acknowledge-consent \
   target computed. Put it in the report.
 - **`needs-review`** — a candidate (e.g. a linear timing response). Worth manual
   follow-up; not proof.
-- **`negative`** / **`inconclusive`** — no evidence, or evidence that also appears
-  without the payload (so it isn't attributable to execution).
+- **`negative`** / **`inconclusive`** — reached the target but found no evidence, or
+  evidence that also appears without the payload (so it isn't attributable to execution).
+- **`error`** — the request never reached the target (a delivery/TLS failure). Kept
+  separate from `negative` on purpose: a connectivity problem must never read as
+  "not vulnerable". For a self-signed HTTPS cert, re-run with `--insecure`.
 
 <details>
 <summary><b>How a <code>confirmed</code> can't be a false positive</b></summary>
@@ -397,6 +400,7 @@ Python (`os_system`, `subprocess`, `jinja2_ssti`, `exec_ast`), Postgres
 | `--verify-data` / `--verify-header` / `--verify-method` | Body (with `FUZZ`) / repeatable header / HTTP method | — |
 | `--verify-url-location` / `--verify-body-location` | Encode the payload at the URL / body point | `query_value` / auto |
 | `--verify-delay` / `--verify-timeout` | Seconds between requests / per-request timeout | `0` / `8` |
+| `--insecure` | Skip TLS cert verification (self-signed internal targets), like `curl -k` | Off |
 | `--verify-active-risk` | Highest safety tier verification may fire (`safe`/`intrusive`/`stateful`) | `safe` |
 | `--verify-allow-destructive` | Allow destructive payloads (persistence/backdoors) | Off |
 | `--verify-chain <profile.json>` | Multi-step, session-aware verification | None |
