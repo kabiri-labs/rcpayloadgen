@@ -1601,6 +1601,32 @@ class DetectionMethodTestCase(unittest.TestCase):
         self.assertEqual(verdict.status, "confirmed")
         self.assertIn("reflects the payload verbatim", verdict.evidence)
 
+    def test_sink_raw_omits_leading_separator(self):
+        # A sink that runs the injected input as the *whole* command (e.g. a
+        # qx/$input/ backdoor) has no surrounding command to break out of, so a
+        # leading `;` would be a shell syntax error. `--sink-raw` must send the
+        # shell probes as bare commands while keeping the computed-value invariant.
+        import random as _random
+        rec = make_record(environment="unix", context="raw")
+        default_probe = ReflectedMath(self.gen).build_probes(rec, _random.Random(3))[0]
+        self.assertTrue(default_probe.payload.startswith("; "))
+        raw = ReflectedMath(self.gen, {"sink_raw": True}).build_probes(rec, _random.Random(3))
+        for probe in raw:
+            self.assertFalse(probe.payload.lstrip().startswith(";"))
+            # The expected sum is still absent from the payload, so only execution
+            # can place it in the response — the invariant is untouched.
+            self.assertNotIn(probe.expected, probe.payload)
+        self.assertTrue(raw[0].payload.startswith("echo "))
+        # The other shell-based methods drop the separator too.
+        timing = ParametricTime(self.gen, {"sink_raw": True, "time_base": 2}).build_probes(
+            rec, _random.Random(3))
+        self.assertTrue(any(p.payload.startswith("sleep ") for p in timing))
+        self.assertFalse(any(p.payload.lstrip().startswith(";") for p in timing))
+        file_cfg = {"sink_raw": True, "webroot": "/var/www", "web_base_url": "http://t"}
+        file_probe = FileBased(self.gen, file_cfg).build_probes(rec, _random.Random(3))[0]
+        self.assertTrue(file_probe.payload.startswith("echo "))
+        self.assertFalse(file_probe.payload.lstrip().startswith(";"))
+
     def test_reflected_math_confirms_on_executing_target_only(self):
         # /vuln runs the injected string through a shell (real execution);
         # /reflect echoes it verbatim without executing. ReflectedMath must

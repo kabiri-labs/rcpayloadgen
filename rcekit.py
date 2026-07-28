@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.15.2"
+__version__ = "2.16.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -2129,13 +2129,22 @@ class DetectionMethod:
         probe for the record's serialization context — reusing the same
         context/escape machinery the generator uses for every other payload.
 
+        With ``--sink-raw`` (``config['sink_raw']``) the injected input is
+        executed as the *whole* command — a ``qx/$input/``-style sink with no
+        surrounding command to break out of — so no separator is prepended; a
+        leading ``;``/``&`` would be a shell syntax error there. The probe is
+        sent as a bare command instead.
+
         With ``--evade low`` and ``evade=True``, apply a single low-touch WAF
         transform to Unix command probes — substitute ``${IFS}`` for spaces —
         drawn from the existing shell-bypass vocabulary. It is deliberately
         minimal, not aggressive/noisy evasion. Callers whose command uses a
         redirect (``>``) pass ``evade=False``: ``${IFS}`` around ``>`` yields an
         ambiguous redirect, so those stay canonical."""
-        body = f"{' & ' if windows else '; '}{core}"
+        if self.config.get("sink_raw"):
+            body = core
+        else:
+            body = f"{' & ' if windows else '; '}{core}"
         if evade and not windows and self.config.get("evade") == "low":
             body = body.replace(" ", "${IFS}")
         return self._wrap_context(record, body)
@@ -2739,6 +2748,10 @@ def main():
                         help="Drop payloads longer than this many characters")
     parser.add_argument("--sink-needs-separator", action="store_true", default=None,
                         help="Sink concatenates input mid shell command: keep only separator-led payloads")
+    parser.add_argument("--sink-raw", action="store_true", default=None,
+                        help="(--methods) Sink runs the injected input as the whole command "
+                             "(no surrounding command to break out of, e.g. a qx/$input/ sink): "
+                             "send shell probes as bare commands without a leading separator")
     parser.add_argument("--sink-blind", action="store_true", default=None,
                         help="Sink returns no output: keep only out-of-band confirmable payloads (timing/OOB)")
     parser.add_argument("--sink-decodes", nargs="+", default=None,
@@ -2795,6 +2808,7 @@ def main():
 
     # Sink-shape awareness: narrow generation to what this sink could execute.
     needs_separator = bool(from_profile(args.sink_needs_separator, "sink_needs_separator"))
+    sink_raw = bool(from_profile(args.sink_raw, "sink_raw"))
     blind = bool(from_profile(args.sink_blind, "sink_blind"))
     sink_decodes = from_profile(args.sink_decodes, "sink_decodes") or []
     # A profile `request` block shapes the exported Burp/Nuclei requests.
@@ -2992,7 +3006,8 @@ def main():
                       f"Available: {', '.join(sorted(DETECTION_METHODS))}.")
                 return
             detection_config = {"webroot": args.webroot, "web_base_url": args.web_base_url,
-                                "time_base": args.time_base, "evade": args.evade}
+                                "time_base": args.time_base, "evade": args.evade,
+                                "sink_raw": sink_raw}
             if "file" in method_names:
                 if not (args.webroot and args.web_base_url):
                     print("[!] --methods file writes a file to the target and fetches it back, so it "

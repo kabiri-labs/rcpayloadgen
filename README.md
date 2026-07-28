@@ -1,6 +1,6 @@
 # RCEKit — prove RCE, don't guess it
 
-**Version 2.15.2** · MIT · Python 3.8+ · zero third-party dependencies
+**Version 2.16.0** · MIT · Python 3.8+ · zero third-party dependencies
 
 RCEKit is an **RCE detection &amp; confirmation toolkit** for authorised penetration
 testing, red teaming, and security research. Point it at a target you are allowed
@@ -170,6 +170,20 @@ shell probes. It is deliberately minimal, not noisy evasion.
 ```bash
 python rcekit.py --acknowledge-consent \
   --verify-url "https://target.example/ping?ip=FUZZ" --methods reflected --evade low
+```
+
+### Sink runs your input as the whole command?
+
+By default the shell probes break out of a surrounding command with a leading
+separator (`; …`), which fits the common `system("ping " + input)` sink. Some
+sinks instead execute the injected input *as the entire command* — a
+`qx/$input/` backdoor, a bare `sh -c "$input"` — where there is nothing to break
+out of and a leading `;` is a shell syntax error. Pass `--sink-raw` to send the
+probes as bare commands:
+
+```bash
+python rcekit.py --acknowledge-consent \
+  --verify-url "https://target.example/run?cmd=FUZZ" --methods reflected --sink-raw
 ```
 
 ### Reading the results
@@ -379,6 +393,7 @@ Python (`os_system`, `subprocess`, `jinja2_ssti`, `exec_ast`), Postgres
 | `--webroot` / `--web-base-url` | (file method) server write dir / URL that serves it | None |
 | `--time-base <seconds>` | (time method) base delay `N`; regression fires `0/N/2N` | `2.0` |
 | `--evade {none,low}` | WAF posture; `low` = minimal `${IFS}`-for-spaces on shell probes | `none` |
+| `--sink-raw` | (`--methods`) Sink runs input as the whole command; send probes with no leading separator | Off |
 | `--verify-data` / `--verify-header` / `--verify-method` | Body (with `FUZZ`) / repeatable header / HTTP method | — |
 | `--verify-url-location` / `--verify-body-location` | Encode the payload at the URL / body point | `query_value` / auto |
 | `--verify-delay` / `--verify-timeout` | Seconds between requests / per-request timeout | `0` / `8` |
