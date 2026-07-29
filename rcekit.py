@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.17.0"
+__version__ = "2.17.1"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -2488,6 +2488,12 @@ def parse_raw_request(text: str) -> Dict[str, Any]:
     ``host`` (from the Host header)."""
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     head, _, body = text.partition("\n\n")
+    # A raw request saved to a file (an editor or a heredoc) almost always gains a
+    # trailing newline, which partition() leaves on the body — silently corrupting
+    # the last body parameter: `...&new2=test2\n` makes new2 != test2 and can break
+    # the submission. HTTP bodies never require a trailing newline, so drop any;
+    # internal newlines (multi-line / multipart bodies) are left untouched.
+    body = body.rstrip("\n")
     lines = head.split("\n")
     while lines and not lines[0].strip():
         lines.pop(0)
