@@ -12,16 +12,53 @@ execution could produce* — random arithmetic, a template evaluation, a written
 token — checked against a payload-free control. Reflection, coincidence, and
 jitter can't fake it, so `confirmed` is something you can put in a report.
 
-RCEKit confirms RCE through **multiple methods** under one CLI — results-based,
-expression, file-based, timing, and out-of-band. Two of them in action:
+RCEKit confirms RCE through **multiple methods** under one CLI. Below it is pointed
+at **real, publicly-documented CVEs** in production software — each verdict
+differenced against a payload-free control, so `confirmed` means the target
+*executed*, not that it might have:
 
-*Results-based, expression, file and timing methods proving execution in-band — no external infrastructure:*
+| RCE class | `--methods` | Real-world target | Verdict |
+|---|---|---|---|
+| OS command injection (results-based) | `reflected` | Webmin 1.910 — CVE-2019-15107 | **`confirmed`** |
+| Expression injection (OGNL) | `eval` | Apache Struts2 — S2-001 | **`confirmed`** |
+| Blind / out-of-band (Log4Shell/JNDI) | *OOB listener* | Log4Shell — CVE-2021-44228 | **`confirmed`** |
+| Blind command injection (no output) | `time` | Webmin 1.910 — CVE-2019-15107 | `needs-review` |
 
-![RCEKit confirming RCE with four in-band detection methods: reflected, eval, file, and time](confirmation-gifs/non-oob-confirm.png)
+<details open>
+<summary><b><code>reflected</code> — OS command injection, Webmin CVE-2019-15107 → <code>confirmed</code></b></summary>
 
-*Out-of-band — auto-confirming a blind Log4Shell via a DNS callback, correlated back to the exact payload:*
+<br>
 
-![RCEKit auto-confirming a blind Log4Shell RCE via an OOB DNS callback, correlating the DNS hit back to the exact payload](confirmation-gifs/oob-confirm.gif)
+![RCEKit confirming OS command injection on Webmin 1.910 (CVE-2019-15107): the shell computes arithmetic on random operands, the result is reflected in the response and absent from a payload-free control](confirmation-gifs/reflected-webmin-cve-2019-15107.gif)
+
+</details>
+
+<details>
+<summary><b><code>eval</code> — OGNL expression injection, Apache Struts2 S2-001 → <code>confirmed</code></b></summary>
+
+<br>
+
+![RCEKit confirming OGNL expression injection on Apache Struts2 (S2-001): the payload %{a*b} evaluates to the product in the response while the literal a*b does not](confirmation-gifs/eval-struts2-s2-001.gif)
+
+</details>
+
+<details>
+<summary><b>out-of-band — blind Log4Shell (CVE-2021-44228) via a DNS callback → <code>confirmed</code></b></summary>
+
+<br>
+
+![RCEKit auto-confirming a blind Log4Shell RCE (CVE-2021-44228) via an OOB DNS callback, correlating the DNS hit back to the exact payload](confirmation-gifs/oob-log4shell-cve-2021-44228.gif)
+
+</details>
+
+<details>
+<summary><b><code>time</code> — blind command injection, Webmin CVE-2019-15107 → <code>needs-review</code></b></summary>
+
+<br>
+
+![RCEKit measuring a linear timing response on Webmin 1.910 (CVE-2019-15107): response time tracks a controlled 0/N/2N delay series — a needs-review timing candidate, never confirmed on its own](confirmation-gifs/time-webmin-cve-2019-15107.gif)
+
+</details>
 
 ---
 
