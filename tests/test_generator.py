@@ -1765,6 +1765,19 @@ class RawRequestInputTestCase(unittest.TestCase):
         self.assertEqual(req["body"], '{"a":1}')
         self.assertIn(["Content-Type", "application/json"], req["headers"])
 
+    def test_trailing_newline_in_body_does_not_corrupt_last_param(self):
+        # A request saved to a file (editor/heredoc) gains a trailing newline;
+        # it must not attach to the last body parameter's value — that made
+        # e.g. new2 = "test2\n" != new1 and broke form submissions.
+        raw = ("POST /f HTTP/1.1\r\nHost: t.example\r\n"
+               "Content-Type: application/x-www-form-urlencoded\r\n\r\nnew1=t&new2=t\n")
+        self.assertEqual(parse_raw_request(raw)["body"], "new1=t&new2=t")
+        _, _, data, _, _ = build_request_inputs(raw, param="new2")
+        self.assertEqual(data, "new1=t&new2=FUZZ")
+        # Every trailing newline is dropped; internal newlines are preserved.
+        multi = "POST /a HTTP/1.1\r\nHost: t.example\r\n\r\nline1\nline2\n\n\n"
+        self.assertEqual(parse_raw_request(multi)["body"], "line1\nline2")
+
     def test_query_param_marker_preserves_other_params(self):
         raw = "GET /lookup?host=example.com&x=1 HTTP/1.1\r\nHost: t.example\r\n\r\n"
         url, method, data, headers, injection = build_request_inputs(raw, param="host")
