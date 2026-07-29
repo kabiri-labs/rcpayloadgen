@@ -69,7 +69,9 @@ git clone https://github.com/kabiri-labs/rcekit.git
 cd rcekit                    # Python 3.8+, standard library only — nothing to install
 ```
 
-Put a `FUZZ` marker where your input lands, and ask RCEKit to prove RCE:
+Put a `FUZZ` marker where your input lands (or select a parameter with `-p` when
+using a captured request — see [`-r`](#point-at-a-captured-request--r) below), and
+ask RCEKit to prove RCE:
 
 ```bash
 python rcekit.py --acknowledge-consent \
