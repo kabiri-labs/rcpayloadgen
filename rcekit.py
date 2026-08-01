@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.17.1"
+__version__ = "2.17.2"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -1602,10 +1602,16 @@ class RCEKit:
             # execution, and _evaluate_verify downgrades it to inconclusive. Only
             # done when the primary actually matched, so it costs nothing on the
             # vast majority of payloads.
+            #
+            # The gate must use the SAME encoded-aware search the verdict uses:
+            # with a plain re.search here, a target that wraps its output (base64,
+            # hex, url, html) skipped the control entirely while _evaluate_verify
+            # still matched through the wrapper — so pure reflection was reported
+            # as 'confirmed', precisely in the case _encoded_search exists for.
             reflection_control = control_body
             if (record.token and record.match and not is_timing
                     and record.expected_channel != "interactsh"
-                    and status is not None and re.search(record.match, body)):
+                    and status is not None and self._encoded_search(record.match, body)):
                 _, reflection_control, _ = fire(f"rcekit-control-{record.token}")
             verdict, detail = self._evaluate_verify(
                 record, status, body, elapsed, baseline, margin, reflection_control, elapsed_confirm)
@@ -1902,9 +1908,32 @@ class OOBListener:
                  answer_ip: str = "127.0.0.1", log_path: Optional[str] = None):
         self.tokens = tokens or {}
         self.answer_ip = answer_ip
+        # Pack the A-record answer once, at construction: an unusable address is
+        # then rejected before the listener claims to be up, instead of raising
+        # inside the DNS thread on the first query and killing it.
+        self._answer_rdata = self._pack_ipv4(answer_ip)
         self.log_path = log_path
         self.hits: List[Dict[str, Any]] = []
         self._servers: List[Any] = []
+
+    @staticmethod
+    def _pack_ipv4(address: str) -> bytes:
+        """Pack a dotted-quad IPv4 address into a DNS A record's four rdata
+        bytes. Raises ``ValueError`` on anything else so the caller can reject
+        the address at startup."""
+        invalid = ValueError(
+            f"invalid IPv4 address for DNS answers: {address!r} "
+            "(expected a dotted quad such as 127.0.0.1)")
+        octets = address.split(".")
+        if len(octets) != 4:
+            raise invalid
+        # isascii() guards against non-ASCII digits, which int() would accept.
+        if not all(o.isascii() and o.isdigit() for o in octets):
+            raise invalid
+        values = [int(o) for o in octets]
+        if any(o > 255 for o in values):
+            raise invalid
+        return bytes(values)
 
     def _correlate(self, host: str, path: str):
         hay = f"{host} {path}".lower()
@@ -1980,8 +2009,8 @@ class OOBListener:
             i += 1 + query[i]
         i += 1 + 4  # null byte + qtype + qclass
         question = query[12:i]
-        rdata = bytes(int(o) for o in self.answer_ip.split("."))
-        answer = b"\xc0\x0c" + b"\x00\x01" + b"\x00\x01" + b"\x00\x00\x00\x1e" + b"\x00\x04" + rdata
+        answer = (b"\xc0\x0c" + b"\x00\x01" + b"\x00\x01" + b"\x00\x00\x00\x1e"
+                  + b"\x00\x04" + self._answer_rdata)
         return header + question + answer
 
     def start_dns(self, port: int) -> bool:
@@ -2002,12 +2031,21 @@ class OOBListener:
                     data, addr = sock.recvfrom(512)
                 except OSError:
                     break
-                name = self._parse_dns_qname(data)
+                # Record the callback BEFORE answering: the hit is the signal
+                # this listener exists for, so a query we cannot synthesise a
+                # reply to must still be reported rather than lost. Likewise,
+                # no single malformed query may kill the thread and silently
+                # drop every callback that follows.
+                try:
+                    name = self._parse_dns_qname(data)
+                except Exception as exc:
+                    logger.warning("Unparsable DNS query from %s: %s", addr[0], exc)
+                    continue
+                self.record("dns", addr[0], name)
                 try:
                     sock.sendto(self._dns_response(data), addr)
-                except OSError:
-                    pass
-                self.record("dns", addr[0], name)
+                except Exception as exc:
+                    logger.warning("DNS answer for %r not sent: %s", name, exc)
 
         threading.Thread(target=loop, daemon=True).start()
         return True
@@ -2655,6 +2693,12 @@ def load_token_manifest(path: str) -> Dict[str, Dict[str, Any]]:
 
 
 def main():
+    """CLI entry point. Returns the process exit status: ``0`` when the
+    requested run completed (including a verification that confirmed nothing —
+    that is a result, not a failure) and ``1`` when RCEKit could not carry the
+    run out at all: unusable corpus or profile, missing consent, an unreadable
+    or unmarked request, or an invalid option combination. Scripts and CI can
+    therefore branch on the status instead of scraping stdout."""
     parser = argparse.ArgumentParser(description="Generate RCE payloads for penetration testing")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("-o", "--output", default="rce_payloads.txt",
@@ -2798,7 +2842,12 @@ def main():
     if args.listen:
         import time
         tokens = load_token_manifest(args.correlate) if args.correlate else {}
-        listener = OOBListener(tokens=tokens, answer_ip=args.listen_answer_ip, log_path=args.listen_log)
+        try:
+            listener = OOBListener(tokens=tokens, answer_ip=args.listen_answer_ip,
+                                   log_path=args.listen_log)
+        except ValueError as exc:
+            print(f"[!] {exc}")
+            return 1
         listener.start_http(args.listen_http_port)
         dns_ok = listener.start_dns(args.listen_dns_port)
         print(f"[listen] OOB listener up — HTTP :{args.listen_http_port}"
@@ -2827,7 +2876,7 @@ def main():
                 profile = json.load(profile_file)
         except Exception as exc:
             print(f"[!] Unable to load target profile {args.target_profile}: {exc}")
-            return
+            return 1
         logger.info("Loaded target profile '%s' from %s", profile.get("name", "?"), args.target_profile)
 
     def from_profile(cli_value, key):
@@ -2887,7 +2936,7 @@ def main():
 
     if mode == "exploit" and not args.acknowledge_consent:
         print("[!] Exploitation mode requires explicit consent. Re-run with --acknowledge-consent after confirming authorization.")
-        return
+        return 1
 
     watermark_token = None
     if mode == "exploit":
@@ -2915,7 +2964,7 @@ def main():
         if not args.acknowledge_consent:
             print("[!] --verify-chain actively sends payloads to the target. Re-run with "
                   "--acknowledge-consent to confirm you are authorised to test it.")
-            return
+            return 1
         with open(args.verify_chain, "r", encoding="utf-8") as chain_file:
             chain = json.load(chain_file)
         verify_max_safety = args.verify_active_risk or "safe"
@@ -2951,7 +3000,7 @@ def main():
         if not args.acknowledge_consent:
             print("[!] Verification actively sends payloads to the target. Re-run with "
                   "--acknowledge-consent to confirm you are authorised to test it.")
-            return
+            return 1
         # Source the request from a raw capture (-r) or the --verify-* flags.
         if args.request_file:
             try:
@@ -2959,18 +3008,18 @@ def main():
                     raw_request = request_fh.read()
             except OSError as exc:
                 print(f"[!] Unable to read --request-file {args.request_file}: {exc}")
-                return
+                return 1
             params = args.param or []
             if len(params) > 1:
                 print("[!] -r supports a single injection point in this release; pass one -p "
                       "(or a FUZZ/* marker). --all-params enumeration is not yet available.")
-                return
+                return 1
             try:
                 verify_url, method, verify_data, verify_headers, injection = build_request_inputs(
                     raw_request, param=(params[0] if params else None), scheme=args.request_scheme)
             except ValueError as exc:
                 print(f"[!] Could not build a request from {args.request_file}: {exc}")
-                return
+                return 1
             method = args.verify_method or method
             print(f"[verify] loaded request from {args.request_file}: {method} {verify_url} "
                   f"(injecting at {injection})")
@@ -2982,7 +3031,7 @@ def main():
                     and not any("FUZZ" in h for h in (verify_headers or [])):
                 print("[!] No FUZZ marker found in --verify-url/--verify-data/--verify-header; "
                       "add FUZZ where the payload should be injected.")
-                return
+                return 1
             method = args.verify_method or ("POST" if verify_data else "GET")
         verify_token = ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(8))
         generator.log_exploitation_usage(f"VERIFY:{verify_token} url={verify_url}", args)
@@ -3041,7 +3090,7 @@ def main():
             if unknown:
                 print(f"[!] Unknown --methods: {', '.join(unknown)}. "
                       f"Available: {', '.join(sorted(DETECTION_METHODS))}.")
-                return
+                return 1
             detection_config = {"webroot": args.webroot, "web_base_url": args.web_base_url,
                                 "time_base": args.time_base, "evade": args.evade,
                                 "sink_raw": sink_raw}
@@ -3049,7 +3098,7 @@ def main():
                 if not (args.webroot and args.web_base_url):
                     print("[!] --methods file writes a file to the target and fetches it back, so it "
                           "needs both --webroot (server-side write dir) and --web-base-url (fetch base).")
-                    return
+                    return 1
                 print(f"[detect] file-based method WRITES to {args.webroot} on the target and fetches via "
                       f"{args.web_base_url}; each confirmed finding lists a cleanup command.")
             results = generator.run_detection(

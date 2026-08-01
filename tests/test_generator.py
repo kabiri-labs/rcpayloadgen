@@ -206,6 +206,54 @@ class OOBListenerTestCase(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
+    def test_invalid_answer_ip_is_rejected_at_construction(self):
+        # An unusable answer IP used to raise inside the DNS thread on the first
+        # query, killing it and silently dropping every callback that followed —
+        # a false negative for the tool's whole OOB confirmation channel.
+        for bad in ("bogus-ip", "999.1.1.1", "1.2.3", "1.2.3.4.5", "", "::1"):
+            with self.subTest(answer_ip=bad):
+                with self.assertRaises(ValueError):
+                    OOBListener(answer_ip=bad)
+
+    def test_valid_answer_ip_is_packed_into_the_answer(self):
+        listener = OOBListener(tokens=self.tokens, answer_ip="10.11.12.13")
+        query = (b"\x12\x34" + b"\x01\x00" + b"\x00\x01" + b"\x00\x00" * 3
+                 + b"\x03abc\x04test\x00" + b"\x00\x01\x00\x01")
+        self.assertTrue(listener._dns_response(query).endswith(bytes([10, 11, 12, 13])))
+
+    def test_callback_is_recorded_even_when_the_answer_fails(self):
+        # The hit is the signal this listener exists for, so a query we cannot
+        # answer must still be reported, and must not take the thread down with
+        # it. Forcing the response to fail proves both.
+        import socket
+        import time
+
+        def explode(_data):
+            raise RuntimeError("synthetic response failure")
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+
+        listener = OOBListener(tokens=self.tokens)
+        listener._dns_response = explode
+        self.assertTrue(listener.start_dns(port))
+
+        client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            query = (b"\x12\x34" + b"\x01\x00" + b"\x00\x01" + b"\x00\x00" * 3
+                     + b"\x0babc123token\x03oob\x04test\x00" + b"\x00\x01\x00\x01")
+            for _ in range(2):
+                client.sendto(query, ("127.0.0.1", port))
+                time.sleep(0.3)
+        finally:
+            client.close()
+
+        # Both callbacks recorded: the first did not kill the listening thread.
+        correlated = [h for h in listener.hits if h["token"] == "abc123token"]
+        self.assertEqual(len(correlated), 2, listener.hits)
+
 
 class GeneratorTestCase(unittest.TestCase):
     def setUp(self):
@@ -2330,6 +2378,108 @@ class DetectionRobustnessTestCase(unittest.TestCase):
                              "random latency must never be confirmed")
             self.assertTrue(all(r["verdict"] == "negative" for r in results),
                             "a non-linear latency response is negative, not even a candidate")
+
+
+class ReflectionControlTestCase(unittest.TestCase):
+    """The paired same-token control decides reflection from execution, so it
+    must fire whenever the verdict's own encoded-aware search matched. Gating it
+    on a plain regex let a target that wraps its output (base64/hex/url/html)
+    skip the control entirely and be reported 'confirmed' on pure reflection —
+    exactly the case _encoded_search exists for."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+        self.token = "AB12CD"
+        self.record = make_record(
+            payload="; echo " + self.token, mode="detection", category="detection",
+            safety="safe", token=self.token, match=re.escape(self.token))
+
+    def test_encoded_reflection_is_inconclusive_not_confirmed(self):
+        import base64
+
+        def route(method, path, params, headers, body):
+            # Echoes the parameter back, base64-wrapped. Nothing is ever executed.
+            return 200, base64.b64encode(("you sent " + params.get("q", "")).encode()).decode()
+
+        with local_target(route) as base:
+            results = self.gen.run_verification([self.record], url=f"{base}/echo?q=FUZZ")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["verdict"], "inconclusive", results[0])
+
+    def test_genuine_execution_still_confirms_through_an_encoded_wrapper(self):
+        import base64
+
+        def route(method, path, params, headers, body):
+            # Stands in for a real sink: only a command break-out yields output,
+            # so the inert same-token control comes back empty-handed.
+            query = params.get("q", "")
+            echoed = query.split("echo ", 1)[1] if query.startswith("; echo ") else ""
+            out = f"command output follows: {echoed}" if echoed else "nothing executed here"
+            return 200, base64.b64encode(out.encode()).decode()
+
+        with local_target(route) as base:
+            results = self.gen.run_verification([self.record], url=f"{base}/sink?q=FUZZ")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["verdict"], "confirmed", results[0])
+
+
+class CLIExitCodeTestCase(unittest.TestCase):
+    """Every refusal to run must exit non-zero so CI and wrapper scripts can
+    branch on the status instead of scraping stdout. A completed run exits 0
+    even when it confirmed nothing — that is a result, not a failure."""
+
+    def _run(self, *args):
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), *args],
+            cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=120,
+        )
+
+    def test_missing_consent_exits_non_zero(self):
+        result = self._run("--categories", "basic_enum", "--environments", "unix")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("consent", result.stdout.lower())
+
+    def test_unloadable_target_profile_exits_non_zero(self):
+        result = self._run("--acknowledge-consent", "--target-profile", "/no/such/profile.json")
+        self.assertEqual(result.returncode, 1)
+
+    def test_verify_without_fuzz_marker_exits_non_zero(self):
+        result = self._run("--acknowledge-consent", "--verify-url", "http://127.0.0.1:1/nomarker")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("FUZZ", result.stdout)
+
+    def test_unknown_detection_method_exits_non_zero(self):
+        result = self._run("--acknowledge-consent", "--categories", "basic_enum",
+                           "--environments", "unix", "--max-payloads", "1",
+                           "--methods", "nosuchmethod",
+                           "--verify-url", "http://127.0.0.1:1/?q=FUZZ")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Unknown --methods", result.stdout)
+
+    def test_file_method_without_webroot_exits_non_zero(self):
+        result = self._run("--acknowledge-consent", "--categories", "basic_enum",
+                           "--environments", "unix", "--max-payloads", "1",
+                           "--methods", "file",
+                           "--verify-url", "http://127.0.0.1:1/?q=FUZZ")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("--webroot", result.stdout)
+
+    def test_unreadable_request_file_exits_non_zero(self):
+        result = self._run("--acknowledge-consent", "-r", "/no/such/request.txt")
+        self.assertEqual(result.returncode, 1)
+
+    def test_request_file_without_injection_point_exits_non_zero(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            req = Path(tmp) / "req.txt"
+            req.write_text("GET /a=1 HTTP/1.1\nHost: target.example\n\n")
+            result = self._run("--acknowledge-consent", "-r", str(req))
+            self.assertEqual(result.returncode, 1)
+
+    def test_completed_generation_exits_zero(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "d.txt"
+            result = self._run("--detection-only", "--environments", "unix", "-o", str(out))
+            self.assertEqual(result.returncode, 0)
 
 
 if __name__ == "__main__":
