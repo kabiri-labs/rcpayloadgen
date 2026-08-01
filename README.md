@@ -1,6 +1,6 @@
 # RCEKit — prove RCE, don't guess it
 
-**Version 2.18.0** · MIT · Python 3.8+ · zero third-party dependencies
+**Version 2.19.0** · MIT · Python 3.8+ · zero third-party dependencies
 
 RCEKit is an **RCE detection &amp; confirmation toolkit** for authorised penetration
 testing, red teaming, and security research. Point it at a target you are allowed
@@ -214,6 +214,27 @@ shell probes. It is deliberately minimal, not noisy evasion.
 python rcekit.py --acknowledge-consent \
   --verify-url "https://target.example/ping?ip=FUZZ" --methods reflected --evade low
 ```
+
+### Sink filters `;`?
+
+Stripping `;` is the most common partial mitigation there is, and it stops
+nothing on its own — the same sink stays exploitable through a pipe, a chain
+operator or a newline. So the shell probes sweep `; `, `| `, `|| `, `&& ` and a
+newline by default, and a filter that drops any one of them is still reached.
+Both chain operators are tried because the command your input lands in may
+succeed or fail, and only one of the two fires either way.
+
+Narrow the sweep once the sink's shape is known, to cut the request count:
+
+```bash
+python rcekit.py --acknowledge-consent \
+  --verify-url "https://target.example/ping?ip=FUZZ" --methods reflected \
+  --separators '| ,&& '
+```
+
+Injection point inside a quoted argument (`ping '<input>'`)? Use the matching
+context — `--contexts shell_single_quoted` or `shell_double_quoted` — whose
+break-out closes the quote and supplies its own separator.
 
 ### Sink runs your input as the whole command?
 
@@ -439,6 +460,7 @@ Python (`os_system`, `subprocess`, `jinja2_ssti`, `exec_ast`), Postgres
 | `--webroot` / `--web-base-url` | (file method) server write dir / URL that serves it | None |
 | `--time-base <seconds>` | (time method) base delay `N`; regression fires `0/N/2N` | `2.0` |
 | `--evade {none,low}` | WAF posture; `low` = minimal `${IFS}`-for-spaces on shell probes | `none` |
+| `--separators <list>` | (`--methods`) Comma-separated break-out separators for shell probes; `\n` = newline | `; `, `\| `, `\|\| `, `&& `, newline |
 | `--sink-raw` | (`--methods`) Sink runs input as the whole command; send probes with no leading separator | Off |
 | `--verify-data` / `--verify-header` / `--verify-method` | Body (with `FUZZ`) / repeatable header / HTTP method | — |
 | `--verify-url-location` / `--verify-body-location` | Encode the payload at the URL / body point | `query_value` / auto |
