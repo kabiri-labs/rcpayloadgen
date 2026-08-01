@@ -32,6 +32,7 @@ from rcekit import (  # noqa: E402
     ReflectedMath,
     build_request_inputs,
     parse_raw_request,
+    partition_destructive,
 )
 
 
@@ -1873,6 +1874,29 @@ class RawRequestInputTestCase(unittest.TestCase):
         self.assertEqual(url, "http://t.example/q?a=FUZZ")
         self.assertEqual(injection, "inline marker")
 
+    def test_portless_host_stays_http_so_lab_targets_keep_working(self):
+        # Lab ranges, CTF boxes and internal apps are routinely plain http on a
+        # portless host. Defaulting those to https would leave the tool unable
+        # to reach its most common targets out of the box, so the default holds
+        # and the cleartext risk is surfaced by the CLI instead.
+        raw = ("GET /q?a=FUZZ HTTP/1.1\r\nHost: dvwa.local\r\n"
+               "Cookie: PHPSESSID=abc\r\n\r\n")
+        url, _, _, _, _ = build_request_inputs(raw)
+        self.assertTrue(url.startswith("http://"), url)
+
+    def test_explicit_port_decides_the_scheme(self):
+        for host, expected in (("t.example:443", "https"), ("t.example:80", "http"),
+                               ("t.example:8080", "http"), ("10.0.0.5:8000", "http")):
+            with self.subTest(host=host):
+                raw = f"GET /q?a=FUZZ HTTP/1.1\r\nHost: {host}\r\n\r\n"
+                url, _, _, _, _ = build_request_inputs(raw)
+                self.assertTrue(url.startswith(expected + "://"), url)
+
+    def test_request_scheme_override_wins_over_inference(self):
+        raw = "GET /q?a=FUZZ HTTP/1.1\r\nHost: t.example\r\n\r\n"
+        url, _, _, _, _ = build_request_inputs(raw, scheme="https")
+        self.assertTrue(url.startswith("https://"), url)
+
     def test_missing_marker_and_missing_param_raise(self):
         with self.assertRaises(ValueError):
             build_request_inputs("GET /q?a=1 HTTP/1.1\r\nHost: t.example\r\n\r\n")
@@ -2480,6 +2504,161 @@ class CLIExitCodeTestCase(unittest.TestCase):
             out = Path(tmp) / "d.txt"
             result = self._run("--detection-only", "--environments", "unix", "-o", str(out))
             self.assertEqual(result.returncode, 0)
+
+
+class DestructiveHoldBackTestCase(unittest.TestCase):
+    """A payload that installs a backdoor or destroys data must be held back by
+    default on EVERY live path. The single-request verifier did this and the
+    multi-step chain did not, so the blast radius of a run depended on which
+    delivery path it took."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+
+    def _records(self, max_safety):
+        return list(self.gen.generate_payload_records(
+            mode="exploit", max_safety=max_safety, include_blocking=False))
+
+    def test_destructive_payloads_are_held_back_by_default(self):
+        records = self._records("stateful")
+        destructive = [r for r in records if r.destructive]
+        self.assertTrue(destructive, "corpus should contain destructive payloads to exercise this")
+        to_send, held = partition_destructive(records, allow_destructive=False)
+        self.assertEqual(held, len(destructive))
+        self.assertFalse([r for r in to_send if r.destructive])
+
+    def test_opt_in_lets_them_through(self):
+        records = self._records("stateful")
+        to_send, held = partition_destructive(records, allow_destructive=True)
+        self.assertEqual(held, 0)
+        self.assertEqual(len(to_send), len(records))
+
+    def test_chain_run_holds_back_destructive_payloads(self):
+        # End-to-end through the CLI: the chain path must print the same
+        # pre-flight plan and hold-back notice as --verify-url. Raising the risk
+        # tier is what surfaces destructive payloads at all.
+        with local_target(lambda *a: (200, "ok")) as base, tempfile.TemporaryDirectory() as tmp:
+            chain = Path(tmp) / "chain.json"
+            chain.write_text(json.dumps({
+                "base": base,
+                "steps": [{"name": "deliver", "method": "POST", "path": "/run",
+                           "form": {"cmd": "FUZZ"}}],
+            }))
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "--acknowledge-consent",
+                 "--categories", "file_operations", "--environments", "unix",
+                 "--verify-active-risk", "stateful", "--max-payloads", "3",
+                 "--verify-chain", str(chain)],
+                cwd=tmp, capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("[plan]", result.stdout)
+        self.assertIn("holding back", result.stdout)
+        self.assertIn("--verify-allow-destructive", result.stdout)
+
+
+class CleartextCaptureWarningTestCase(unittest.TestCase):
+    """A portless capture stays http so lab and internal targets keep working,
+    so the cleartext risk is surfaced instead of defaulted away: the inferred
+    scheme is always reported, and a captured session about to go out in the
+    clear is named."""
+
+    def _run_with_request(self, raw, *extra):
+        with tempfile.TemporaryDirectory() as tmp:
+            req = Path(tmp) / "req.txt"
+            req.write_text(raw)
+            return subprocess.run(
+                [sys.executable, str(SCRIPT), "--acknowledge-consent",
+                 "--categories", "basic_enum", "--environments", "unix",
+                 "--max-payloads", "1", "-r", str(req), *extra],
+                cwd=tmp, capture_output=True, text=True, timeout=120)
+
+    def test_credential_header_over_plain_http_is_flagged(self):
+        result = self._run_with_request(
+            "GET /q?a=FUZZ HTTP/1.1\r\nHost: 127.0.0.1:1\r\n"
+            "Authorization: Bearer secret\r\nCookie: session=abc\r\n\r\n")
+        self.assertIn("inferred http", result.stdout)
+        self.assertIn("replayed over plain HTTP", result.stdout)
+        self.assertIn("Authorization", result.stdout)
+        self.assertIn("Cookie", result.stdout)
+        self.assertIn("--request-scheme", result.stdout)
+        self.assertNotIn("secret", result.stdout)  # names the header, never its value
+
+    def test_no_warning_without_credential_headers(self):
+        result = self._run_with_request(
+            "GET /q?a=FUZZ HTTP/1.1\r\nHost: 127.0.0.1:1\r\nAccept: */*\r\n\r\n")
+        self.assertIn("inferred http", result.stdout)
+        self.assertNotIn("replayed over plain HTTP", result.stdout)
+
+    def test_no_warning_when_the_scheme_was_given_explicitly(self):
+        result = self._run_with_request(
+            "GET /q?a=FUZZ HTTP/1.1\r\nHost: 127.0.0.1:1\r\n"
+            "Authorization: Bearer secret\r\n\r\n",
+            "--request-scheme", "http")
+        self.assertNotIn("inferred http", result.stdout)
+        self.assertNotIn("replayed over plain HTTP", result.stdout)
+
+
+class OutputFailureTestCase(unittest.TestCase):
+    """The generated file IS the deliverable, so a write that failed must not be
+    reported as a successful run."""
+
+    def test_unwritable_output_path_exits_non_zero(self):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--detection-only", "--environments", "unix",
+             "-o", "/no/such/directory/out.txt"],
+            cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Unable to write output", result.stdout)
+        self.assertNotIn("Generated", result.stdout)
+
+    def test_write_failure_propagates_to_the_caller(self):
+        gen = RCEKit()
+        with self.assertRaises(OSError):
+            gen.save_payloads_to_file(
+                file_path="/no/such/directory/out.txt", mode="detection",
+                selected_environments=["unix"])
+
+
+class AuditRedactionTestCase(unittest.TestCase):
+    """The audit trail records what was fired and by whom. Verification headers
+    routinely carry the session that makes the target reachable at all, and a
+    credential must not be persisted to disk just to record that a header was
+    sent."""
+
+    def test_sensitive_header_values_are_masked(self):
+        masked = RCEKit.redact_headers([
+            "Authorization: Bearer SUPERSECRET",
+            "Cookie: session=SUPERSECRET",
+            "X-Api-Key: SUPERSECRET",
+            "Content-Type: application/json",
+        ])
+        self.assertEqual(masked[:3], ["Authorization: <redacted>",
+                                      "Cookie: <redacted>",
+                                      "X-Api-Key: <redacted>"])
+        self.assertEqual(masked[3], "Content-Type: application/json")
+
+    def test_header_names_survive_so_the_trail_stays_useful(self):
+        masked = RCEKit.redact_headers(["Authorization: Bearer x"])
+        self.assertIn("Authorization", masked[0])
+
+    def test_no_headers_is_passed_through(self):
+        self.assertIsNone(RCEKit.redact_headers(None))
+        self.assertEqual(RCEKit.redact_headers([]), [])
+
+    def test_credentials_never_reach_the_audit_log_on_disk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "p.txt"
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "--acknowledge-consent",
+                 "--categories", "basic_enum", "--environments", "unix",
+                 "--max-payloads", "1", "-o", str(out),
+                 "--verify-header", "Authorization: Bearer SUPERSECRET"],
+                cwd=tmp, capture_output=True, text=True, timeout=120)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            audit = (Path(tmp) / "exploit_audit.log").read_text()
+        self.assertNotIn("SUPERSECRET", audit)
+        self.assertIn("Authorization", audit)
+        self.assertIn("redacted", audit)
 
 
 if __name__ == "__main__":
