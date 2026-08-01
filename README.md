@@ -1,6 +1,6 @@
 # RCEKit — prove RCE, don't guess it
 
-**Version 2.17.2** · MIT · Python 3.8+ · zero third-party dependencies
+**Version 2.18.0** · MIT · Python 3.8+ · zero third-party dependencies
 
 RCEKit is an **RCE detection &amp; confirmation toolkit** for authorised penetration
 testing, red teaming, and security research. Point it at a target you are allowed
@@ -177,8 +177,12 @@ python rcekit.py --acknowledge-consent -r request.txt -p host --methods reflecte
 
 Mark the point inline with `FUZZ` or `*`, or select a parameter with `-p NAME`
 (searched query → body → header → cookie). Each injection point is still encoded
-for its own context. Scheme is inferred (`https` on `:443`, else `http`;
-`--request-scheme` to override) and `Host`/`Content-Length` are recomputed.
+for its own context. Scheme is inferred (`https` on `:443`, else `http` — a
+portless capture cannot say which, and `http` keeps lab and internal targets
+reachable); the inferred scheme is printed, and a capture carrying an
+`Authorization` or `Cookie` header over plain `http` is flagged so you can
+pass `--request-scheme https` (add `--insecure` for a self-signed cert).
+`Host`/`Content-Length` are recomputed.
 
 ### Blind and no-egress targets
 

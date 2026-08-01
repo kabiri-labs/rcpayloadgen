@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.17.2"
+__version__ = "2.18.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -1070,8 +1070,12 @@ class RCEKit:
                 logger.info("Metadata sidecar written to %s", metadata_path)
             if manifest:
                 logger.info("Correlation map (token -> payload) written to %s", map_path)
-        except Exception as e:
-            logger.error(f"Error writing to file {output_path}: {e}")
+        except Exception as exc:
+            # Never report a partial or absent wordlist as a successful run: the
+            # file IS the deliverable, so a write failure has to reach the
+            # caller and the process exit status, not just the log.
+            logger.error("Error writing to file %s: %s", output_path, exc)
+            raise
 
         return count
 
@@ -1158,6 +1162,7 @@ class RCEKit:
                         outdir, count, len(groups), hint)
         except Exception as exc:
             logger.error("Error writing Burp output to %s: %s", outdir, exc)
+            raise
         return count
 
     def _write_ffuf(self, output_path: Path, records: Iterator[PayloadRecord], max_payloads: Optional[int],
@@ -1203,6 +1208,7 @@ class RCEKit:
                     "so only wordlists were written to %s/.", outdir)
         except Exception as exc:
             logger.error("Error writing ffuf output to %s: %s", outdir, exc)
+            raise
         return count
 
     def _write_nuclei(self, output_path: Path, records: Iterator[PayloadRecord], max_payloads: Optional[int],
@@ -1263,6 +1269,7 @@ class RCEKit:
             logger.info("Nuclei templates written to %s/ (%s templates, %s payloads)", outdir, len(groups), count)
         except Exception as exc:
             logger.error("Error writing Nuclei output to %s: %s", outdir, exc)
+            raise
         return count
 
     def _nuclei_template(self, env: str, oracle: str, payloads: List[str], canary: str,
@@ -1882,13 +1889,42 @@ class RCEKit:
                     result["detail"] = f"no callback received for token {result['token']}"
         return results
 
+    # Headers whose value is a credential rather than a detail worth auditing.
+    # The audit trail records that a header was sent, never its secret.
+    SENSITIVE_HEADERS = {
+        "authorization", "proxy-authorization", "authentication",
+        "cookie", "set-cookie", "x-api-key", "api-key",
+        "x-auth-token", "auth-token", "x-csrf-token", "x-session-token",
+    }
+
+    @classmethod
+    def redact_headers(cls, headers: Optional[List[str]]) -> Optional[List[str]]:
+        """Mask the value of every credential-bearing header, keeping its name.
+
+        Verification headers routinely carry the session that makes the target
+        reachable at all -- a bearer token or an authenticated cookie. Those
+        must not be persisted: the audit trail exists to record what was fired
+        and by whom, and a header's name carries that; its secret does not."""
+        if not headers:
+            return headers
+        masked: List[str] = []
+        for header in headers:
+            name, sep, _value = header.partition(":")
+            if sep and name.strip().lower() in cls.SENSITIVE_HEADERS:
+                masked.append(f"{name.strip()}: <redacted>")
+            else:
+                masked.append(header)
+        return masked
+
     def log_exploitation_usage(self, watermark_token: str, arguments: argparse.Namespace) -> None:
         audit_path = Path("exploit_audit.log")
         try:
+            recorded = dict(vars(arguments))
+            recorded["verify_header"] = self.redact_headers(recorded.get("verify_header"))
             with audit_path.open("a", encoding="utf-8") as audit_file:
                 timestamp = datetime.now(timezone.utc).isoformat()
                 audit_file.write(
-                    f"{timestamp} | token={watermark_token} | ip={self.attacker_ip} | domain={self.attacker_domain} | args={vars(arguments)}\n"
+                    f"{timestamp} | token={watermark_token} | ip={self.attacker_ip} | domain={self.attacker_domain} | args={recorded}\n"
                 )
         except Exception as exc:
             logger.error("Unable to log exploitation usage: %s", exc)
@@ -2463,6 +2499,27 @@ HIGH_RISK_CATEGORIES = {
 }
 
 
+def partition_destructive(records: Iterator[PayloadRecord],
+                          allow_destructive: bool) -> Tuple[List[PayloadRecord], int]:
+    """Materialise ``records``, holding back the ones that alter or damage the
+    target -- persistence, backdoors, security-control tampering, irreversible
+    file operations -- unless the operator opted in. Returns ``(to_send,
+    held_back)``.
+
+    Both live paths go through this. The single-request verifier held these
+    back while the multi-step chain did not, so a payload the one refused to
+    fire the other would install; the safety of a run must not depend on which
+    delivery path it took."""
+    to_send: List[PayloadRecord] = []
+    held_back = 0
+    for record in records:
+        if record.destructive and not allow_destructive:
+            held_back += 1
+            continue
+        to_send.append(record)
+    return to_send, held_back
+
+
 def build_verification_plan(records: List[PayloadRecord], method: str, url: str,
                             attacker_ip: Optional[str] = None,
                             attacker_domain: Optional[str] = None,
@@ -2636,6 +2693,26 @@ def _place_param_marker(target, headers, body, param, mark):
     raise ValueError(f"parameter '{param}' not found in query, body, headers, or cookies")
 
 
+def _infer_request_scheme(host: str) -> str:
+    """Pick the scheme for a raw request whose capture does not record one.
+
+    A ``Host`` header carries a port only when it is not the scheme's default,
+    so a portless capture is 80 or 443 and cannot say which. RCEKit keeps http
+    for that case, deliberately: its targets are lab ranges, CTF boxes and
+    internal applications, which are routinely plain http on a portless host,
+    and defaulting to https would leave those unreachable out of the box.
+
+    That default can send a captured session in cleartext, so the risk is
+    surfaced rather than silently defaulted away: the CLI reports the inferred
+    scheme, and warns outright when the request carries a credential header
+    that plain http would expose. ``--request-scheme`` settles it either way,
+    and an explicit port is authoritative."""
+    _, _, port = host.rpartition(":")
+    if not port.isdigit():
+        return "http"           # no port recorded; http keeps lab targets reachable
+    return "https" if port == "443" else "http"
+
+
 def build_request_inputs(text: str, param: Optional[str] = None,
                          scheme: Optional[str] = None, mark: str = "FUZZ"
                          ) -> Tuple[str, str, Optional[str], List[str], str]:
@@ -2665,7 +2742,7 @@ def build_request_inputs(text: str, param: Optional[str] = None,
         raise ValueError("no injection point: add a FUZZ or * marker, or pass -p NAME")
 
     if scheme is None:
-        scheme = "https" if host.endswith(":443") else "http"
+        scheme = _infer_request_scheme(host)
     url = f"{scheme}://{host}{target}"
     # Drop Host and Content-Length: urllib recomputes both from the URL and the
     # (marker-lengthened) body.
@@ -2767,7 +2844,9 @@ def main():
                              "enumeration is planned.")
     parser.add_argument("--request-scheme", choices=["http", "https"], default=None,
                         help="Scheme for the URL built from -r (default: https when the Host is on :443, "
-                             "otherwise http).")
+                             "otherwise http — a portless capture cannot record which, and http keeps "
+                             "lab and internal targets reachable). The inferred scheme is printed, and "
+                             "a request carrying credential headers over plain http is flagged.")
     parser.add_argument("--webroot", default=None,
                         help="(file-based detection) server-side directory the target can write to and "
                              "serve, e.g. /var/www/html. Required with --methods file.")
@@ -2974,9 +3053,29 @@ def main():
             mode=mode, watermark_token=watermark_token, max_safety=verify_max_safety,
             include_blocking=include_blocking, oob_domain=oob_domain,
         )
-        records = list(records)
+        # The chain delivers to a live target exactly as --verify-url does, so
+        # it goes through the same sink-shape filters, the same destructive
+        # hold-back and the same pre-flight plan. Anything less would make the
+        # blast radius of a run depend on which delivery path it took.
+        if deny_chars or max_length or needs_separator or blind:
+            records = generator._filter_by_profile(
+                records, deny_chars, max_length, needs_separator, blind)
+        records, skipped_destructive = partition_destructive(
+            records, args.verify_allow_destructive)
         verify_token = ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(8))
         generator.log_exploitation_usage(f"VERIFY-CHAIN:{verify_token} base={chain.get('base')}", args)
+        plan_lines, records = build_verification_plan(
+            records, "chain", chain.get("base", "?"),
+            attacker_ip=generator.attacker_ip, attacker_domain=generator.attacker_domain,
+            max_payloads=args.max_payloads)
+        for line in plan_lines:
+            print(line)
+        if skipped_destructive:
+            print(f"[plan] holding back {skipped_destructive} destructive payloads "
+                  "(persistence/backdoors/etc.); pass --verify-allow-destructive to include them.")
+        if verify_max_safety == "safe":
+            print("[plan] low-impact (safe) payloads only; pass --verify-active-risk intrusive to also "
+                  "fire reverse shells, download-execute, credential access, lateral movement and OOB.")
         print(f"[verify-chain] {chain.get('base')}  ({len(chain.get('steps', []))} steps, "
               f"{len(records)} payloads)  (authorised target)")
         results = generator.run_verification_chain(
@@ -3023,6 +3122,21 @@ def main():
             method = args.verify_method or method
             print(f"[verify] loaded request from {args.request_file}: {method} {verify_url} "
                   f"(injecting at {injection})")
+            if args.request_scheme is None:
+                resolved_scheme = verify_url.split("://", 1)[0]
+                print(f"[verify] the capture records no scheme; inferred {resolved_scheme} "
+                      "from the Host header — override with --request-scheme.")
+                # A capture replayed over plain http puts whatever session it
+                # carries on the wire. That is fine against a lab target and a
+                # leak against a real one, and only the operator knows which,
+                # so name the headers at risk instead of guessing for them.
+                exposed = [name for name in
+                           (h.partition(":")[0].strip() for h in verify_headers)
+                           if name.lower() in RCEKit.SENSITIVE_HEADERS]
+                if resolved_scheme == "http" and exposed:
+                    print(f"[!] This request carries {', '.join(sorted(set(exposed)))} and will be "
+                          "replayed over plain HTTP. If the target is HTTPS, pass --request-scheme "
+                          "https (with --insecure for a self-signed or mismatched certificate).")
         else:
             verify_url = args.verify_url
             verify_data = args.verify_data
@@ -3049,33 +3163,23 @@ def main():
         )
         if deny_chars or max_length or needs_separator or blind:
             records = generator._filter_by_profile(records, deny_chars, max_length, needs_separator, blind)
-        skipped_destructive = [0]
-        if not args.verify_allow_destructive:
-            # Never install backdoors / tamper with a live target unless asked.
-            def _drop_destructive(source):
-                for record in source:
-                    if record.destructive:
-                        skipped_destructive[0] += 1
-                        continue
-                    yield record
-
-            records = _drop_destructive(records)
+        # Never install backdoors / tamper with a live target unless asked.
+        records, skipped_destructive = partition_destructive(
+            records, args.verify_allow_destructive)
         # When capping, interleave so --max-payloads fires a balanced sample
         # across categories/environments instead of exhausting the first bucket.
         if args.max_payloads:
-            records = generator._interleave(
-                records, key=lambda r: (r.category, r.environment, r.sink))
-        # Materialise (this also tallies the destructive skips) and show an
-        # execution plan before anything is fired.
-        records = list(records)
+            records = list(generator._interleave(
+                records, key=lambda r: (r.category, r.environment, r.sink)))
+        # Show an execution plan before anything is fired.
         plan_lines, to_send = build_verification_plan(
             records, method, verify_url,
             attacker_ip=generator.attacker_ip, attacker_domain=generator.attacker_domain,
             max_payloads=args.max_payloads)
         for line in plan_lines:
             print(line)
-        if skipped_destructive[0]:
-            print(f"[plan] holding back {skipped_destructive[0]} destructive payloads "
+        if skipped_destructive:
+            print(f"[plan] holding back {skipped_destructive} destructive payloads "
                   "(persistence/backdoors/etc.); pass --verify-allow-destructive to include them.")
         if verify_max_safety == "safe":
             print("[plan] low-impact (safe) payloads only; pass --verify-active-risk intrusive to also "
@@ -3187,26 +3291,30 @@ def main():
                 "self-contained shell payload."
             )
 
-    count = generator.save_payloads_to_file(
-        file_path=args.output,
-        max_payloads=args.max_payloads,
-        output_format=args.output_format,
-        include_metadata=args.include_metadata or args.output_format == "jsonl",
-        deny_chars=deny_chars,
-        max_length=max_length,
-        needs_separator=needs_separator,
-        blind=blind,
-        request_template=request_template,
-        selected_contexts=selected_contexts,
-        selected_categories=selected_categories,
-        selected_encodings=selected_encodings,
-        selected_environments=selected_environments,
-        mode=mode,
-        watermark_token=watermark_token,
-        max_safety=max_safety,
-        include_blocking=include_blocking,
-        oob_domain=oob_domain,
-    )
+    try:
+        count = generator.save_payloads_to_file(
+            file_path=args.output,
+            max_payloads=args.max_payloads,
+            output_format=args.output_format,
+            include_metadata=args.include_metadata or args.output_format == "jsonl",
+            deny_chars=deny_chars,
+            max_length=max_length,
+            needs_separator=needs_separator,
+            blind=blind,
+            request_template=request_template,
+            selected_contexts=selected_contexts,
+            selected_categories=selected_categories,
+            selected_encodings=selected_encodings,
+            selected_environments=selected_environments,
+            mode=mode,
+            watermark_token=watermark_token,
+            max_safety=max_safety,
+            include_blocking=include_blocking,
+            oob_domain=oob_domain,
+        )
+    except OSError as exc:
+        print(f"[!] Unable to write output to {args.output}: {exc}")
+        return 1
 
     print(f"Generated {count} payloads to {args.output} in {mode} mode")
 
