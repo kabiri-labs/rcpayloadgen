@@ -2661,5 +2661,148 @@ class AuditRedactionTestCase(unittest.TestCase):
         self.assertIn("redacted", audit)
 
 
+class SeparatorSweepTestCase(unittest.TestCase):
+    """Shell probes sweep several command separators. A sink that filters ';' —
+    the most common partial mitigation there is — stays exploitable through a
+    pipe, a chain operator or a newline, so a probe that only ever tried ';'
+    reported a genuinely vulnerable target as negative."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+        self.rec = make_record(environment="unix", context="raw")
+
+    def _payloads(self, config=None, record=None):
+        import random as _random
+        method = ReflectedMath(self.gen, config or {})
+        return [p.payload for p in method.build_probes(record or self.rec, _random.Random(1))]
+
+    def test_probes_cover_every_default_separator(self):
+        payloads = self._payloads()
+        for separator in ("; ", "| ", "|| ", "&& ", "\n"):
+            with self.subTest(separator=separator):
+                self.assertTrue(any(p.startswith(separator) for p in payloads),
+                                f"no probe breaks out with {separator!r}")
+
+    def test_newline_separator_is_a_real_newline_not_percent_0a(self):
+        # The delivery layer percent-encodes each probe for its injection point,
+        # so a literal "%0a" would reach the sink as the text %250a. Only a real
+        # newline survives that round trip.
+        payloads = self._payloads()
+        self.assertTrue(any(p.startswith("\n") for p in payloads))
+        self.assertFalse(any(p.startswith("%0a") for p in payloads))
+        newline_probe = next(p for p in payloads if p.startswith("\n"))
+        self.assertEqual(self.gen._encode_for_location(newline_probe, "query_value")[:3], "%0A")
+
+    def test_separators_are_configurable(self):
+        payloads = self._payloads({"separators": ["| "]})
+        self.assertTrue(payloads)
+        self.assertTrue(all(p.startswith("| ") for p in payloads), payloads)
+
+    def test_sink_raw_still_sends_bare_commands(self):
+        payloads = self._payloads({"sink_raw": True})
+        self.assertTrue(all(p.startswith("echo ") for p in payloads), payloads)
+
+    def test_file_probes_get_a_distinct_target_file_per_separator(self):
+        # Sharing one filename would make every probe's followup succeed as soon
+        # as any separator wrote it, so a confirmation could not say which
+        # break-out worked and its cleanup would name another probe's file.
+        import random as _random
+        probes = FileBased(self.gen, {"webroot": "/var/www/html",
+                                      "web_base_url": "http://t"}).build_probes(
+            self.rec, _random.Random(1))
+        self.assertEqual(len(probes), 5)
+        urls = {p.followup["url"] for p in probes}
+        tokens = {p.expected for p in probes}
+        self.assertEqual(len(urls), len(probes))
+        self.assertEqual(len(tokens), len(probes))
+        for probe in probes:
+            self.assertIn(probe.followup["path"].rsplit("/", 1)[-1], probe.followup["cleanup"])
+
+    def test_aggregate_timing_keeps_a_single_separator(self):
+        # ParametricTime reads a whole probe series as one measurement, so
+        # mixing separators through it would blend a working break-out with
+        # broken ones and destroy the regression.
+        import random as _random
+        probes = ParametricTime(self.gen, {"time_base": 1.0}).build_probes(
+            self.rec, _random.Random(1))
+        self.assertTrue(all(p.payload.startswith("; ") for p in probes), probes)
+
+    def test_a_pipe_only_sink_is_now_confirmed(self):
+        # End-to-end against a real sink that strips ';' and '&': exploitable
+        # through a pipe, and previously reported negative.
+        import os
+
+        def route(method, path, params, headers, body):
+            query = params.get("q", "").replace(";", "").replace("&", "")
+            pipe = os.popen("echo probing " + query + " 2>&1")
+            out = pipe.read()
+            pipe.close()
+            return 200, out
+
+        with local_target(route) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/x?q=FUZZ", methods=["reflected"])
+        self.assertTrue([r for r in results if r["verdict"] == "confirmed"],
+                        "a ';'-filtering sink must still be confirmed via another separator")
+
+    def test_a_non_vulnerable_sink_stays_negative_under_the_sweep(self):
+        # The sweep multiplies probes, so re-prove the precision it could erode.
+        def route(method, path, params, headers, body):
+            return 200, "you searched for: " + params.get("q", "")
+
+        with local_target(route) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/x?q=FUZZ", methods=["reflected"])
+        self.assertTrue(results)
+        self.assertFalse([r for r in results if r["verdict"] == "confirmed"])
+
+
+class SelfSeparatingContextTestCase(unittest.TestCase):
+    """A shell-quoted context's prefix already ends in a separator, so a probe
+    must not add another. The generator has guarded this since it was found
+    there; the detection engine had not, which made ``shell_single_quoted`` —
+    the one context that actually fits a quoted sink — emit ``'; ; cmd`` and
+    fail on exactly the sink it was for."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+
+    def _probe(self, context):
+        import random as _random
+        return ReflectedMath(self.gen).build_probes(
+            make_record(environment="unix", context=context), _random.Random(1))[0].payload
+
+    def test_quoted_contexts_do_not_double_the_separator(self):
+        for context, prefix in (("shell_single_quoted", "'; "), ("shell_double_quoted", '"; ')):
+            with self.subTest(context=context):
+                payload = self._probe(context)
+                self.assertTrue(payload.startswith(prefix), payload)
+                self.assertNotIn("; ; ", payload)
+
+    def test_unquoted_context_still_supplies_its_own_separator(self):
+        self.assertTrue(self._probe("raw").startswith("; "))
+
+    def test_generator_and_detection_share_one_definition(self):
+        # The duplication is what let the two drift apart in the first place.
+        self.assertEqual(rcekit.SELF_SEPARATING_CONTEXTS,
+                         {"shell_single_quoted", "shell_double_quoted"})
+
+    def test_a_single_quoted_sink_is_confirmed_with_its_own_context(self):
+        import os
+
+        def route(method, path, params, headers, body):
+            pipe = os.popen("sh -c \"echo probing '" + params.get("q", "") + "'\" 2>&1")
+            out = pipe.read()
+            pipe.close()
+            return 200, out
+
+        with local_target(route) as base:
+            results = self.gen.run_detection(
+                [make_record(environment="unix", context="shell_single_quoted")],
+                url=f"{base}/x?q=FUZZ", methods=["reflected"])
+        self.assertTrue([r for r in results if r["verdict"] == "confirmed"],
+                        "shell_single_quoted must confirm on a single-quoted sink")
+
+
 if __name__ == "__main__":
     unittest.main()
