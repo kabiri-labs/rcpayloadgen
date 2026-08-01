@@ -1,6 +1,6 @@
 # RCEKit — prove RCE, don't guess it
 
-**Version 2.19.0** · MIT · Python 3.8+ · zero third-party dependencies
+**Version 2.20.0** · MIT · Python 3.8+ · zero third-party dependencies
 
 RCEKit is an **RCE detection &amp; confirmation toolkit** for authorised penetration
 testing, red teaming, and security research. Point it at a target you are allowed
@@ -129,6 +129,21 @@ One CLI, one `--methods` flag, covering the main paths to RCE:
 
 Mix them freely: `--methods reflected,eval,time` runs all three and reports each
 tier separately.
+
+The shell methods (`reflected`, `file`, `time`) apply to any environment whose
+runtime reaches a shell — the shell environments themselves plus the language
+runtimes, since PHP's `system()`, Python's `os.system()`, Node's
+`child_process.exec()`, Ruby's `system()`, Perl's backticks and Go's `os/exec`
+all hand the string to `/bin/sh`. So scoping a run to the language the
+application is written in (`--environments php`) still probes for command
+injection; a language runtime doesn't say which OS it runs on, so its probes
+take the Unix shape and `--environments windows` remains the way to get
+`cmd.exe` probes. The data-layer environments (`sql`, `graphql`, `mongodb`)
+are excluded: reaching a shell from those needs a different escalation, so
+`eval` is what applies there.
+
+If a combination builds no probes at all, RCEKit says so and exits non-zero —
+a run that tested nothing is never reported as a clean result.
 
 > **Honest scope.** RCEKit confirms RCE that is reachable by **injecting into a
 > request** and interpreted by a shell or an evaluator. It does **not** cover

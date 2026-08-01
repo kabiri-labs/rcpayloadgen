@@ -2804,5 +2804,100 @@ class SelfSeparatingContextTestCase(unittest.TestCase):
                         "shell_single_quoted must confirm on a single-quoted sink")
 
 
+class ShellCapableEnvironmentTestCase(unittest.TestCase):
+    """An ``environment`` names what runs the application, not what executes the
+    injected command. PHP's system(), Python's os.system() and Node's
+    child_process.exec() all hand the string to /bin/sh, and the corpus has
+    always shipped those sinks — but the shell methods gated on the shell
+    environments alone, so scoping a run to the language the application is
+    written in sent no shell probes and reported a clean negative."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+        self.config = {"webroot": "/var/www/html", "web_base_url": "http://t"}
+
+    def _rec(self, env):
+        return make_record(environment=env, context="raw")
+
+    def test_language_runtimes_get_shell_probes(self):
+        for env in ("php", "python", "nodejs", "java", "dotnet", "ruby", "perl", "go"):
+            for cls in (ReflectedMath, FileBased, ParametricTime):
+                with self.subTest(environment=env, method=cls.name):
+                    self.assertTrue(cls(self.gen, self.config).applicable(self._rec(env)))
+
+    def test_shell_environments_still_apply(self):
+        for env in ("unix", "docker", "kubernetes", "windows"):
+            with self.subTest(environment=env):
+                self.assertTrue(ReflectedMath(self.gen).applicable(self._rec(env)))
+
+    def test_data_layer_environments_stay_out(self):
+        # Reaching a shell from these needs a distinct escalation (xp_cmdshell,
+        # COPY FROM PROGRAM, a resolver into a command sink) and so a distinct
+        # probe; claiming applicability would only send probes that cannot fire.
+        for env in ("sql", "graphql", "mongodb"):
+            with self.subTest(environment=env):
+                self.assertFalse(ReflectedMath(self.gen).applicable(self._rec(env)))
+
+    def test_language_runtime_probes_take_the_unix_shape(self):
+        # A language runtime does not say which OS it runs on; --environments
+        # windows stays the way to get cmd.exe probes.
+        import random as _random
+        probe = ReflectedMath(self.gen).build_probes(self._rec("php"), _random.Random(1))[0]
+        self.assertIn("$((", probe.payload)
+        self.assertNotIn("set /a", probe.payload)
+
+    def test_php_system_sink_is_confirmed_under_its_own_environment(self):
+        import os
+
+        def route(method, path, params, headers, body):
+            pipe = os.popen("echo pinging " + params.get("q", "") + " 2>&1")
+            out = pipe.read()
+            pipe.close()
+            return 200, out
+
+        with local_target(route) as base:
+            results = self.gen.run_detection(
+                [self._rec("php")], url=f"{base}/x?q=FUZZ", methods=["reflected"])
+        self.assertTrue([r for r in results if r["verdict"] == "confirmed"],
+                        "a system() sink must confirm under --environments php")
+
+
+class NoProbesBuiltTestCase(unittest.TestCase):
+    """A run that built no probes tested nothing, and used to end in silence and
+    exit 0 — indistinguishable from a target that came back clean."""
+
+    def _run(self, *args, cwd=None):
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), *args],
+            cwd=str(cwd or REPO_ROOT), capture_output=True, text=True, timeout=120)
+
+    def _detect(self, *extra):
+        return self._run("--acknowledge-consent", "--contexts", "raw", "--max-payloads", "3",
+                         "--verify-url", "http://127.0.0.1:9/?q=FUZZ", *extra)
+
+    def test_zero_probes_is_reported_and_exits_non_zero(self):
+        result = self._detect("--environments", "mongodb", "--categories", "nosql_injection",
+                              "--methods", "reflected")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("NOTHING WAS TESTED", result.stdout)
+        self.assertIn("not a negative result", result.stdout)
+
+    def test_the_message_names_the_environment_and_the_way_out(self):
+        result = self._detect("--environments", "mongodb", "--categories", "nosql_injection",
+                              "--methods", "reflected")
+        self.assertIn("mongodb", result.stdout)
+        self.assertIn("--environments unix", result.stdout)
+        self.assertIn("--methods eval", result.stdout)
+
+    def test_a_run_that_did_send_probes_is_unaffected(self):
+        # Nothing listens on port 9, so every probe errors — but probes were
+        # built, so this stays the ordinary reporting path.
+        result = self._detect("--environments", "unix", "--categories", "basic_enum",
+                              "--methods", "reflected")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertNotIn("NOTHING WAS TESTED", result.stdout)
+        self.assertIn("NEVER REACHED THE TARGET", result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

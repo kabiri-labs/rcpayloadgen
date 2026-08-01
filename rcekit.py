@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.19.0"
+__version__ = "2.20.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -2112,6 +2112,26 @@ class OOBListener:
 # Shell environments whose payloads ReflectedMath can force to compute a value.
 UNIX_SHELL_ENVIRONMENTS = {"unix", "docker", "kubernetes"}
 
+# Application runtimes that reach a shell. An ``environment`` names what runs
+# the application, not what executes the injected command: PHP's system(),
+# Python's os.system(), Node's child_process.exec(), Ruby's system(), Perl's
+# backticks and Go's os/exec all hand the string to /bin/sh. The corpus has
+# always modelled that -- it ships exec_system, os_system, child_process_exec
+# and kernel_system sinks for exactly these runtimes -- while the shell
+# detection methods gated on the shell environments alone, so scoping a run to
+# the language the application is written in (the natural thing to do) sent no
+# shell probes at all and reported a clean negative.
+#
+# A language runtime does not say which OS it runs on, so its probes take the
+# Unix shape; --environments windows remains the way to get cmd.exe probes.
+#
+# The data-layer environments (sql, graphql, mongodb) are deliberately absent:
+# reaching a shell from them needs a distinct escalation (xp_cmdshell, COPY
+# FROM PROGRAM, a resolver into a command sink) and so a distinct probe.
+SHELL_CAPABLE_ENVIRONMENTS = UNIX_SHELL_ENVIRONMENTS | {"windows"} | {
+    "php", "python", "nodejs", "java", "dotnet", "ruby", "perl", "go",
+}
+
 
 @dataclass
 class Probe:
@@ -2321,8 +2341,7 @@ class ReflectedMath(DetectionMethod):
     tier = "confirmed"
 
     def applicable(self, record: "PayloadRecord") -> bool:
-        return (record.environment in UNIX_SHELL_ENVIRONMENTS
-                or record.environment == "windows")
+        return record.environment in SHELL_CAPABLE_ENVIRONMENTS
 
     def build_probes(self, record: "PayloadRecord", rng: "random.Random") -> List[Probe]:
         a = rng.randint(100000, 999999)
@@ -2372,8 +2391,7 @@ class FileBased(DetectionMethod):
     def applicable(self, record: "PayloadRecord") -> bool:
         if not (self.config.get("webroot") and self.config.get("web_base_url")):
             return False
-        return (record.environment in UNIX_SHELL_ENVIRONMENTS
-                or record.environment == "windows")
+        return record.environment in SHELL_CAPABLE_ENVIRONMENTS
 
     def build_probes(self, record: "PayloadRecord", rng: "random.Random") -> List[Probe]:
         webroot = self.config["webroot"].rstrip("/")
@@ -2436,8 +2454,7 @@ class ParametricTime(DetectionMethod):
     aggregate = True
 
     def applicable(self, record: "PayloadRecord") -> bool:
-        return (record.environment in UNIX_SHELL_ENVIRONMENTS
-                or record.environment == "windows")
+        return record.environment in SHELL_CAPABLE_ENVIRONMENTS
 
     def build_probes(self, record: "PayloadRecord", rng: "random.Random") -> List[Probe]:
         base = float(self.config.get("time_base", 2.0))
@@ -3283,6 +3300,29 @@ def main():
             print(f"[detect] methods: {', '.join(method_names)}")
             print(f"[detect] sent {len(results)} probes: " +
                   (", ".join(f"{v}={c}" for v, c in sorted(by_verdict.items())) or "none"))
+            if not results:
+                # Nothing was tested. Saying so is the whole point: a run that
+                # built no probes used to end here in silence and exit 0, which
+                # reads exactly like a target that came back clean.
+                selected_envs = sorted({record.environment for record in to_send})
+                print("[!] No probes were built, so NOTHING WAS TESTED — this is not a "
+                      "negative result.")
+                if not to_send:
+                    print("[!] No payloads matched the selection: widen --categories/--environments"
+                          "/--contexts, or raise --verify-active-risk.")
+                else:
+                    print(f"[!] None of the selected methods ({', '.join(method_names)}) apply to "
+                          f"environment(s): {', '.join(selected_envs)}.")
+                    shell_methods = sorted(
+                        set(method_names) & {ReflectedMath.name, FileBased.name, ParametricTime.name})
+                    if shell_methods and not set(selected_envs) & SHELL_CAPABLE_ENVIRONMENTS:
+                        verb = "needs" if len(shell_methods) == 1 else "need"
+                        print(f"[!] {', '.join(shell_methods)} {verb} an environment whose runtime "
+                              "reaches a shell. Add --environments unix if the sink shells out, or "
+                              f"use --methods {EvalExpr.name} for a template/expression sink.")
+                    if FileBased.name in method_names and not (args.webroot and args.web_base_url):
+                        print("[!] --methods file also needs --webroot and --web-base-url.")
+                return 1
             confirmed = [r for r in results if r["verdict"] == "confirmed"]
             if confirmed:
                 print(f"\n[detect] CONFIRMED execution ({len(confirmed)}):")
