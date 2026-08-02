@@ -1353,7 +1353,7 @@ class DoctorTestCase(unittest.TestCase):
     def test_check_integrity_ok_on_shipped_corpus(self):
         ok, report = RCEKit().check_integrity()
         self.assertTrue(ok)
-        self.assertTrue(any("file loaded and parsed" in line for line in report))
+        self.assertTrue(any("corpus loaded and parsed" in line for line in report))
 
     def test_check_integrity_fails_on_missing_corpus(self):
         gen = RCEKit(template_path=Path("/no/such/corpus.json"))

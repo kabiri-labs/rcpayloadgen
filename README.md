@@ -1,6 +1,6 @@
 # RCEKit — prove RCE, don't guess it
 
-**Version 2.20.1** · MIT · Python 3.8+ · zero third-party dependencies
+**Version 2.21.0** · MIT · Python 3.8+ · zero third-party dependencies
 
 RCEKit is an **RCE detection &amp; confirmation toolkit** for authorised penetration
 testing, red teaming, and security research. Point it at a target you are allowed
@@ -70,6 +70,15 @@ differenced against a payload-free control:
 ```bash
 git clone https://github.com/kabiri-labs/rcekit.git
 cd rcekit                    # Python 3.8+, standard library only — nothing to install
+```
+
+Or take **just the one file** — the payload corpus is built in, so `rcekit.py`
+runs on its own with nothing beside it. On a client jump box, an air-gapped host,
+or anywhere `pip install` is not an option:
+
+```bash
+curl -O https://raw.githubusercontent.com/kabiri-labs/rcekit/main/rcekit.py
+python rcekit.py --doctor    # confirms the corpus it will run with
 ```
 
 Put a `FUZZ` marker where your input lands (or select a parameter with `-p` when
@@ -159,7 +168,8 @@ difference is **where each one stops**:
   let a timing signal masquerade as proof.
 - **There is no egress and no infrastructure to lean on.** The `file` method
   proves execution through a write-and-fetch on the target's own web root, with no
-  listener at all.
+  listener at all — and the tool itself is one standard-library Python file you
+  can copy onto a locked-down host.
 
 ---
 
@@ -237,8 +247,11 @@ what it sends, and how to read what comes back.
 - **Audit &amp; logging** — every exploitation/verification run is recorded in
   `exploit_audit.log`; `--watermark` embeds a traceable token; execution logs go to
   `rcekit.log`.
-- If the payload corpus is missing or corrupt, RCEKit refuses to run and exits
-  non-zero instead of silently generating nothing (`--doctor` checks it).
+- **Corpus integrity** — a corpus that is corrupt, or an explicit
+  `--template-file` that is missing, makes RCEKit refuse to run and exit non-zero
+  rather than silently generate nothing (`--doctor` checks it). Only an absent
+  *default* corpus file falls back to the built-in copy, and it says so when it
+  does.
 
 This toolkit is intended for authorised penetration testing, security research,
 education, and defensive training only. **Never use it against systems without
@@ -253,7 +266,14 @@ python -m unittest discover -s tests   # dependency-free test suite
 Contributions welcome — new sinks/categories, encodings, environments, detection
 methods, bug fixes, and docs. Payload bases live in editable JSON templates
 (`templates/payloads.json`), so most coverage extends without touching the Python
-source. See [CONTRIBUTING.md](CONTRIBUTING.md).
+source. After changing the corpus, refresh the built-in copy that ships inside
+`rcekit.py`:
+
+```bash
+python tools/embed_corpus.py    # --check verifies it is current
+```
+
+The test suite fails if the two ever drift. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

@@ -446,16 +446,22 @@ flags rather than relying on it alone to pick the interesting probes.
 
 ## Troubleshooting
 
-**"Payload corpus is not usable" / RCEKit refuses to start.** The payload corpus
-(`templates/payloads.json`) is missing or unparseable. RCEKit exits non-zero
-rather than silently testing nothing:
+**"Payload corpus is not usable" / RCEKit refuses to start.** The corpus RCEKit
+was told to use is unparseable, or an explicit `--template-file` does not exist.
+It exits non-zero rather than silently testing nothing:
 
 ```bash
-python rcekit.py --doctor
+python rcekit.py --doctor    # prints which corpus is in use and its payload counts
 ```
 
-Run it from the repository root, or point `--template-file` at a valid corpus.
-Note that YAML templates are not supported — the corpus is JSON.
+A *missing* `templates/payloads.json` is not this error: `rcekit.py` carries a
+built-in copy and falls back to it, printing a notice. So a lone `rcekit.py`
+copied onto a jump box runs fine. What still hard-fails is a corpus that exists
+but is broken — truncated, tampered with, quarantined and replaced by your EDR —
+because falling back there would hide exactly the problem the check exists for.
+
+Point `--template-file` at your own corpus to override both. YAML is not
+supported; the corpus is JSON, because RCEKit is standard-library only.
 
 **A run reports that it built no probes, and exits non-zero.** Your filters
 excluded everything — commonly `--environments sql` with a shell method, or a
