@@ -109,7 +109,7 @@ starting point — this page is for looking things up once you know what you wan
 | `--max-payloads` | Cap payloads (balanced round-robin sample) | Unlimited |
 | `--detection-only` | Benign canary/timing probes for safe validation (no consent needed) | Off |
 | `--include-metadata` | Write a `.meta.jsonl` sidecar (indicators, tiers, notes) | Off |
-| `--template-file` | Custom JSON payload corpus | `templates/payloads.json` |
+| `--template-file` | Custom JSON payload corpus; authoritative — never falls back | `templates/payloads.json`, else the built-in copy |
 | `--attacker-ip` | Substituted into reverse-shell payloads | `192.168.1.100` |
 | `--attacker-domain` | Substituted into download-execute payloads | `attacker.com` |
 
@@ -117,8 +117,22 @@ starting point — this page is for looking things up once you know what you wan
 
 | Option | Description |
 |---|---|
-| `--doctor` | Check corpus integrity (found, parses, payload counts); exits non-zero if missing or empty |
+| `--doctor` | Report which corpus is in use and check its integrity (parses, payload counts); exits non-zero if unusable |
 | `--version` | Print the version and exit |
+
+### Corpus resolution
+
+RCEKit looks for its payload corpus in this order:
+
+1. `--template-file`, when given — **authoritative**: if it is missing or
+   unparseable, the run fails. It never silently becomes the built-in corpus.
+2. `templates/payloads.json` beside the script — the source of truth in a
+   repository checkout, so an edit to it takes effect immediately.
+3. The copy embedded in `rcekit.py` — so a single file copied onto a jump box or
+   fetched with `curl` still runs. Using it prints a notice.
+
+A corpus that exists but fails to parse is always an error, at every step. Only
+an *absent* default file falls through to the built-in copy.
 
 ---
 
