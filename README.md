@@ -1,6 +1,6 @@
 # RCEKit — prove RCE, don't guess it
 
-**Version 2.21.0** · MIT · Python 3.8+ · zero third-party dependencies
+**Version 2.21.1** · MIT · Python 3.8+ · zero third-party dependencies
 
 RCEKit is an **RCE detection &amp; confirmation toolkit** for authorised penetration
 testing, red teaming, and security research. Point it at a target you are allowed
@@ -132,44 +132,87 @@ blur together, "confirmed" loses its meaning — so RCEKit keeps them apart, by 
 
 ## How RCEKit compares
 
-The tools below are good at what they do, and RCEKit does not replace them. The
-difference is **where each one stops**:
+The other tools in this space are built to get you **in**. RCEKit is built so the
+finding **survives someone else's scrutiny** — the client's retest, the triage
+queue, the report review. That difference shows up three times.
 
-| | What it's built for | RCE classes it covers | Infrastructure | Ends at |
+### 1. One injection point, every class, one run
+
+You rarely know the class before you test. Covering an unknown sink with
+single-class tools means running each in turn and rebuilding the request for each
+one:
+
+| Can confirm | RCEKit | [commix](https://github.com/commixproject/commix) | [SSTImap](https://github.com/vladko312/SSTImap) | [Nuclei](https://github.com/projectdiscovery/nuclei) |
 |---|---|---|---|---|
-| [**commix**](https://github.com/commixproject/commix) | exploiting OS command injection | OS command injection (classic, eval-based, time-based, file-based, shellshock) | none | an interactive shell |
-| [**SSTImap**](https://github.com/vladko312/SSTImap) *(successor to the unmaintained [tplmap](https://github.com/epinna/tplmap))* | exploiting SSTI / code injection | SSTI + code injection, 30+ template engines | none | an interactive shell |
-| [**Nuclei**](https://github.com/projectdiscovery/nuclei) | scanning at scale for *known* issues | whatever a template already exists for | [interactsh](https://github.com/projectdiscovery/interactsh) for OAST templates | a template match |
-| **interactsh / Burp Collaborator** | providing an out-of-band channel | blind variants of any class | an external (or self-hosted) server | a callback |
-| **RCEKit** | **proving execution across classes** | **command injection + SSTI/eval + blind + no-egress** | **none** | **a proof-backed verdict** |
+| OS command injection | ✅ | ✅ *(its whole scope)* | — | per template |
+| Expression injection / SSTI | ✅ | via its eval-based technique | ✅ *(its whole scope)* | per template |
+| Blind — timing | ✅ *as a separate tier* | ✅ | ✅ | — |
+| Blind — out-of-band | ✅ *built-in listener* | — | — | via [interactsh](https://github.com/projectdiscovery/interactsh) |
+| No-egress — write &amp; fetch back | ✅ | ✅ | — | — |
+| **All of the above, one CLI, one run** | **✅** | — | — | — |
 
-**Use the other tool when:**
+<sub>Coverage per each project's own documented technique list. SSTImap is the
+maintained successor to <a href="https://github.com/epinna/tplmap">tplmap</a>,
+which its author has marked unmaintained.</sub>
 
-- **You want a shell.** commix and SSTImap take you from "vulnerable" to
-  post-exploitation. RCEKit deliberately stops at proof and will never hand you a
-  shell — that is a scope decision, not a missing feature.
-- **You are sweeping thousands of hosts for known CVEs.** That is Nuclei's job.
-  RCEKit is per-target — and it *exports* Nuclei templates
-  (`--output-format nuclei`), so the two compose rather than compete.
-- **You already run Burp Pro.** Then you already have Collaborator. RCEKit's
-  built-in listener matters when you don't, or when the engagement forbids
-  third-party OOB infrastructure.
+```bash
+# Command injection, expression injection and blind timing against the same
+# parameter, in one pass, with zero infrastructure
+python rcekit.py --acknowledge-consent -r request.txt -p host --methods reflected,eval,time
+```
 
-**Use RCEKit when:**
+### 2. It argues with its own results
 
-- **You don't yet know the class.** One run of `--methods reflected,eval,time`
-  covers command injection, expression injection and blind timing against the same
-  injection point, instead of reaching for a different tool per hypothesis.
-- **The finding has to survive triage.** Every confirmation is differenced against
-  a payload-free control, and timing evidence is reported in its own
-  `needs-review` tier — never merged into "vulnerable". commix pioneered
-  randomised results-based heuristics for command injection; RCEKit carries that
-  rigour across expression injection, blind and no-egress paths, and refuses to
-  let a timing signal masquerade as proof.
-- **There is no egress and no infrastructure to lean on.** The `file` method
-  proves execution through a write-and-fetch on the target's own web root, with no
-  listener at all — and the tool itself is one standard-library Python file you
-  can copy onto a locked-down host.
+A tool reports what it found. RCEKit also reports **what it refused to believe** —
+`inconclusive` is a verdict of its own, for evidence that showed up but could not
+be attributed to execution:
+
+```
+[detect] methods: reflected, eval
+[detect] sent 13 probes: confirmed=0, inconclusive=2, negative=11
+```
+
+Those two would have been someone else's finding. Four mechanisms produce that
+verdict, and they run on every confirmation:
+
+- **A payload-free control request.** Evidence must be present *with* the payload
+  and absent *without* it. Anything in both is `inconclusive`, not a finding.
+- **A same-token inert control.** A second request carries the identical random
+  token in a non-executing form. A target that merely echoes input fails here —
+  which is how a reflection is separated from an execution.
+- **Random operands, never fixed strings.** The oracle is a tag-wrapped sum or a
+  boundary-fenced product computed fresh each run. Echoing the payload returns
+  the literal `$((a+b))`; only execution returns the value.
+- **Encoding-aware evidence search.** A sink that base64-, hex-, URL-, HTML- or
+  unicode-escapes its output still confirms — the raw body is checked first, so
+  decoding only ever turns a missed hit into a hit, never the reverse.
+
+And timing **never self-confirms**: a linear `0/N/2N` regression is capped at
+`needs-review` and reported in its own tier, because it produces no computed
+value. `confirmed` and `maybe` are never merged into one word.
+
+### 3. It is built for an authorised engagement, not a lab
+
+The controls a client's rules of engagement actually ask about, in the tool
+rather than in your notes:
+
+| | |
+|---|---|
+| **Consent gate** | Nothing exploitative generates or fires without `--acknowledge-consent`. |
+| **Execution plan** | Prints the exact payload count, safety tiers and any outbound callback destinations **before** the first request goes out. |
+| **Safe by default** | Reverse shells, credential access, cloud metadata, lateral movement and container escape are held back until you raise `--verify-active-risk`; persistence and backdoors need a second flag on top. |
+| **Cleanup commands** | The `file` method changes target state, so every finding prints the exact `rm`/`del` to undo it — paste it into the report. |
+| **Redacted audit trail** | Every run lands in `exploit_audit.log`, recording that a credential header was sent, never its value. |
+| **Watermarking** | `--watermark` stamps a traceable token into each payload, so a payload found in the client's logs months later is attributable to your run. |
+| **No third-party callbacks** | The OOB listener is yours. Nothing is routed through a public interaction server, which some engagements forbid outright. |
+| **One stdlib file** | `rcekit.py` runs alone — jump box, air-gapped host, anywhere `pip install` is not an option. |
+
+### When to reach for something else
+
+Want a shell rather than a verdict? commix and SSTImap continue into
+post-exploitation; RCEKit stops at proof by design. Sweeping thousands of hosts
+for known CVEs? That is Nuclei's job — and RCEKit *writes* Nuclei templates
+(`--output-format nuclei`), so it feeds your scanner instead of competing with it.
 
 ---
 

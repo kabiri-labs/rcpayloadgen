@@ -124,6 +124,48 @@ class DocLinkTestCase(unittest.TestCase):
             )
 
 
+class ComparisonSectionTestCase(unittest.TestCase):
+    """The comparison names other people's tools, so it has to stay checkable."""
+
+    # Every project the section is allowed to name, and where a reader verifies it.
+    PROJECTS = {
+        "commix": "github.com/commixproject/commix",
+        "SSTImap": "github.com/vladko312/SSTImap",
+        "tplmap": "github.com/epinna/tplmap",
+        "Nuclei": "github.com/projectdiscovery/nuclei",
+        "interactsh": "github.com/projectdiscovery/interactsh",
+    }
+
+    @classmethod
+    def setUpClass(cls):
+        text = README.read_text(encoding="utf-8")
+        start = text.find("## How RCEKit compares")
+        assert start != -1, "README has no 'How RCEKit compares' section"
+        end = text.find("\n## ", start + 1)
+        cls.section = text[start:end if end != -1 else len(text)]
+
+    def test_section_has_substance(self):
+        self.assertGreater(len(self.section.splitlines()), 30)
+
+    def test_named_projects_are_linked(self):
+        """A claim about someone else's tool must ship with a way to check it."""
+        unlinked = [
+            name for name, url in self.PROJECTS.items()
+            if name.lower() in self.section.lower() and url not in self.section
+        ]
+        self.assertEqual(
+            unlinked, [], f"named in the comparison without a link to the project: {unlinked}"
+        )
+
+    def test_no_unvetted_project_is_named(self):
+        """Adding a rival to the table means adding it here — and linking it."""
+        for rival in ("sqlmap", "metasploit", "burp suite", "acunetix", "tplmap2"):
+            self.assertNotIn(
+                rival, self.section.lower(),
+                f"'{rival}' appears in the comparison but is not in PROJECTS",
+            )
+
+
 class CLIDocumentationTestCase(unittest.TestCase):
     """Guard against the CLI and its reference page drifting apart."""
 
