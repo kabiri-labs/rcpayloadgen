@@ -20,6 +20,7 @@ import rcekit
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "rcekit.py"
 README = REPO_ROOT / "README.md"
+CHANGELOG = REPO_ROOT / "CHANGELOG.md"
 DOCS_DIR = REPO_ROOT / "docs"
 
 FENCE_RE = re.compile(r"^\s*```", re.MULTILINE)
@@ -33,7 +34,7 @@ DECLARATION_RE = re.compile(r"^ {2}(-\S[^ ]*(?:[ ,][^ ]+)*?)(?: {2,}|$)")
 
 
 def markdown_files():
-    return [README] + sorted(DOCS_DIR.glob("*.md"))
+    return [README, CHANGELOG] + sorted(DOCS_DIR.glob("*.md"))
 
 
 def strip_code_fences(text):
@@ -77,6 +78,38 @@ class VersionBadgeTestCase(unittest.TestCase):
             rcekit.__version__,
             "README version badge is out of sync with rcekit.__version__",
         )
+
+
+class ChangelogTestCase(unittest.TestCase):
+    """A release with no changelog entry is a release nobody can read."""
+
+    RELEASE_RE = re.compile(r"^## \[(\d+\.\d+\.\d+)\]", re.MULTILINE)
+
+    @classmethod
+    def setUpClass(cls):
+        cls.text = CHANGELOG.read_text(encoding="utf-8")
+
+    def test_has_an_unreleased_section(self):
+        self.assertIn("## [Unreleased]", self.text)
+
+    def test_latest_entry_matches_dunder_version(self):
+        releases = self.RELEASE_RE.findall(self.text)
+        self.assertTrue(releases, "CHANGELOG.md documents no released version")
+        self.assertEqual(
+            releases[0], rcekit.__version__,
+            "the newest CHANGELOG entry does not match rcekit.__version__ — "
+            "every version bump needs an entry",
+        )
+
+    def test_releases_are_in_descending_order(self):
+        releases = [tuple(int(p) for p in v.split(".")) for v in self.RELEASE_RE.findall(self.text)]
+        self.assertEqual(releases, sorted(releases, reverse=True),
+                         "CHANGELOG entries are not newest-first")
+
+    def test_every_release_has_a_link_definition(self):
+        defined = set(re.findall(r"^\[(\d+\.\d+\.\d+)\]:", self.text, re.MULTILINE))
+        missing = sorted(set(self.RELEASE_RE.findall(self.text)) - defined)
+        self.assertEqual(missing, [], f"versions with no link definition: {missing}")
 
 
 class DocLinkTestCase(unittest.TestCase):
