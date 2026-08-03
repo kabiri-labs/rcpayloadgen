@@ -271,8 +271,15 @@ confirmation, lowest false positives — on the assumption of authorised, WAF-fr
 access. That default is a feature; noisy evasion buys blocked requests and muddy
 evidence.
 
+**A space filter is not a WAF, and you don't need this flag for it.** Stripping
+spaces looks like it disarms command injection and does not — `${IFS}` is a space
+as far as the shell is concerned. Since every other probe carries a space, that
+one filter used to silence all of them, so one space-free probe now ships at both
+probe depths and reaches such a sink on an ordinary run.
+
 When there is genuinely a WAF in the path, `--evade low` opts into a single
-low-touch transform (`${IFS}` for spaces on Unix) for the shell probes:
+low-touch transform — `${IFS}` for spaces, applied to *every* shell probe rather
+than the one dedicated shape:
 
 ```bash
 python rcekit.py --acknowledge-consent \
@@ -289,6 +296,21 @@ injection context or a different separator, not heavier obfuscation.
 No output channel at all? Reach for `oob` first — it is the only method that can
 *confirm* a blind sink (see [Out-of-band callbacks](#out-of-band-callbacks)).
 Timing is the fallback when the target has no egress either.
+
+**A results-based method cannot confirm a blind sink**, and that is not a
+limitation to route around — there is simply nowhere for the computed value to
+appear. A `reflected,eval` run against one is therefore *not* evidence the target
+is clean, so when every in-band probe comes back negative RCEKit now says so and
+names the methods that could still reach it:
+
+```
+[detect] A sink that returns NO OUTPUT cannot be confirmed by eval/reflected — there is
+nowhere for the computed value to appear, so a negative here does not rule out execution.
+Methods that reach a blind sink:
+[detect]   --methods oob --oob-host HOST      (needs egress from the target; confirms)
+[detect]   --methods file --webroot DIR --web-base-url URL   (needs a writable web root; confirms)
+[detect]   --methods time                     (no egress and no web root needed; needs-review only)
+```
 
 RCEKit screens each candidate separator with one cheap probe, then fires a
 controlled `0/N/2N` delay series through whichever one actually delayed, and

@@ -2741,9 +2741,12 @@ class SeparatorSweepTestCase(unittest.TestCase):
         self.assertEqual(self.gen._encode_for_location(newline_probe, "query_value")[:3], "%0A")
 
     def test_separators_are_configurable(self):
+        # The space-free shape trims the separator's trailing space on purpose,
+        # so match the separator itself rather than the spelling.
         payloads = self._payloads({"separators": ["| "]})
         self.assertTrue(payloads)
-        self.assertTrue(all(p.startswith("| ") for p in payloads), payloads)
+        self.assertTrue(all(p.startswith("| ") or p.startswith("|e") for p in payloads),
+                        payloads)
 
     def test_sink_raw_still_sends_bare_commands(self):
         # With --sink-raw the input IS the whole command, so no probe may carry
@@ -2752,7 +2755,7 @@ class SeparatorSweepTestCase(unittest.TestCase):
         self.assertTrue(payloads)
         for payload in payloads:
             with self.subTest(payload=payload):
-                self.assertRegex(payload, r"^(echo|awk|expr) ")
+                self.assertRegex(payload, r"^(echo|awk|expr)(\s|\$\{IFS\})")
 
     def test_file_probes_get_a_distinct_target_file_per_separator(self):
         # Sharing one filename would make every probe's followup succeed as soon
@@ -3319,6 +3322,164 @@ class ProbeRoundsTestCase(unittest.TestCase):
             del rcekit.DETECTION_METHODS["endless"]
         self.assertEqual(len(results), 1)
         self.assertIn(f"{RCEKit.MAX_PROBE_ROUNDS} probes fired", results[0]["detail"])
+
+
+class SpaceFilterTestCase(unittest.TestCase):
+    """Stripping spaces is a filter of the same family as stripping ';' — it
+    looks like it disarms command injection and does not, because `${IFS}` is a
+    space as far as the shell is concerned. Every other probe carries a space,
+    so before this a target exploitable by anyone who has met the filter
+    reported clean unless the operator thought to pass `--evade low`."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+        self.rec = make_record(environment="unix", context="raw")
+
+    def _payloads(self, config=None):
+        import random as _random
+        method = ReflectedMath(self.gen, config or {})
+        return [p.payload for p in method.build_probes(self.rec, _random.Random(1))]
+
+    def test_a_space_free_probe_is_sent_by_default(self):
+        space_free = [p for p in self._payloads() if " " not in p]
+        self.assertTrue(space_free, "every probe carries a space, so a space filter blocks all")
+        self.assertTrue(all("${IFS}" in p for p in space_free), space_free)
+
+    def test_the_separator_loses_its_trailing_space_too(self):
+        # "; echo…" would reintroduce the very character the sink strips. No
+        # shell needs the space after ';' or '&&'.
+        for payload in (p for p in self._payloads() if "${IFS}" in p):
+            with self.subTest(payload=payload):
+                self.assertNotIn(" ", payload)
+
+    def test_the_newline_separator_survives_the_space_free_shape(self):
+        # A newline is not a space, so a space-stripping sink passes it through.
+        self.assertTrue(any(p.startswith("\n") and "${IFS}" in p for p in self._payloads()))
+
+    def test_quick_depth_still_sends_the_space_free_shape(self):
+        # It costs one shape and closes a whole filter class, so it is not part
+        # of the depth trade-off.
+        self.assertTrue([p for p in self._payloads({"probe_depth": "quick"}) if " " not in p])
+
+    def test_evade_low_does_not_duplicate_it(self):
+        # --evade low already applies ${IFS} to every probe, so the dedicated
+        # variant would be a second copy of probes that are already space-free.
+        payloads = self._payloads({"evade": "low"})
+        self.assertTrue(all("${IFS}" in p for p in payloads))
+        self.assertEqual(len(payloads), len(set(payloads)))
+
+    def test_the_expected_value_is_still_unforgeable(self):
+        import random as _random
+        for probe in ReflectedMath(self.gen, {}).build_probes(self.rec, _random.Random(5)):
+            with self.subTest(payload=probe.payload):
+                self.assertNotIn(probe.expected, probe.payload)
+
+    def test_a_space_filtering_sink_is_confirmed_with_no_flags(self):
+        import os
+
+        def route(method, path, params, headers, body):
+            query = params.get("q", "").replace(" ", "")
+            pipe = os.popen("echo probing " + query + " 2>/dev/null")
+            out = pipe.read()
+            pipe.close()
+            return 200, out
+
+        with local_target(route) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/x?q=FUZZ", methods=["reflected"])
+        self.assertTrue([r for r in results if r["verdict"] == "confirmed"])
+
+    def test_a_space_filtering_sink_that_is_inert_stays_negative(self):
+        def route(method, path, params, headers, body):
+            return 200, "you searched for: " + params.get("q", "").replace(" ", "")
+
+        with local_target(route) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/x?q=FUZZ", methods=["reflected"])
+        self.assertTrue(results)
+        self.assertFalse([r for r in results if r["verdict"] == "confirmed"])
+
+
+class BlindSinkAdviceTestCase(unittest.TestCase):
+    """A sink that returns no output cannot be confirmed by a results-based
+    method — there is nowhere for the computed value to appear. That is what
+    'blind' means, not a limitation to route around. But a run that only says
+    "no execution confirmed" reads exactly like a clean target."""
+
+    class _Args:
+        def __init__(self, webroot=None, web_base_url=None):
+            self.webroot = webroot
+            self.web_base_url = web_base_url
+
+    def test_in_band_only_runs_get_the_advice(self):
+        lines = rcekit.blind_sink_advice(["reflected", "eval"], self._Args())
+        self.assertTrue(lines)
+        joined = "\n".join(lines)
+        for method in ("--methods oob", "--methods file", "--methods time"):
+            with self.subTest(method=method):
+                self.assertIn(method, joined)
+
+    def test_it_says_a_negative_does_not_rule_out_execution(self):
+        joined = "\n".join(rcekit.blind_sink_advice(["reflected"], self._Args()))
+        self.assertIn("does not rule out execution", joined)
+
+    def test_a_blind_capable_method_already_ran_so_no_advice(self):
+        for methods in (["oob"], ["time"], ["file"], ["reflected", "oob"],
+                        ["reflected", "eval", "time"]):
+            with self.subTest(methods=methods):
+                self.assertEqual(rcekit.blind_sink_advice(methods, self._Args()), [])
+
+    def test_no_methods_at_all_gets_no_advice(self):
+        self.assertEqual(rcekit.blind_sink_advice([], self._Args()), [])
+
+    def test_the_file_line_is_dropped_once_a_web_root_is_known(self):
+        args = self._Args(webroot="/var/www/html", web_base_url="https://t")
+        joined = "\n".join(rcekit.blind_sink_advice(["reflected"], args))
+        self.assertNotIn("--webroot DIR", joined)
+        self.assertIn("--methods oob", joined)
+
+    def test_time_is_marked_as_needs_review_only(self):
+        joined = "\n".join(rcekit.blind_sink_advice(["reflected"], self._Args()))
+        self.assertRegex(joined, r"--methods time.*needs-review only")
+
+
+class BlindSinkAdviceCLITestCase(unittest.TestCase):
+    """The advice has to reach the operator through the real CLI, and only when
+    it applies."""
+
+    def _detect(self, route, *extra):
+        with local_target(route) as base:
+            return subprocess.run(
+                [sys.executable, str(SCRIPT), "--acknowledge-consent",
+                 "--verify-url", f"{base}/x?q=FUZZ", "--environments", "unix",
+                 "--contexts", "raw", "--categories", "basic_enum", *extra],
+                capture_output=True, text=True, timeout=300)
+
+    def test_a_blind_sink_is_told_what_would_reach_it(self):
+        import os
+
+        def route(method, path, params, headers, body):
+            pipe = os.popen("echo probing " + params.get("q", "") + " >/dev/null 2>&1")
+            pipe.read()
+            pipe.close()
+            return 200, "queued"
+
+        result = self._detect(route, "--methods", "reflected,eval")
+        self.assertIn("NO OUTPUT", result.stdout)
+        self.assertIn("--methods oob", result.stdout)
+
+    def test_a_confirmed_run_is_not_lectured(self):
+        import os
+
+        def route(method, path, params, headers, body):
+            pipe = os.popen("echo probing " + params.get("q", "") + " 2>/dev/null")
+            out = pipe.read()
+            pipe.close()
+            return 200, out
+
+        result = self._detect(route, "--methods", "reflected")
+        self.assertIn("CONFIRMED execution", result.stdout)
+        self.assertNotIn("NO OUTPUT", result.stdout)
 
 
 if __name__ == "__main__":
