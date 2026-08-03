@@ -1,6 +1,6 @@
 # RCEKit — prove RCE, don't guess it
 
-**Version 2.23.0** · MIT · Python 3.8+ · zero third-party dependencies
+**Version 2.23.1** · MIT · Python 3.8+ · zero third-party dependencies
 
 RCEKit is an **RCE detection &amp; confirmation toolkit** for authorised penetration
 testing, red teaming, and security research. Point it at a target you are allowed
@@ -101,6 +101,9 @@ python rcekit.py --acknowledge-consent \
 
 No external infrastructure, no config file. If nothing is vulnerable you get a
 clean `negative`, not a false alarm. That's the whole idea.
+
+**Don't take the GIFs on trust** — [reproduce them yourself](docs/verify-it-yourself.md)
+against dockerised Webmin and Struts2 targets in about five minutes.
 
 **Next:** the [**field guide**](docs/guide.md) walks the real situations — captured
 requests, WAFs, filtered separators, quoted sinks, blind and no-egress targets —
@@ -268,6 +271,7 @@ what it sends, and how to read what comes back.
 
 | | |
 |---|---|
+| [**Verify it yourself**](docs/verify-it-yourself.md) | Reproduce the confirmations above on your own machine, against dockerised vulnerable targets. **Five minutes.** |
 | [**Field guide**](docs/guide.md) | Example-driven walkthrough of every real situation, from a first probe to multi-step chains. **Start here.** |
 | [**Payload generation &amp; exports**](docs/generation.md) | RCEKit as a payload generator: target profiles, and Burp / ffuf / Nuclei exports. |
 | [**Reference**](docs/reference.md) | Every flag, environment, category, context, encoding and code-execution sink. |
