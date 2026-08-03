@@ -8,6 +8,33 @@ formats, or the template schema.
 
 ## [Unreleased]
 
+## [2.23.0] — 2026-08-03
+
+The three sinks v2.22.0 still could not reach. One was a real gap in the probe
+set; the other two were a reporting problem, not a detection one. With both
+closed, a single `--methods reflected,eval,oob` run confirms **all fifteen**
+vulnerable sinks in the lab and still reports nothing on any of the five clean
+ones.
+
+### Added
+
+- **A space-free probe, sent at both probe depths.** Stripping spaces is a filter
+  of the same family as stripping `;` — it looks like it disarms command
+  injection and does not, because `${IFS}` is a space as far as the shell is
+  concerned. Every other probe carries a space, so that one filter silenced all
+  of them and the sink was only reachable if the operator thought to pass
+  `--evade low`. The separator's trailing space is trimmed with it (`;echo…`, not
+  `; echo…`); the newline separator is unaffected. It costs one shape, so it is
+  not part of the `--probe-depth` trade-off, and it is skipped under
+  `--evade low`, which already applies the same transform everywhere.
+- **Guidance when every in-band probe comes back negative.** A results-based
+  method cannot confirm a sink that returns no output — there is nowhere for the
+  computed value to appear — so that negative is not evidence the target is
+  clean. A run of `reflected`/`eval` alone that confirms nothing now says exactly
+  that and names the methods that could still reach a blind sink, with the flags
+  each one needs. It is suppressed once a blind-capable method has already run,
+  and the `file` line is dropped once a web root is known.
+
 ## [2.22.0] — 2026-08-03
 
 Detection coverage. Measured against a lab of twenty sinks — fifteen genuinely
@@ -174,7 +201,8 @@ this file and have not been restated here.
 - **[2.7.0]**
 - **[2.1.0]**
 
-[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.22.0...HEAD
+[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.23.0...HEAD
+[2.23.0]: https://github.com/kabiri-labs/rcekit/compare/v2.22.0...v2.23.0
 [2.22.0]: https://github.com/kabiri-labs/rcekit/compare/v2.21.1...v2.22.0
 [2.21.1]: https://github.com/kabiri-labs/rcekit/compare/v2.15.2...v2.21.1
 [2.15.2]: https://github.com/kabiri-labs/rcekit/releases/tag/v2.15.2

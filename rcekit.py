@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.22.0"
+__version__ = "2.23.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -2469,6 +2469,25 @@ class DetectionMethod:
         a working break-out with broken ones and destroy the signal."""
         return self._wrap_variants(record, core, windows, evade)[0]
 
+    def _space_free_bodies(self, record: "PayloadRecord",
+                           core: str) -> List[Tuple[Optional[str], str]]:
+        """``(separator, body)`` pairs that contain no literal space at all.
+
+        The default separators carry a trailing space (``"; "``), which would
+        reintroduce the very character a space-stripping sink removes, so they
+        are trimmed here — no shell needs the space after ``;`` or ``&&``. The
+        newline separator is kept as-is: it is not a space, and a sink that
+        strips spaces still passes it through."""
+        if not self._needs_separator(record):
+            return [(None, core)]
+        pairs: List[Tuple[Optional[str], str]] = []
+        for separator in self._separators(windows=False):
+            trimmed = separator if separator == "\n" else separator.strip()
+            if " " in trimmed:
+                continue
+            pairs.append((separator, f"{trimmed}{core}"))
+        return pairs
+
     def _wrap_context(self, record: "PayloadRecord", body: str) -> str:
         """Escape ``body`` for the record's serialization context and apply the
         context break-out prefix/suffix — the same machinery the generator uses
@@ -2521,9 +2540,31 @@ class ReflectedMath(DetectionMethod):
             core_bt = f"echo {t1}{bt}{t2}"
             probes.extend(Probe(payload=payload, expected=f"{t1}{total}{t2}", forbidden=bt)
                           for payload in self._wrap_variants(record, core_bt))
+            probes.extend(self._space_free_probes(record, a, b, total, t1, t2))
             if self._depth() != "quick":
                 probes.extend(self._extended_probes(record, a, b, total, t1, t2, t3, core))
         return probes
+
+    def _space_free_probes(self, record: "PayloadRecord", a: int, b: int, total: int,
+                           t1: str, t2: str) -> List[Probe]:
+        """The same arithmetic proof with no literal space anywhere in it.
+
+        Stripping spaces is a filter of the same family as stripping ``;`` — it
+        looks like it disarms command injection and does not, because ``${IFS}``
+        is a space as far as the shell is concerned. Every other probe carries a
+        space, so this one filter silenced all of them and a target exploitable
+        by anyone who has met it reported clean.
+
+        Sent at both probe depths: it is one shape, and leaving a whole filter
+        class undetectable is not the kind of saving ``--probe-depth quick`` is
+        for. Skipped under ``--evade low``, which already applies the same
+        transform to every probe."""
+        if self.config.get("evade") == "low":
+            return []
+        core = f"echo${{IFS}}{t1}$(({a}+{b})){t2}"
+        return [Probe(payload=self._wrap_context(record, body), expected=f"{t1}{total}{t2}",
+                      forbidden=f"$(({a}+{b}))", separator=separator)
+                for separator, body in self._space_free_bodies(record, core)]
 
     def _extended_probes(self, record: "PayloadRecord", a: int, b: int, total: int,
                          t1: str, t2: str, t3: str, core: str) -> List[Probe]:
@@ -3049,6 +3090,34 @@ HIGH_RISK_CATEGORIES = {
     "reverse_shells", "download_execute", "credential_access",
     "lateral_movement", "container_escape", "cloud_metadata", "persistence",
 }
+
+
+def blind_sink_advice(method_names: List[str], args: Any) -> List[str]:
+    """What to run next when every in-band probe came back negative.
+
+    A sink that returns no output at all cannot be confirmed by a results-based
+    method — there is nowhere for the computed value to appear. That is not a
+    limitation to work around, it is what 'blind' means. But a run that only
+    prints "no execution confirmed" reads exactly like a clean target, and the
+    operator is left to remember unprompted which methods can still reach one.
+    So name them, and only the ones not already tried."""
+    in_band = {ReflectedMath.name, EvalExpr.name}
+    selected = set(method_names)
+    if not selected or not selected <= in_band:
+        # A blind-capable method already ran; its own verdict stands.
+        return []
+    lines = ["[detect] A sink that returns NO OUTPUT cannot be confirmed by "
+             f"{'/'.join(sorted(selected))} — there is nowhere for the computed value to "
+             "appear, so a negative here does not rule out execution. Methods that reach a "
+             "blind sink:"]
+    lines.append("[detect]   --methods oob --oob-host HOST      "
+                 "(needs egress from the target; confirms)")
+    if not (args.webroot and args.web_base_url):
+        lines.append("[detect]   --methods file --webroot DIR --web-base-url URL   "
+                     "(needs a writable web root; confirms)")
+    lines.append("[detect]   --methods time                     "
+                 "(no egress and no web root needed; needs-review only)")
+    return lines
 
 
 def partition_destructive(records: Iterator[PayloadRecord],
@@ -3872,6 +3941,8 @@ def main():
                 if len(errored) < len(results):
                     print("\n[detect] No execution confirmed. The target may be patched, or the probes "
                           "may not fit its sink/context (try --environments/--contexts).")
+                    for line in blind_sink_advice(method_names, args):
+                        print(line)
             return
         results = generator.run_verification(
             to_send, url=verify_url, method=method, data=verify_data,

@@ -63,7 +63,16 @@ starting point — this page is for looking things up once you know what you wan
 
 ### Probe depth
 
-`full` sends three extra shapes per sink, each aimed at a filter that silences
+One extra shape is sent at **both** depths, because it costs a single shape and
+closes a whole filter class:
+
+- **space-free** (`echo${IFS}…`) — stripping spaces looks like it disarms
+  command injection and does not, since `${IFS}` is a space to the shell. Every
+  other probe carries a space, so this one filter silenced all of them. The
+  separator's trailing space is trimmed too (`;echo…`, not `; echo…`), and the
+  newline separator survives unchanged.
+
+`full` sends three further shapes per sink, each aimed at a filter that silences
 the canonical probes:
 
 - **substitution-free** (`awk`, bare `expr`) — both canonical probes route the
