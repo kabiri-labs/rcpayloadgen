@@ -8,6 +8,24 @@ formats, or the template schema.
 
 ## [Unreleased]
 
+## [2.23.1] — 2026-08-03
+
+### Added
+
+- **[Verify it yourself](docs/verify-it-yourself.md)** — reproduce the README's
+  confirmations locally against dockerised [vulhub](https://github.com/vulhub/vulhub)
+  targets. Webmin CVE-2019-15107 driven from a captured request (`reflected` →
+  `confirmed`, then `time` → `needs-review` on the *same* sink, which is the
+  clearest demonstration that the tiers are not merged), and Struts2 S2-001
+  (`eval` confirms, `reflected` does not, on a target where both were tried).
+
+  Log4Shell is documented as an advanced case rather than a five-minute one: its
+  sink is a JNDI lookup inside a logging library, so `--methods oob` does not
+  apply — that method builds shell probes for shell-capable environments. The
+  `${jndi:…}` payloads come from the `oob` *category* with the listener
+  correlating the callback, and the token rides in a DNS label, which needs a
+  delegated domain. Saying so is cheaper than a reader discovering it mid-demo.
+
 ## [2.23.0] — 2026-08-03
 
 The three sinks v2.22.0 still could not reach. One was a real gap in the probe
@@ -201,7 +219,8 @@ this file and have not been restated here.
 - **[2.7.0]**
 - **[2.1.0]**
 
-[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.23.0...HEAD
+[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.23.1...HEAD
+[2.23.1]: https://github.com/kabiri-labs/rcekit/compare/v2.23.0...v2.23.1
 [2.23.0]: https://github.com/kabiri-labs/rcekit/compare/v2.22.0...v2.23.0
 [2.22.0]: https://github.com/kabiri-labs/rcekit/compare/v2.21.1...v2.22.0
 [2.21.1]: https://github.com/kabiri-labs/rcekit/compare/v2.15.2...v2.21.1
