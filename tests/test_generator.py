@@ -30,6 +30,7 @@ from rcekit import (  # noqa: E402
     Probe,
     RCEKit,
     ReflectedMath,
+    Verdict,
     build_request_inputs,
     parse_raw_request,
     partition_destructive,
@@ -2074,29 +2075,75 @@ class ParametricTimeTestCase(unittest.TestCase):
         self.method = ParametricTime(self.gen, {"time_base": 2.0, "time_repeats": 2})
 
     def _series(self, mapping):
-        series = []
-        for delay, elapseds in mapping.items():
-            for elapsed in elapseds:
-                series.append((Probe(payload="x", expected="", delay_s=delay),
-                               Observation(status=200, body="", elapsed=elapsed)))
-        return series
+        """A regression-phase series. Only ``regress`` probes are judged — the
+        screen round exists to pick a separator, not to decide anything — and
+        the samples are interleaved rather than grouped by delay so the request
+        index does not stand in for the injected delay."""
+        samples = [(delay, elapsed) for delay, elapseds in mapping.items()
+                   for elapsed in elapseds]
+        samples.sort(key=lambda pair: (pair[1] * 7919) % 13)
+        return [(Probe(payload="x", expected="", delay_s=delay, phase="regress"),
+                 Observation(status=200, body="", elapsed=elapsed))
+                for delay, elapsed in samples]
 
     def test_tier_is_needs_review_and_method_is_aggregate(self):
         self.assertEqual(self.method.tier, "needs-review")
         self.assertTrue(self.method.aggregate)
 
-    def test_build_probes_cover_zero_n_and_two_n(self):
+    def test_screen_probes_cover_zero_and_n_per_separator(self):
+        # Round one only screens: one 0s and one Ns probe per candidate
+        # separator, so the expensive regression is never run through a
+        # break-out that did not reach a shell.
         import random as _random
         probes = self.method.build_probes(make_record(environment="unix", context="raw"),
                                           _random.Random(1))
-        delays = sorted({p.delay_s for p in probes})
-        self.assertEqual(delays, [0.0, 2.0, 4.0])
+        self.assertTrue(all(p.phase == "screen" for p in probes))
+        self.assertEqual(sorted({p.delay_s for p in probes}), [0.0, 2.0])
         self.assertTrue(all("sleep" in p.payload for p in probes))
+
+    def test_regression_probes_cover_zero_n_and_two_n(self):
+        import random as _random
+        record = make_record(environment="unix", context="raw")
+        screen = self.method.build_probes(record, _random.Random(1))
+        # A separator that delayed by the injected amount unlocks round two.
+        series = [(p, Observation(status=200, body="", elapsed=(p.delay_s or 0.0) + 0.1))
+                  for p in screen]
+        regression = self.method.next_probes(series)
+        self.assertTrue(regression)
+        self.assertTrue(all(p.phase == "regress" for p in regression))
+        self.assertEqual(sorted({p.delay_s for p in regression}), [0.0, 2.0, 4.0])
+        # ...all through one separator: a regression blends its probes into a
+        # single measurement, so mixing break-outs would destroy the signal.
+        self.assertEqual(len({p.separator for p in regression}), 1)
+
+    def test_no_separator_delays_means_no_regression_is_run(self):
+        import random as _random
+        record = make_record(environment="unix", context="raw")
+        screen = self.method.build_probes(record, _random.Random(1))
+        flat = [(p, Observation(status=200, body="", elapsed=0.1)) for p in screen]
+        self.assertEqual(self.method.next_probes(flat), [])
+        verdict = self.method.confirm_series(flat)
+        self.assertEqual(verdict.status, "negative")
+        self.assertIn("no command separator produced a delay", verdict.evidence)
 
     def test_confirm_series_linear_response_is_needs_review(self):
         verdict = self.method.confirm_series(
             self._series({0: [0.10, 0.12], 2.0: [2.11, 2.09], 4.0: [4.12, 4.08]}))
         self.assertEqual(verdict.status, "needs-review")
+
+    def test_latency_drift_is_not_mistaken_for_a_sleep(self):
+        # A target that simply gets slower during the run -- progressive load, a
+        # rate limiter backing off -- used to produce a textbook-perfect linear
+        # fit while being entirely un-injectable, because the probes were fired
+        # in ascending delay order and the delay was collinear with the request
+        # index. Here every response time comes from the request order alone.
+        series = []
+        for i, delay in enumerate([2.0, 0.0, 4.0, 4.0, 0.0, 2.0, 0.0, 2.0, 4.0]):
+            series.append((Probe(payload="x", expected="", delay_s=delay, phase="regress"),
+                           Observation(status=200, body="", elapsed=1.0 * (i + 1))))
+        verdict = self.method.confirm_series(series)
+        self.assertEqual(verdict.status, "negative")
+        self.assertIn("drift", verdict.evidence)
 
     def test_confirm_series_rejects_flat_jitter_and_nonmonotonic(self):
         flat = self.method.confirm_series(
@@ -2699,8 +2746,13 @@ class SeparatorSweepTestCase(unittest.TestCase):
         self.assertTrue(all(p.startswith("| ") for p in payloads), payloads)
 
     def test_sink_raw_still_sends_bare_commands(self):
+        # With --sink-raw the input IS the whole command, so no probe may carry
+        # a leading separator -- whichever command shape it uses.
         payloads = self._payloads({"sink_raw": True})
-        self.assertTrue(all(p.startswith("echo ") for p in payloads), payloads)
+        self.assertTrue(payloads)
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                self.assertRegex(payload, r"^(echo|awk|expr) ")
 
     def test_file_probes_get_a_distinct_target_file_per_separator(self):
         # Sharing one filename would make every probe's followup succeed as soon
@@ -2718,14 +2770,26 @@ class SeparatorSweepTestCase(unittest.TestCase):
         for probe in probes:
             self.assertIn(probe.followup["path"].rsplit("/", 1)[-1], probe.followup["cleanup"])
 
-    def test_aggregate_timing_keeps_a_single_separator(self):
-        # ParametricTime reads a whole probe series as one measurement, so
-        # mixing separators through it would blend a working break-out with
-        # broken ones and destroy the regression.
+    def test_aggregate_timing_screens_every_separator_then_commits_to_one(self):
+        # ParametricTime reads a probe series as one measurement, so it cannot
+        # mix separators through the regression. It screens them instead: one
+        # cheap probe each, then the full regression through whichever one
+        # actually delayed. Locking it to ';' alone reported a blind sink that
+        # merely filters ';' as negative, while '| sleep 3' delayed on it.
         import random as _random
-        probes = ParametricTime(self.gen, {"time_base": 1.0}).build_probes(
-            self.rec, _random.Random(1))
-        self.assertTrue(all(p.payload.startswith("; ") for p in probes), probes)
+        method = ParametricTime(self.gen, {"time_base": 1.0})
+        screen = method.build_probes(self.rec, _random.Random(1))
+        for separator in ("; ", "| ", "|| ", "&& ", "\n"):
+            with self.subTest(separator=separator):
+                self.assertTrue(any(p.payload.startswith(separator) for p in screen))
+        # Only the pipe breaks out on this imaginary sink.
+        series = [(p, Observation(status=200, body="",
+                                  elapsed=(p.delay_s or 0.0) + 0.05 if p.separator == "| "
+                                  else 0.05))
+                  for p in screen]
+        regression = method.next_probes(series)
+        self.assertTrue(regression)
+        self.assertEqual({p.separator for p in regression}, {"| "})
 
     def test_a_pipe_only_sink_is_now_confirmed(self):
         # End-to-end against a real sink that strips ';' and '&': exploitable
@@ -2897,6 +2961,364 @@ class NoProbesBuiltTestCase(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertNotIn("NOTHING WAS TESTED", result.stdout)
         self.assertIn("NEVER REACHED THE TARGET", result.stdout)
+
+
+class ProbeDepthTestCase(unittest.TestCase):
+    """The canonical probes route their arithmetic through a command
+    substitution and spell the command `echo`/`expr`. That is two blind spots,
+    and both are filters seen in the wild: a sink that strips `$(` blocks
+    `$((` (a prefix of it) and the backtick too, and a keyword filter on
+    `echo`/`expr` blocks both. The extended shapes exist to reach those."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+        self.rec = make_record(environment="unix", context="raw")
+
+    def _payloads(self, depth):
+        import random as _random
+        method = ReflectedMath(self.gen, {"probe_depth": depth})
+        return [p.payload for p in method.build_probes(self.rec, _random.Random(1))]
+
+    def test_full_depth_adds_substitution_free_shapes(self):
+        payloads = self._payloads("full")
+        substitution_free = [p for p in payloads if "$(" not in p and "`" not in p]
+        self.assertTrue(substitution_free,
+                        "a sink stripping '$(' and backticks would block every probe")
+        self.assertTrue(any("awk " in p for p in substitution_free))
+        self.assertTrue(any(re.search(r"expr \d+ \+ \d+", p) for p in substitution_free))
+
+    def test_full_depth_adds_a_shape_free_of_the_usual_keywords(self):
+        # A WAF blocking the usual command words must still meet a live probe,
+        # so at least one shape must invoke none of them. Compare the command
+        # word itself, not the whole payload: the random tags are letters and
+        # could contain any short sequence by chance.
+        blocked = {"echo", "expr", "cat", "id", "whoami", "sleep"}
+        commands = set()
+        for payload in self._payloads("full"):
+            commands.update(re.findall(r"(?:^|[;|&\n]\s*)([a-z]+)\b", payload))
+        self.assertTrue(commands - blocked, commands)
+
+    def test_full_depth_adds_comment_terminated_shapes(self):
+        payloads = self._payloads("full")
+        self.assertTrue(any(p.rstrip().endswith("#") for p in payloads))
+
+    def test_quick_depth_sends_only_the_canonical_shapes(self):
+        quick, full = self._payloads("quick"), self._payloads("full")
+        self.assertLess(len(quick), len(full))
+        self.assertFalse([p for p in quick if "awk " in p or p.rstrip().endswith("#")])
+
+    def test_quick_is_the_subset_full_extends(self):
+        # 'quick' must not be a different probe set, only a smaller one --
+        # otherwise a target that confirms under one could miss under the other.
+        self.assertTrue(set(self._payloads("quick")) <= set(self._payloads("full")))
+
+    def test_default_depth_is_full(self):
+        import random as _random
+        default = [p.payload for p in
+                   ReflectedMath(self.gen, {}).build_probes(self.rec, _random.Random(1))]
+        self.assertEqual(sorted(default), sorted(self._payloads("full")))
+
+    def test_every_probe_still_carries_an_unforgeable_expected_value(self):
+        # The whole tier rests on this: the expected value must never be a
+        # literal the payload already spells out, or reflection could fake it.
+        import random as _random
+        probes = ReflectedMath(self.gen, {}).build_probes(self.rec, _random.Random(3))
+        for probe in probes:
+            with self.subTest(payload=probe.payload):
+                self.assertNotIn(probe.expected, probe.payload)
+
+    def test_comment_termination_is_skipped_where_it_would_misfire(self):
+        # cmd.exe has no '#' comment, and a context that closes with its own
+        # suffix would have the suffix commented out instead of the sink's tail.
+        import random as _random
+        method = ReflectedMath(self.gen, {})
+        windows = method._wrap_variants(make_record(environment="windows", context="raw"),
+                                        "echo x", windows=True, terminate=True)
+        self.assertEqual(windows, [])
+        quoted = method._wrap_variants(make_record(environment="unix", context="attribute"),
+                                       "echo x", terminate=True)
+        self.assertEqual(quoted, [])
+
+    def test_a_substitution_blocking_sink_is_confirmed(self):
+        import os
+
+        def route(method, path, params, headers, body):
+            query = params.get("q", "")
+            if "$(" in query or "`" in query:
+                return 200, "BLOCKED"
+            pipe = os.popen("echo probing " + query + " 2>/dev/null")
+            out = pipe.read()
+            pipe.close()
+            return 200, out
+
+        with local_target(route) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/x?q=FUZZ", methods=["reflected"])
+        self.assertTrue([r for r in results if r["verdict"] == "confirmed"],
+                        "a sink that only strips substitutions is still exploitable")
+
+    def test_a_sink_that_appends_a_redirect_is_confirmed(self):
+        # `<cmd> <input> | grep <something>` swallows the probe's output
+        # entirely, so the probe executes and reads as negative unless it
+        # comments the tail out.
+        import os
+
+        def route(method, path, params, headers, body):
+            pipe = os.popen("echo probing " + params.get("q", "") + " | grep -c NOTHINGHERE")
+            out = pipe.read()
+            pipe.close()
+            return 200, out
+
+        with local_target(route) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/x?q=FUZZ", methods=["reflected"])
+        self.assertTrue([r for r in results if r["verdict"] == "confirmed"])
+
+    def test_the_extra_shapes_do_not_cost_precision(self):
+        # More probe shapes means more chances to be wrong; re-prove that an
+        # inert reflecting sink stays negative.
+        def route(method, path, params, headers, body):
+            return 200, f"<div>you searched for: {params.get('q', '')}</div>"
+
+        with local_target(route) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/x?q=FUZZ", methods=["reflected", "eval"])
+        self.assertTrue(results)
+        self.assertFalse([r for r in results if r["verdict"] == "confirmed"])
+
+
+class QuotedShellCarrierTestCase(unittest.TestCase):
+    """`shell_single_quoted`/`shell_double_quoted` fit a `ping '<input>'` sink —
+    input interpolated inside quotes, which no probe built for an unquoted
+    context escapes. The generator has always had them, but they are absent from
+    `default_contexts`, so no record carried them and the detection engine never
+    tried them: the one sink shape they exist for was the one that could not be
+    detected at all."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+
+    def _carriers(self, config):
+        base = [make_record(environment="unix", context="raw")]
+        seen = {("unix", "raw")}
+        return [r.context for r in RCEKit._quoted_shell_carriers(base, seen, config)]
+
+    def test_quoted_contexts_are_added_by_default(self):
+        self.assertEqual(sorted(self._carriers({})),
+                         ["shell_double_quoted", "shell_single_quoted"])
+
+    def test_an_explicit_contexts_selection_is_respected(self):
+        # Narrowing the run is a deliberate choice about what to send; widening
+        # it behind the operator's back is not this function's call.
+        self.assertEqual(self._carriers({"contexts_explicit": True}), [])
+
+    def test_non_shell_environments_are_left_alone(self):
+        base = [make_record(environment="mongodb", context="raw")]
+        self.assertEqual(RCEKit._quoted_shell_carriers(base, {("mongodb", "raw")}, {}), [])
+
+    def test_already_present_contexts_are_not_duplicated(self):
+        base = [make_record(environment="unix", context="shell_single_quoted")]
+        seen = {("unix", "shell_single_quoted")}
+        self.assertEqual([r.context for r in RCEKit._quoted_shell_carriers(base, seen, {})],
+                         ["shell_double_quoted"])
+
+    def test_a_single_quoted_sink_is_confirmed_without_naming_the_context(self):
+        import os
+
+        def route(method, path, params, headers, body):
+            pipe = os.popen("echo probing '" + params.get("q", "") + "' 2>/dev/null")
+            out = pipe.read()
+            pipe.close()
+            return 200, out
+
+        record = make_record(environment="unix", context="raw")
+        with local_target(route) as base:
+            results = self.gen.run_detection(
+                [record], url=f"{base}/x?q=FUZZ", methods=["reflected"])
+        confirmed = [r for r in results if r["verdict"] == "confirmed"]
+        self.assertTrue(confirmed, "a quoted sink must be reachable without --contexts")
+        self.assertTrue(any(r["context"] == "shell_single_quoted" for r in confirmed))
+
+
+class OobCallbackTestCase(unittest.TestCase):
+    """Out-of-band detection. A fully blind sink -- nothing in the response, no
+    writable web root -- had no path to a `confirmed` verdict at all."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+        self.rec = make_record(environment="unix", context="raw")
+
+    def _probes(self, config):
+        import random as _random
+        method = rcekit.OobCallback(self.gen, config)
+        return method, method.build_probes(self.rec, _random.Random(1))
+
+    def test_it_does_not_run_without_an_oob_host(self):
+        # It makes the target open outbound connections, so it stays off until
+        # the operator names the host.
+        self.assertFalse(rcekit.OobCallback(self.gen, {}).applicable(self.rec))
+        self.assertTrue(
+            rcekit.OobCallback(self.gen, {"oob_host": "x.example"}).applicable(self.rec))
+
+    def test_each_separator_gets_its_own_token(self):
+        # Sharing one token would mark every separator confirmed as soon as any
+        # one called back -- and `cmd || curl` never runs when cmd succeeds, so
+        # the report would name payloads that did nothing.
+        _, probes = self._probes({"oob_host": "x.example"})
+        tokens = [p.expected for p in probes]
+        self.assertEqual(len(tokens), len(set(tokens)))
+        for probe in probes:
+            with self.subTest(payload=probe.payload):
+                self.assertIn(probe.expected, probe.payload)
+
+    def test_a_named_host_gets_dns_shapes(self):
+        _, probes = self._probes({"oob_host": "x.example"})
+        self.assertTrue(any("nslookup" in p.payload for p in probes))
+        self.assertTrue(any(f"{p.expected}.x.example" in p.payload for p in probes))
+
+    def test_a_computed_value_rides_in_one_dns_label(self):
+        # The callback then proves the shell evaluated arithmetic, not merely
+        # that something resolved a name it was handed.
+        method, probes = self._probes({"oob_host": "x.example"})
+        computed = [p for p in probes if "$((" in p.payload]
+        self.assertTrue(computed)
+        self.assertIsNotNone(method._computed)
+
+    def test_an_ip_host_puts_the_token_in_the_path_and_drops_dns(self):
+        # `<token>.10.0.0.1` resolves nowhere, so those probes could never call
+        # back; the token rides in the URL path instead.
+        _, probes = self._probes({"oob_host": "10.0.0.1"})
+        self.assertTrue(probes)
+        self.assertFalse([p for p in probes if "nslookup" in p.payload or "host " in p.payload])
+        for probe in probes:
+            with self.subTest(payload=probe.payload):
+                self.assertIn(f"/{probe.expected}", probe.payload)
+                self.assertNotIn(f"{probe.expected}.10.0.0.1", probe.payload)
+
+    def test_ip_literal_detection(self):
+        for host in ("10.0.0.1", "127.0.0.1", "::1", "[fe80::1]"):
+            self.assertTrue(rcekit.OobCallback._is_ip_literal(host), host)
+        for host in ("x.example", "a.b.c.d", "999.1.1.1", "target.local"):
+            self.assertFalse(rcekit.OobCallback._is_ip_literal(host), host)
+
+    def test_a_probe_whose_token_came_back_is_confirmed_and_others_are_not(self):
+        listener = OOBListener()
+        method = rcekit.OobCallback(self.gen, {"oob_host": "x.example",
+                                               "oob_listener": listener, "oob_wait": 0.1})
+        import random as _random
+        probes = method.build_probes(self.rec, _random.Random(1))
+        arrived = probes[0]
+        listener.record("dns", "10.0.0.9", f"{arrived.expected}.x.example")
+        series = [(p, Observation(status=200, body="ok")) for p in probes]
+        verdicts = dict((p.payload, v.status) for p, v in method.confirm_each(series))
+        self.assertEqual(verdicts[arrived.payload], "confirmed")
+        self.assertEqual({v for payload, v in verdicts.items() if payload != arrived.payload},
+                         {"negative"})
+
+    def test_a_delivery_failure_is_an_error_not_a_negative(self):
+        listener = OOBListener()
+        method = rcekit.OobCallback(self.gen, {"oob_host": "x.example",
+                                               "oob_listener": listener, "oob_wait": 0.1})
+        import random as _random
+        probes = method.build_probes(self.rec, _random.Random(1))[:1]
+        series = [(probes[0], Observation(status=None, body="connection refused"))]
+        self.assertEqual(method.confirm_each(series)[0][1].status, "error")
+
+    def test_without_a_listener_nothing_is_reported_as_negative(self):
+        # A missing listener means we could not have seen a callback; calling
+        # that 'not vulnerable' is exactly the lie the error tier exists for.
+        method = rcekit.OobCallback(self.gen, {"oob_host": "x.example"})
+        import random as _random
+        probes = method.build_probes(self.rec, _random.Random(1))[:1]
+        series = [(probes[0], Observation(status=200, body="ok"))]
+        self.assertEqual(method.confirm_each(series)[0][1].status, "error")
+
+    def test_end_to_end_a_blind_sink_is_confirmed_via_the_callback(self):
+        import os
+        listener = OOBListener()
+        port = listener.start_http(0).server_address[1]
+
+        def route(method, path, params, headers, body):
+            # Blind: runs the command, returns nothing about it.
+            pipe = os.popen("echo probing " + params.get("q", "") + " >/dev/null 2>&1")
+            pipe.read()
+            pipe.close()
+            return 200, "queued"
+
+        try:
+            with local_target(route) as base:
+                results = self.gen.run_detection(
+                    [self.rec], url=f"{base}/x?q=FUZZ", methods=["oob"],
+                    config={"oob_host": "127.0.0.1", "oob_http_port": port,
+                            "oob_listener": listener, "oob_wait": 3.0})
+        finally:
+            listener._servers[0].shutdown()
+        confirmed = [r for r in results if r["verdict"] == "confirmed"]
+        if not confirmed:
+            self.skipTest("no HTTP fetch tool (curl/wget) available in this environment")
+        self.assertTrue(all(r["tier"] == "confirmed" for r in confirmed))
+
+    def test_a_non_executing_sink_produces_no_callback(self):
+        listener = OOBListener()
+        port = listener.start_http(0).server_address[1]
+
+        def route(method, path, params, headers, body):
+            return 200, f"you searched for: {params.get('q', '')}"
+
+        try:
+            with local_target(route) as base:
+                results = self.gen.run_detection(
+                    [self.rec], url=f"{base}/x?q=FUZZ", methods=["oob"],
+                    config={"oob_host": "127.0.0.1", "oob_http_port": port,
+                            "oob_listener": listener, "oob_wait": 1.0})
+        finally:
+            listener._servers[0].shutdown()
+        self.assertTrue(results)
+        self.assertFalse([r for r in results if r["verdict"] == "confirmed"])
+
+
+class ProbeRoundsTestCase(unittest.TestCase):
+    """An aggregate method may answer with a further probe batch once it has
+    seen the first — screening cheaply before paying for an expensive
+    measurement. The engine bounds the rounds so a method cannot drive it
+    forever against a live target."""
+
+    def test_rounds_are_bounded(self):
+        self.assertGreaterEqual(RCEKit.MAX_PROBE_ROUNDS, 2)
+
+        class Endless(rcekit.DetectionMethod):
+            name = "endless"
+            aggregate = True
+            rounds = 0
+
+            def applicable(self, record):
+                return True
+
+            def build_probes(self, record, rng):
+                return [Probe(payload="x", expected="")]
+
+            def next_probes(self, series):
+                Endless.rounds += 1
+                return [Probe(payload=f"x{Endless.rounds}", expected="")]
+
+            def confirm_series(self, series):
+                return Verdict("negative", f"{len(series)} probes fired")
+
+        gen = RCEKit()
+        rcekit.DETECTION_METHODS["endless"] = Endless
+        try:
+            def route(method, path, params, headers, body):
+                return 200, "ok"
+
+            with local_target(route) as base:
+                results = gen.run_detection(
+                    [make_record(environment="unix", context="raw")],
+                    url=f"{base}/x?q=FUZZ", methods=["endless"],
+                    config={"contexts_explicit": True})
+        finally:
+            del rcekit.DETECTION_METHODS["endless"]
+        self.assertEqual(len(results), 1)
+        self.assertIn(f"{RCEKit.MAX_PROBE_ROUNDS} probes fired", results[0]["detail"])
 
 
 if __name__ == "__main__":

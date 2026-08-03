@@ -8,6 +8,67 @@ formats, or the template schema.
 
 ## [Unreleased]
 
+## [2.22.0] — 2026-08-03
+
+Detection coverage. Measured against a lab of twenty sinks — fifteen genuinely
+vulnerable, five deliberately clean — the results-based methods went from
+confirming 8 of the 15 to confirming 12, with no new false positives on any of
+the clean ones.
+
+### ⚠️ A blind-timing candidate could be pure latency drift
+
+`--methods time` fired its probes in a fixed ascending delay order
+(`0,0,N,N,2N,2N`), which makes the injected delay collinear with the request
+index. A target that simply gets **slower during the run** — progressive load, a
+rate limiter backing off, a filling log — therefore produced a textbook-perfect
+linear fit while being entirely un-injectable. In the lab this reproduced on 8
+of 8 runs against a sink with no command execution anywhere in it.
+
+The probe order is now randomised, and the request index enters the regression
+as a nuisance term, so drift loads onto a drift coefficient instead of
+masquerading as a sleep. The same lab sink now reports negative on 9 of 9 runs,
+with every genuine timing detection preserved. If you have a `needs-review`
+timing candidate from an earlier version against a target that was under load,
+it is worth re-running.
+
+### Added
+
+- **`--methods oob`** — out-of-band detection, the first `confirmed`-tier method
+  for a sink that returns nothing *and* has no writable web root. Starts the
+  built-in HTTP+DNS listener in-process and asks the target to resolve or fetch
+  `<token>.<oob-host>`; a callback carrying a token the target could only have
+  learned by running the command is proof of execution. Each probe gets its own
+  token, so the finding names the break-out that actually worked. One shape puts
+  a computed value in the DNS label, so the callback proves the shell evaluated
+  arithmetic rather than merely resolving a name. Requires `--oob-host`, since
+  it makes the target open outbound connections.
+- **`--probe-depth quick|full`** (default `full`) — trades requests for
+  coverage. `full` adds three probe shapes, each aimed at a filter that silenced
+  the canonical ones: substitution-free (`awk`, bare `expr`) for sinks that strip
+  `$(` and backticks; keyword-diverse (`awk`) for filters on `echo`/`expr`; and
+  comment-terminated (`… #`) for applications that append a redirect, extra
+  arguments or a pipe after the injection point. `quick` keeps the old probe set
+  at roughly half the requests.
+
+### Fixed
+
+- **A `ping '<input>'` sink could not be detected at all.** The
+  `shell_single_quoted`/`shell_double_quoted` contexts exist precisely for input
+  interpolated inside quotes, but they are not in `default_contexts`, so no
+  record carried them and the detection engine never tried them — the one sink
+  shape they exist for was the one shape that always reported clean. They are now
+  probed by default, and skipped when `--contexts` names a selection explicitly.
+- **`--methods time` reported a `;`-filtering sink as negative.** A regression
+  blends its probes into one measurement, so it could not sweep separators the
+  way the results-based methods do and was locked to `; ` alone — while
+  `| sleep 3` delayed on the same sink. It now screens every candidate separator
+  with one cheap probe each, then runs the regression through whichever one
+  actually delayed.
+- **A trailing redirect or pipe in the sink hid a working probe.**
+  `<cmd> <input> 2>/dev/null` and `<cmd> <input> | grep …` swallow the probe's
+  output, so it executed and still read as negative. The comment-terminated
+  shapes comment that tail out.
+
 ## [2.21.1] — 2026-08-02
 
 First release since v2.15.2. The headline is not a new feature — it is that
@@ -113,7 +174,8 @@ this file and have not been restated here.
 - **[2.7.0]**
 - **[2.1.0]**
 
-[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.21.1...HEAD
+[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.22.0...HEAD
+[2.22.0]: https://github.com/kabiri-labs/rcekit/compare/v2.21.1...v2.22.0
 [2.21.1]: https://github.com/kabiri-labs/rcekit/compare/v2.15.2...v2.21.1
 [2.15.2]: https://github.com/kabiri-labs/rcekit/releases/tag/v2.15.2
 [2.7.0]: https://github.com/kabiri-labs/rcekit/releases/tag/v2.7.0

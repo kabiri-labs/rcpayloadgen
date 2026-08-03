@@ -44,19 +44,64 @@ starting point — this page is for looking things up once you know what you wan
 
 | Option | Description | Default |
 |---|---|---|
-| `--methods` | Comma-separated: `reflected`, `eval`, `file`, `time` | None |
+| `--methods` | Comma-separated: `reflected`, `eval`, `file`, `oob`, `time` | None |
 | `--webroot` | (`file`) server-side directory the target writes and serves | None |
 | `--web-base-url` | (`file`) base URL that serves `--webroot` | None |
+| `--oob-host` | (`oob`) host the **target** calls back to; required for `oob` | None |
 | `--time-base` | (`time`) base delay `N`; the regression fires `0/N/2N` | `2.0` |
 | `--separators` | Break-out separators for shell probes; `\n` = newline | `; `, `\| `, `\|\| `, `&& `, newline |
 | `--evade` | WAF posture: `none`, or `low` for minimal `${IFS}`-for-spaces | `none` |
+| `--probe-depth` | `full` (also the substitution-free and comment-terminated shapes) or `quick` | `full` |
 
 | `--methods` value | Confirms | Tier it can reach |
 |---|---|---|
 | `reflected` | OS command injection, via computed arithmetic | `confirmed` |
 | `eval` | SSTI / SpEL / OGNL / Groovy / raw `eval()`, via a computed product | `confirmed` |
 | `file` | Execution + a write primitive, via write-and-fetch | `confirmed` |
-| `time` | Blind execution, via a linear `0/N/2N` regression | `needs-review` only |
+| `oob` | Blind execution, via a DNS/HTTP callback carrying a per-probe token | `confirmed` |
+| `time` | Blind execution, via a `0/N/2N` regression | `needs-review` only |
+
+### Probe depth
+
+`full` sends three extra shapes per sink, each aimed at a filter that silences
+the canonical probes:
+
+- **substitution-free** (`awk`, bare `expr`) — both canonical probes route the
+  arithmetic through `$((…))` or a backtick, so a sink that strips `$(` blocks
+  them while remaining exploitable through a plain `;`.
+- **keyword-diverse** (`awk` again) — a filter on `echo`/`expr` blocks both
+  canonical probes; `awk` is not on those blocklists.
+- **comment-terminated** (`… #`) — comments out whatever the application appends
+  after the injection point. A trailing redirect or pipe (`ping <input> 2>/dev/null`,
+  `<cmd> <input> | grep …`) otherwise swallows the probe's output, so the probe
+  executes and still reads as negative.
+
+`quick` sends only the canonical probes — roughly half the requests, for
+rate-limited targets or when the sink's shape is already known.
+
+### Out-of-band detection
+
+`--methods oob` starts the built-in HTTP+DNS listener in-process and asks the
+target to resolve or fetch `<token>.<oob-host>`. It is the only `confirmed`-tier
+method for a sink that returns nothing and has no writable web root — `time`
+tops out at `needs-review` by design, and `file` needs somewhere to write that
+the target also serves.
+
+Each probe carries its own token, so the finding names the break-out that
+actually worked rather than every one that was tried. The DNS shapes matter
+most: egress filtering that blocks outbound HTTP usually still lets the resolver
+out. One shape goes further and puts a computed value in the label
+(`$((a+b)).<token>.<host>`), so the callback proves the shell evaluated
+arithmetic rather than merely resolving a name it was handed.
+
+`--oob-host` must be an address the *target* can reach that arrives at this
+listener: an IP on a routable interface, or a domain whose NS records are
+delegated here. With a bare IP the token rides in the URL path instead of a DNS
+label, and the DNS shapes are skipped rather than sent as probes that could
+never call back.
+
+This makes the target open outbound connections, so it never runs unless you
+name the host.
 
 ## Sink shape
 
