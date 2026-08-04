@@ -3423,6 +3423,14 @@ class BlindSinkAdviceTestCase(unittest.TestCase):
         joined = "\n".join(rcekit.blind_sink_advice(["reflected"], self._Args()))
         self.assertIn("does not rule out execution", joined)
 
+    def test_the_suggested_oob_command_is_one_the_tool_will_accept(self):
+        # oob is gated on the intrusive tier, so advice that omitted the flag
+        # would name a command the tool then refuses to run.
+        joined = "\n".join(rcekit.blind_sink_advice(["reflected"], self._Args()))
+        oob_line = next(line for line in joined.splitlines() if "--methods oob" in line)
+        self.assertIn("--oob-host", oob_line)
+        self.assertIn("--verify-active-risk intrusive", oob_line)
+
     def test_a_blind_capable_method_already_ran_so_no_advice(self):
         for methods in (["oob"], ["time"], ["file"], ["reflected", "oob"],
                         ["reflected", "eval", "time"]):
@@ -3480,6 +3488,134 @@ class BlindSinkAdviceCLITestCase(unittest.TestCase):
         result = self._detect(route, "--methods", "reflected")
         self.assertIn("CONFIRMED execution", result.stdout)
         self.assertNotIn("NO OUTPUT", result.stdout)
+
+
+class OobSafetyGateTestCase(unittest.TestCase):
+    """Detection methods build their own probes and so bypass every corpus-level
+    safety filter. That was harmless while every method was inert, but `oob`
+    makes the target open outbound connections — and the run printed 'pass
+    --verify-active-risk intrusive to also fire ... OOB' and then fired OOB
+    anyway, so the tier the operator chose did not mean what it said."""
+
+    def _run(self, *extra):
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), "--acknowledge-consent",
+             "--verify-url", "http://127.0.0.1:9/x?q=FUZZ", "--environments", "unix",
+             "--contexts", "raw", "--categories", "basic_enum",
+             "--methods", "oob", "--oob-host", "oob.example.com", *extra],
+            capture_output=True, text=True, timeout=300)
+
+    def test_the_default_tier_refuses_and_exits_non_zero(self):
+        result = self._run()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("--verify-active-risk intrusive", result.stdout)
+
+    def test_the_refusal_happens_before_the_listener_starts(self):
+        # Binding a port and telling the operator the listener is up, only to
+        # refuse afterwards, would be its own small lie.
+        result = self._run()
+        self.assertNotIn("OOB listener up", result.stdout)
+
+    def test_intrusive_allows_it(self):
+        result = self._run("--verify-active-risk", "intrusive",
+                           "--listen-http-port", "0")
+        self.assertIn("OOB listener up", result.stdout)
+
+    def test_the_plan_no_longer_contradicts_the_run(self):
+        # The 'held back ... and OOB' line is printed only at the safe tier, and
+        # the safe tier now refuses, so the two can never appear together.
+        allowed = self._run("--verify-active-risk", "intrusive", "--listen-http-port", "0")
+        self.assertNotIn("low-impact (safe) payloads only", allowed.stdout)
+        refused = self._run()
+        self.assertNotIn("[detect] sent", refused.stdout)
+
+    def test_other_methods_are_unaffected_by_the_gate(self):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--acknowledge-consent",
+             "--verify-url", "http://127.0.0.1:9/x?q=FUZZ", "--environments", "unix",
+             "--contexts", "raw", "--categories", "basic_enum", "--methods", "reflected"],
+            capture_output=True, text=True, timeout=300)
+        self.assertEqual(result.returncode, 0, result.stdout)
+
+
+class OobChannelWarningTestCase(unittest.TestCase):
+    """A DNS callback travels the real resolver hierarchy, so it only arrives if
+    this listener is the authority for the OOB domain — port 53 plus NS
+    delegation. On any other port the DNS probes are still sent and can never
+    call back, and the startup line said `DNS :5335` with no hint of it."""
+
+    class _Args:
+        def __init__(self, oob_host="oob.example.com", listen_dns_port=5335):
+            self.oob_host = oob_host
+            self.listen_dns_port = listen_dns_port
+
+    def test_a_non_standard_dns_port_is_called_out(self):
+        lines = rcekit.oob_channel_warnings(self._Args(), dns_up=True)
+        self.assertTrue(lines)
+        self.assertIn("port 53", lines[0])
+        self.assertIn("--listen-dns-port 53", lines[0])
+
+    def test_port_53_with_a_domain_is_silent(self):
+        self.assertEqual(
+            rcekit.oob_channel_warnings(self._Args(listen_dns_port=53), dns_up=True), [])
+
+    def test_a_failed_dns_bind_is_called_out(self):
+        lines = rcekit.oob_channel_warnings(self._Args(listen_dns_port=53), dns_up=False)
+        self.assertTrue(lines)
+        self.assertIn("cannot call back", lines[0])
+
+    def test_an_ip_host_has_no_dns_probes_to_warn_about(self):
+        # With an address literal the token rides in the URL path and no DNS
+        # shape is ever built, so there is nothing to warn about.
+        for host in ("10.0.0.1", "127.0.0.1"):
+            with self.subTest(host=host):
+                self.assertEqual(
+                    rcekit.oob_channel_warnings(self._Args(oob_host=host), dns_up=False), [])
+
+    def test_the_warning_reaches_the_operator(self):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--acknowledge-consent",
+             "--verify-url", "http://127.0.0.1:9/x?q=FUZZ", "--environments", "unix",
+             "--contexts", "raw", "--categories", "basic_enum", "--methods", "oob",
+             "--oob-host", "oob.example.com", "--verify-active-risk", "intrusive",
+             "--listen-http-port", "0"],
+            capture_output=True, text=True, timeout=300)
+        self.assertIn("DNS probes cannot call back", result.stdout)
+
+
+class TimingScreenDepthTestCase(unittest.TestCase):
+    """`--probe-depth quick` trades probe *shapes* for requests. Narrowing the
+    timing screen to the first separator looked like the same kind of saving and
+    was not: it put back the ';'-only blind spot the screen exists to remove, so
+    a sink that merely filters ';' reported negative — silently, and only for the
+    operator who chose 'quick' to be gentle on a rate-limited target."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+        self.rec = make_record(environment="unix", context="raw")
+
+    def _separators(self, depth):
+        import random as _random
+        probes = ParametricTime(self.gen, {"time_base": 1.0, "probe_depth": depth}).build_probes(
+            self.rec, _random.Random(1))
+        return {p.separator for p in probes}
+
+    def test_both_depths_screen_every_separator(self):
+        expected = {"; ", "| ", "|| ", "&& ", "\n"}
+        self.assertEqual(self._separators("quick"), expected)
+        self.assertEqual(self._separators("full"), expected)
+
+    def test_the_two_depths_screen_identically(self):
+        self.assertEqual(self._separators("quick"), self._separators("full"))
+
+    def test_an_explicit_separator_list_still_narrows_it(self):
+        # Cutting the request count by naming the sink's shape stays available;
+        # it is just no longer a silent side effect of --probe-depth.
+        import random as _random
+        probes = ParametricTime(
+            self.gen, {"time_base": 1.0, "separators": ["| "]}).build_probes(
+            self.rec, _random.Random(1))
+        self.assertEqual({p.separator for p in probes}, {"| "})
 
 
 if __name__ == "__main__":

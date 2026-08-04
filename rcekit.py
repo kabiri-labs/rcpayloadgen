@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.23.1"
+__version__ = "2.23.2"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -2724,9 +2724,14 @@ class ParametricTime(DetectionMethod):
         self._rng = rng
         base = float(self.config.get("time_base", 2.0))
         windows = record.environment == "windows"
+        # Every candidate separator is screened at both probe depths. Narrowing
+        # this to the first one is the cheapest-looking saving here and the most
+        # expensive: it puts back the ';'-only blind spot the screen exists to
+        # remove, so a sink that merely filters ';' reports negative -- silently,
+        # and only for the operator who chose 'quick' to be gentle on a
+        # rate-limited target. --probe-depth trades probe *shapes* for requests;
+        # it does not trade away a break-out this method cannot detect without.
         separators = (self._separators(windows) if self._needs_separator(record) else (None,))
-        if self._depth() == "quick":
-            separators = separators[:1]
         probes = [Probe(payload=self._payload(record, 0.0, sep, windows), expected="",
                         delay_s=0.0, separator=sep, phase="screen")
                   for sep in separators]
@@ -3092,6 +3097,33 @@ HIGH_RISK_CATEGORIES = {
 }
 
 
+def oob_channel_warnings(args: Any, dns_up: bool) -> List[str]:
+    """Which of the OOB probe shapes can actually reach this listener.
+
+    A DNS callback travels the real resolver hierarchy: the target's resolver
+    asks the authoritative name server for ``--oob-host``, which has to *be*
+    this listener. That needs the listener on port 53 and NS records delegated
+    to it. On any other port the DNS probes are still sent and can never call
+    back, and the startup line reported ``DNS :5335`` with no hint of it — so
+    the operator read 'DNS covered' from a channel that was structurally dead.
+    Most of the shapes are DNS ones, precisely because a resolver is often the
+    only egress a hardened target has, which makes the silence expensive.
+
+    An address literal for ``--oob-host`` carries its token in the URL path
+    instead, so it never builds DNS probes and has nothing to warn about."""
+    if OobCallback._is_ip_literal(str(args.oob_host).strip().rstrip(".")):
+        return []
+    if not dns_up:
+        return ["[!] The DNS probes cannot call back: the DNS port could not be bound. "
+                "Only the HTTP shapes are live."]
+    if args.listen_dns_port != 53:
+        return [f"[!] The DNS probes cannot call back on port {args.listen_dns_port}: a resolver "
+                f"reaches the authority for {args.oob_host} on port 53 only. Run with "
+                "--listen-dns-port 53 (needs root) and NS records delegating that domain here, "
+                "or the DNS shapes are sent and silently never fire — only the HTTP ones are live."]
+    return []
+
+
 def blind_sink_advice(method_names: List[str], args: Any) -> List[str]:
     """What to run next when every in-band probe came back negative.
 
@@ -3110,7 +3142,9 @@ def blind_sink_advice(method_names: List[str], args: Any) -> List[str]:
              f"{'/'.join(sorted(selected))} — there is nowhere for the computed value to "
              "appear, so a negative here does not rule out execution. Methods that reach a "
              "blind sink:"]
-    lines.append("[detect]   --methods oob --oob-host HOST      "
+    # Spell the risk flag out. Advice that names a command the tool then refuses
+    # to run is its own small version of the problem this function exists for.
+    lines.append("[detect]   --methods oob --oob-host HOST --verify-active-risk intrusive   "
                  "(needs egress from the target; confirms)")
     if not (args.webroot and args.web_base_url):
         lines.append("[detect]   --methods file --webroot DIR --web-base-url URL   "
@@ -3862,6 +3896,20 @@ def main():
                           "--oob-host: an address the target can reach that arrives here (an IP on "
                           "a routable interface, or a domain delegated to this host).")
                     return 1
+                # Same gate the corpus OOB payloads have always had. Detection
+                # methods build their own probes and so bypass every corpus-level
+                # safety filter, which was fine while every method was inert --
+                # but this one makes the target open outbound connections. The
+                # plan printed 'low-impact (safe) payloads only ... pass
+                # --verify-active-risk intrusive to also fire ... OOB' and then
+                # fired OOB anyway: the run contradicted itself, and the tier the
+                # operator chose did not mean what it said.
+                if verify_max_safety == "safe":
+                    print("[!] --methods oob makes the TARGET open outbound connections, which is an "
+                          "active technique held back at the default safety tier — the same tier that "
+                          "holds back the corpus OOB payloads. Pass --verify-active-risk intrusive to "
+                          "allow it.")
+                    return 1
                 listener = OOBListener(answer_ip=args.listen_answer_ip, log_path=args.listen_log)
                 try:
                     listener.start_http(args.listen_http_port)
@@ -3874,6 +3922,8 @@ def main():
                       f"{f', DNS :{args.listen_dns_port}' if dns_up else ' (DNS port unavailable)'}; "
                       f"probes call back to {args.oob_host}. The target will open outbound "
                       "connections.")
+                for line in oob_channel_warnings(args, dns_up):
+                    print(line)
             if "file" in method_names:
                 if not (args.webroot and args.web_base_url):
                     print("[!] --methods file writes a file to the target and fetches it back, so it "

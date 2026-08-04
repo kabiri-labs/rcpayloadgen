@@ -8,6 +8,40 @@ formats, or the template schema.
 
 ## [Unreleased]
 
+## [2.23.2] — 2026-08-04
+
+Three findings from a review of the detection work in 2.22.0 and 2.23.0. All
+three are the same shape: the run said something that was not true — about what
+it had done, about what it had looked for, or about which channel was live.
+
+### Fixed
+
+- **`--methods oob` ignored `--verify-active-risk`.** Detection methods build
+  their own probes and so bypass every corpus-level safety filter. That was
+  harmless while every method was inert, but this one makes the target open
+  outbound connections — and the same run printed *"low-impact (safe) payloads
+  only; pass `--verify-active-risk intrusive` to also fire … OOB"* and then fired
+  OOB anyway. It now needs `--verify-active-risk intrusive`, the same tier that
+  holds back the corpus OOB payloads, and refuses before the listener binds.
+- **`--probe-depth quick` silently narrowed the timing separator screen to
+  `; `.** That put back the exact blind spot the screen was added to remove, so
+  a sink that merely filters `;` reported negative — and only for the operator
+  who chose `quick` to be gentle on a rate-limited target. Both depths now screen
+  every candidate separator; `--probe-depth` governs probe *shapes* only, and
+  `--separators` remains the way to narrow break-outs deliberately.
+- **The DNS out-of-band probes could not call back on the default port, and
+  nothing said so.** A DNS callback travels the real resolver hierarchy, so it
+  only arrives if the listener *is* the authority for the OOB domain — port 53
+  plus NS delegation. On `--listen-dns-port 5335` the DNS shapes were still sent,
+  never fired, and the startup line reported `DNS :5335` with no caveat. Since
+  most of the shapes are DNS ones — a resolver is often the only egress a
+  hardened target has — the silence was expensive. RCEKit now says which channel
+  is live.
+- The blind-sink advice added in 2.23.0 suggested an `oob` command without the
+  risk flag, which the gate above would refuse. Naming a command the tool then
+  declines to run is a small version of the same problem, so it now spells out
+  `--verify-active-risk intrusive`.
+
 ## [2.23.1] — 2026-08-03
 
 ### Added
@@ -219,7 +253,8 @@ this file and have not been restated here.
 - **[2.7.0]**
 - **[2.1.0]**
 
-[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.23.1...HEAD
+[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.23.2...HEAD
+[2.23.2]: https://github.com/kabiri-labs/rcekit/compare/v2.23.1...v2.23.2
 [2.23.1]: https://github.com/kabiri-labs/rcekit/compare/v2.23.0...v2.23.1
 [2.23.0]: https://github.com/kabiri-labs/rcekit/compare/v2.22.0...v2.23.0
 [2.22.0]: https://github.com/kabiri-labs/rcekit/compare/v2.21.1...v2.22.0
