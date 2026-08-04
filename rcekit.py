@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.23.2"
+__version__ = "2.23.3"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -1682,9 +1682,11 @@ class RCEKit:
         return results
 
     # How many times an aggregate method may answer with a further probe batch.
-    # Two is what a screen-then-measure method needs; the bound exists so a
-    # buggy method cannot drive the engine forever against a live target.
-    MAX_PROBE_ROUNDS = 3
+    # The timing method needs three (two screening waves, then the regression);
+    # the fourth is slack, so a method that grows a phase is not silently
+    # truncated. The bound exists so a buggy method cannot drive the engine
+    # forever against a live target.
+    MAX_PROBE_ROUNDS = 4
 
     @staticmethod
     def _quoted_shell_carriers(carriers: List[PayloadRecord],
@@ -2457,6 +2459,8 @@ class DetectionMethod:
         for body in bodies:
             if evade and not windows and self.config.get("evade") == "low":
                 body = body.replace(" ", "${IFS}")
+            if self._context_swallows(record, body):
+                continue
             payloads.append(self._wrap_context(record, body))
         return payloads
 
@@ -2487,6 +2491,32 @@ class DetectionMethod:
                 continue
             pairs.append((separator, f"{trimmed}{core}"))
         return pairs
+
+    def _context_swallows(self, record: "PayloadRecord", body: str) -> bool:
+        """Whether this context would break ``body`` rather than carry it.
+
+        A context that opens *and* closes with the same quote puts the payload
+        **inside** that quote — ``attribute`` wraps it in ``"``. A probe whose
+        body also contains that quote closes it early and the rest is no longer
+        a command, so the probe is structurally unable to execute: it costs a
+        request and can only ever come back negative. Measured on a verbose
+        shell sink, the ``awk`` shape confirmed 8 times in ``raw`` and 0 times
+        in ``attribute``, while the quote-free shapes confirmed in both.
+
+        A break-out context is the opposite case and must not be caught here:
+        ``shell_double_quoted`` (``"; `` … `` #``) *closes* the sink's quote and
+        comments out its tail, so quotes in the body are fine — verified.
+
+        Only for contexts that pass the body through verbatim. Where an escape
+        rule applies, the quote is the serialization layer's, and what the sink
+        finally sees depends on the parser in between."""
+        ctx = self.gen.contexts.get(record.context, {})
+        prefix, suffix = ctx.get("prefix", ""), ctx.get("suffix", "")
+        if ctx.get("escape", "none") != "none":
+            return False
+        if prefix and prefix == suffix and prefix in ('"', "'"):
+            return prefix in body
+        return False
 
     def _wrap_context(self, record: "PayloadRecord", body: str) -> str:
         """Escape ``body`` for the record's serialization context and apply the
@@ -2706,6 +2736,10 @@ class ParametricTime(DetectionMethod):
     _record: Optional["PayloadRecord"] = None
     _rng: Optional["random.Random"] = None
     _separator: Optional[str] = None
+    _pending_separators: Tuple[Optional[str], ...] = ()
+    # Separators screened before the rest: ';' and '|' break out of the large
+    # majority of sinks, so most carriers never pay for the other three.
+    SCREEN_FIRST_WAVE = 2
 
     def applicable(self, record: "PayloadRecord") -> bool:
         return record.environment in SHELL_CAPABLE_ENVIRONMENTS
@@ -2732,6 +2766,18 @@ class ParametricTime(DetectionMethod):
         # rate-limited target. --probe-depth trades probe *shapes* for requests;
         # it does not trade away a break-out this method cannot detect without.
         separators = (self._separators(windows) if self._needs_separator(record) else (None,))
+        # Screen in two waves. Each delayed screen probe costs a real sleep, so
+        # screening all five separators up front spent `5 x base` seconds on
+        # every carrier -- including the carriers that can never break out at
+        # all. The first wave is the two separators that work on the large
+        # majority of sinks; the rest are only screened if neither delayed.
+        self._pending_separators = tuple(separators[self.SCREEN_FIRST_WAVE:])
+        return self._screen_probes(record, separators[:self.SCREEN_FIRST_WAVE], base, windows, rng)
+
+    def _screen_probes(self, record: "PayloadRecord", separators, base: float,
+                       windows: bool, rng: "random.Random") -> List[Probe]:
+        """A paired 0s/base probe per separator. The pair is what keeps a
+        uniformly slow endpoint from reading as a break-out."""
         probes = [Probe(payload=self._payload(record, 0.0, sep, windows), expected="",
                         delay_s=0.0, separator=sep, phase="screen")
                   for sep in separators]
@@ -2774,6 +2820,12 @@ class ParametricTime(DetectionMethod):
         gains = {sep: slow[sep] - quick.get(sep, 0.0) for sep in slow if sep in quick}
         candidates = [sep for sep, gain in gains.items() if gain >= 0.6 * base]
         if not candidates:
+            # Nothing in the first wave broke out. Screen the separators held
+            # back rather than concluding anything from a partial sweep -- a
+            # sink that filters ';' and '|' is exactly the case the sweep is for.
+            pending, self._pending_separators = self._pending_separators, ()
+            if pending:
+                return self._screen_probes(self._record, pending, base, windows, self._rng)
             return []
         best = max(candidates, key=lambda sep: gains[sep])
         self._separator = best
@@ -2936,6 +2988,8 @@ class OobCallback(DetectionMethod):
     # probe asked the target to evaluate. Reporting detail only.
     _shape: Dict[str, str] = {}
     _computed: Optional[int] = None
+    # Whether any carrier has already been given the full callback window.
+    _waited_once: bool = False
 
     def applicable(self, record: "PayloadRecord") -> bool:
         if not self.config.get("oob_host"):
@@ -2977,6 +3031,10 @@ class OobCallback(DetectionMethod):
                 token = self._token(rng)
                 core = core_for_token(token)
                 body = core if separator is None else f"{separator}{core}"
+                # The PowerShell shape carries double quotes, so a context that
+                # wraps the payload in them cannot execute it.
+                if self._context_swallows(record, body):
+                    continue
                 payload = self._wrap_context(record, body)
                 probes.append(Probe(payload=payload, expected=token, separator=separator))
                 self._shape[token] = label
@@ -3039,6 +3097,17 @@ class OobCallback(DetectionMethod):
         if listener is None:
             return [(probe, Verdict("error", "no OOB listener was started"))
                     for probe, _ in series]
+        # The full window is only worth paying while a callback is still
+        # plausible. Callbacks land in a burst once the channel works, so if not
+        # one has arrived across every probe fired so far, this target is not
+        # calling back and the remaining carriers need a grace period, not the
+        # whole window. Without this the run slept `wait` seconds per carrier --
+        # 30s of pure waiting on a clean target with the default carriers -- for
+        # nothing. The first carrier always gets the full window, so a target
+        # that does call back is never cut short before its first hit.
+        if self._waited_once and not listener.hits:
+            wait = min(wait, 1.5)
+        self._waited_once = True
         deadline = time.time() + wait
         wanted = {probe.expected for probe, _ in series}
         while time.time() < deadline:

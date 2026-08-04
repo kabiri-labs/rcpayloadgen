@@ -8,6 +8,38 @@ formats, or the template schema.
 
 ## [Unreleased]
 
+## [2.23.3] — 2026-08-04
+
+Four items from the same review: requests and seconds spent on work that could
+not produce a result. No verdict changes — the lab still confirms 15 of 15
+vulnerable sinks with nothing on the clean five — the run just stops paying for
+probes that were structurally unable to confirm.
+
+### Changed
+
+- **The `awk` probe is no longer sent into a context that wraps the payload in
+  quotes.** It carries double quotes, so in `attribute` the quote closed early
+  and the rest was not a command: 5 requests per carrier that could only ever
+  come back negative. Measured on a verbose shell sink, that shape confirmed 8
+  times in `raw` and 0 times in `attribute`. Break-out contexts such as
+  `shell_double_quoted` *close* the sink's quote and comment its tail, so they
+  still get it. The same guard covers the PowerShell out-of-band shape.
+- **The timing screen runs in two waves.** Every delayed screen probe costs a
+  real sleep, so screening all five separators up front spent `5 × base` seconds
+  on every carrier, including the ones that cannot break out at all. `; ` and
+  `| ` are screened first and the rest only if neither delayed — a sink that
+  filters both is still swept, it is just no longer the price everyone pays.
+- **The out-of-band callback window is no longer paid per carrier.** Callbacks
+  land in a burst once the channel works, so a target that has not produced one
+  across every probe fired so far is not going to. The first carrier still gets
+  the full window, so a target that does call back is never cut short before its
+  first hit. On a clean target with the default carriers this was 30s of pure
+  waiting; it is now ~12s.
+- **`--probe-depth` documents what it does on Windows**, which is nothing:
+  `cmd.exe` has no `#` comment, no `${IFS}` and no `awk`, so both depths send
+  the single `set /a` probe. The docs promised three extra shapes per sink
+  without that caveat.
+
 ## [2.23.2] — 2026-08-04
 
 Three findings from a review of the detection work in 2.22.0 and 2.23.0. All
@@ -253,7 +285,8 @@ this file and have not been restated here.
 - **[2.7.0]**
 - **[2.1.0]**
 
-[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.23.2...HEAD
+[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.23.3...HEAD
+[2.23.3]: https://github.com/kabiri-labs/rcekit/compare/v2.23.2...v2.23.3
 [2.23.2]: https://github.com/kabiri-labs/rcekit/compare/v2.23.1...v2.23.2
 [2.23.1]: https://github.com/kabiri-labs/rcekit/compare/v2.23.0...v2.23.1
 [2.23.0]: https://github.com/kabiri-labs/rcekit/compare/v2.22.0...v2.23.0
