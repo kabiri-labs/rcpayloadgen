@@ -178,6 +178,11 @@ shapes use `awk` and a bare `expr`, and one set comments out whatever the
 application appends after the injection point. Pass `--probe-depth quick` on a
 rate-limited target to halve the requests and send only the canonical probes.
 
+It governs probe *shapes* only — never which break-outs are tried. Both depths
+sweep every separator, and both screen every separator in `--methods time`,
+because dropping one is not a saving in requests but a blind spot. Narrow that
+deliberately with `--separators`.
+
 **Scope the environments to cut noise.** The shell methods (`reflected`, `file`,
 `time`) apply to any environment whose runtime reaches a shell — the shell
 environments themselves *plus* the language runtimes, because PHP's `system()`,
@@ -307,7 +312,7 @@ names the methods that could still reach it:
 [detect] A sink that returns NO OUTPUT cannot be confirmed by eval/reflected — there is
 nowhere for the computed value to appear, so a negative here does not rule out execution.
 Methods that reach a blind sink:
-[detect]   --methods oob --oob-host HOST      (needs egress from the target; confirms)
+[detect]   --methods oob --oob-host HOST --verify-active-risk intrusive   (needs egress from the target; confirms)
 [detect]   --methods file --webroot DIR --web-base-url URL   (needs a writable web root; confirms)
 [detect]   --methods time                     (no egress and no web root needed; needs-review only)
 ```
@@ -381,8 +386,13 @@ nothing and has no writable web root.
 ```bash
 python rcekit.py --acknowledge-consent \
   --verify-url "https://target.example/ping?ip=FUZZ" \
-  --methods reflected,oob --oob-host oob.example.com --listen-dns-port 53
+  --methods reflected,oob --oob-host oob.example.com \
+  --verify-active-risk intrusive --listen-dns-port 53
 ```
+
+It makes the target open outbound connections, so it sits behind the same safety
+tier as the corpus OOB payloads: `--verify-active-risk intrusive`, on top of
+`--oob-host`.
 
 `--oob-host` must be something the **target** can reach that arrives at your
 listener: a domain whose NS records are delegated to this host, or a routable IP.

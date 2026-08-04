@@ -88,6 +88,11 @@ the canonical probes:
 `quick` sends only the canonical probes — roughly half the requests, for
 rate-limited targets or when the sink's shape is already known.
 
+`--probe-depth` governs probe *shapes* only. It does not narrow the separator
+sweep, and it does not narrow the separator screen `--methods time` runs: both
+depths try every candidate break-out, because dropping one is not a saving in
+requests but a blind spot. Use `--separators` to narrow that deliberately.
+
 ### Out-of-band detection
 
 `--methods oob` starts the built-in HTTP+DNS listener in-process and asks the
@@ -109,8 +114,16 @@ delegated here. With a bare IP the token rides in the URL path instead of a DNS
 label, and the DNS shapes are skipped rather than sent as probes that could
 never call back.
 
-This makes the target open outbound connections, so it never runs unless you
-name the host.
+**The DNS shapes need port 53.** A DNS callback travels the real resolver
+hierarchy, so it only arrives if this listener *is* the authority for the OOB
+domain — `--listen-dns-port 53` (needs root) plus NS records delegating the
+domain here. On any other port the DNS probes are still sent and can never call
+back; RCEKit says so at startup rather than leaving you to infer it from
+silence.
+
+This makes the target open outbound connections, so it is held back at the
+default safety tier — the same tier that holds back the corpus OOB payloads —
+and needs `--verify-active-risk intrusive` as well as `--oob-host`.
 
 ## Sink shape
 
