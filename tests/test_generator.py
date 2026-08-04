@@ -2117,14 +2117,37 @@ class ParametricTimeTestCase(unittest.TestCase):
         self.assertEqual(len({p.separator for p in regression}), 1)
 
     def test_no_separator_delays_means_no_regression_is_run(self):
+        # The screen runs in waves, so "nothing broke out" is only a conclusion
+        # once every separator has been tried -- a sink that filters ';' and '|'
+        # is exactly the case the sweep exists for.
+        import random as _random
+        record = make_record(environment="unix", context="raw")
+        series, batch = [], self.method.build_probes(record, _random.Random(1))
+        waves = 0
+        while batch:
+            waves += 1
+            series += [(p, Observation(status=200, body="", elapsed=0.1)) for p in batch]
+            batch = self.method.next_probes(series)
+        self.assertGreater(waves, 1, "the held-back separators must still be screened")
+        self.assertEqual({p.separator for p, _ in series},
+                         {"; ", "| ", "|| ", "&& ", "\n"})
+        self.assertFalse([p for p, _ in series if p.phase == "regress"])
+        verdict = self.method.confirm_series(series)
+        self.assertEqual(verdict.status, "negative")
+        self.assertIn("no command separator produced a delay", verdict.evidence)
+
+    def test_a_first_wave_hit_skips_the_rest_of_the_screen(self):
+        # Each delayed screen probe costs a real sleep, so the separators held
+        # back are never sent once one has already broken out.
         import random as _random
         record = make_record(environment="unix", context="raw")
         screen = self.method.build_probes(record, _random.Random(1))
-        flat = [(p, Observation(status=200, body="", elapsed=0.1)) for p in screen]
-        self.assertEqual(self.method.next_probes(flat), [])
-        verdict = self.method.confirm_series(flat)
-        self.assertEqual(verdict.status, "negative")
-        self.assertIn("no command separator produced a delay", verdict.evidence)
+        series = [(p, Observation(status=200, body="",
+                                  elapsed=(p.delay_s or 0.0) + 0.05)) for p in screen]
+        nxt = self.method.next_probes(series)
+        self.assertTrue(nxt)
+        self.assertTrue(all(p.phase == "regress" for p in nxt),
+                        "a working separator must go straight to the regression")
 
     def test_confirm_series_linear_response_is_needs_review(self):
         verdict = self.method.confirm_series(
@@ -2781,16 +2804,22 @@ class SeparatorSweepTestCase(unittest.TestCase):
         # merely filters ';' as negative, while '| sleep 3' delayed on it.
         import random as _random
         method = ParametricTime(self.gen, {"time_base": 1.0})
-        screen = method.build_probes(self.rec, _random.Random(1))
-        for separator in ("; ", "| ", "|| ", "&& ", "\n"):
+        # Only the pipe breaks out on this imaginary sink. Drive the screen to
+        # exhaustion: it runs in waves, so a separator missing from the first
+        # batch is held back, not dropped.
+        series, batch, regression = [], method.build_probes(self.rec, _random.Random(1)), []
+        while batch:
+            if all(p.phase == "regress" for p in batch):
+                regression = batch
+                break
+            series += [(p, Observation(status=200, body="",
+                                       elapsed=(p.delay_s or 0.0) + 0.05 if p.separator == "| "
+                                       else 0.05)) for p in batch]
+            batch = method.next_probes(series)
+        screened = {p.payload[:2] for p, _ in series}
+        for separator in ("; ", "| "):
             with self.subTest(separator=separator):
-                self.assertTrue(any(p.payload.startswith(separator) for p in screen))
-        # Only the pipe breaks out on this imaginary sink.
-        series = [(p, Observation(status=200, body="",
-                                  elapsed=(p.delay_s or 0.0) + 0.05 if p.separator == "| "
-                                  else 0.05))
-                  for p in screen]
-        regression = method.next_probes(series)
+                self.assertIn(separator, screened)
         self.assertTrue(regression)
         self.assertEqual({p.separator for p in regression}, {"| "})
 
@@ -3490,6 +3519,130 @@ class BlindSinkAdviceCLITestCase(unittest.TestCase):
         self.assertNotIn("NO OUTPUT", result.stdout)
 
 
+class QuoteWrappingContextTestCase(unittest.TestCase):
+    """A context that opens *and* closes with the same quote puts the payload
+    inside it, so a probe body carrying that quote closes it early and the rest
+    is no longer a command. Those probes cost a request and can only ever come
+    back negative."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+
+    def _payloads(self, context):
+        import random as _random
+        return [p.payload for p in ReflectedMath(self.gen, {}).build_probes(
+            make_record(environment="unix", context=context), _random.Random(1))]
+
+    def test_the_quote_carrying_shape_is_not_sent_into_a_wrapping_context(self):
+        self.assertFalse([p for p in self._payloads("attribute") if "awk" in p])
+
+    def test_the_quote_free_shapes_still_are(self):
+        payloads = self._payloads("attribute")
+        self.assertTrue(payloads)
+        self.assertTrue([p for p in payloads if "$((" in p])
+        self.assertTrue([p for p in payloads if "${IFS}" in p])
+
+    def test_a_break_out_context_still_gets_it(self):
+        # shell_double_quoted CLOSES the sink's quote and comments its tail, so
+        # quotes in the body are fine there — the opposite case, and it must not
+        # be caught by the same guard.
+        self.assertTrue([p for p in self._payloads("shell_double_quoted") if "awk" in p])
+
+    def test_raw_is_untouched(self):
+        self.assertTrue([p for p in self._payloads("raw") if "awk" in p])
+
+    def test_the_guard_only_applies_to_verbatim_contexts(self):
+        # Where an escape rule applies, the quote belongs to the serialization
+        # layer and what the sink sees depends on the parser in between.
+        method = ReflectedMath(self.gen, {})
+        yaml_record = make_record(environment="unix", context="yaml")
+        self.assertFalse(method._context_swallows(yaml_record, 'awk "x"'))
+        attr_record = make_record(environment="unix", context="attribute")
+        self.assertTrue(method._context_swallows(attr_record, 'awk "x"'))
+        self.assertFalse(method._context_swallows(attr_record, "echo x"))
+
+    def test_detection_is_unchanged_by_the_guard(self):
+        # The removed probes were the ones that could never confirm, so a real
+        # sink must still be confirmed in exactly the contexts it was before.
+        import os
+
+        def route(method, path, params, headers, body):
+            pipe = os.popen("echo probing " + params.get("q", "") + " 2>/dev/null")
+            out = pipe.read()
+            pipe.close()
+            return 200, out
+
+        with local_target(route) as base:
+            results = self.gen.run_detection(
+                [make_record(environment="unix", context="attribute")],
+                url=f"{base}/x?q=FUZZ", methods=["reflected"])
+        self.assertTrue([r for r in results if r["verdict"] == "confirmed"])
+
+
+class OobWaitTestCase(unittest.TestCase):
+    """The callback window is only worth paying while a callback is plausible.
+    Callbacks land in a burst once the channel works, so a target that has not
+    produced a single one across every probe fired so far is not going to."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+        self.rec = make_record(environment="unix", context="raw")
+
+    def _method(self, listener, wait=3.0):
+        return rcekit.OobCallback(self.gen, {"oob_host": "x.example",
+                                             "oob_listener": listener, "oob_wait": wait})
+
+    def test_the_first_carrier_gets_the_full_window(self):
+        import time as _time
+        listener = OOBListener()
+        method = self._method(listener, wait=1.0)
+        import random as _random
+        probes = method.build_probes(self.rec, _random.Random(1))[:1]
+        series = [(probes[0], Observation(status=200, body="ok"))]
+        started = _time.time()
+        method.confirm_each(series)
+        self.assertGreaterEqual(_time.time() - started, 0.9)
+
+    def test_later_carriers_are_cut_short_when_nothing_ever_called_back(self):
+        import time as _time
+        listener = OOBListener()
+        method = self._method(listener, wait=30.0)
+        method._waited_once = True
+        import random as _random
+        probes = method.build_probes(self.rec, _random.Random(1))[:1]
+        series = [(probes[0], Observation(status=200, body="ok"))]
+        started = _time.time()
+        method.confirm_each(series)
+        self.assertLess(_time.time() - started, 5.0)
+
+    def test_a_live_channel_still_gets_the_full_window(self):
+        # One hit anywhere means callbacks are flowing, so later carriers must
+        # not be cut short.
+        import time as _time
+        listener = OOBListener()
+        listener.record("http", "10.0.0.9", "somewhere", "/earlier-token")
+        method = self._method(listener, wait=1.0)
+        method._waited_once = True
+        import random as _random
+        probes = method.build_probes(self.rec, _random.Random(1))[:1]
+        series = [(probes[0], Observation(status=200, body="ok"))]
+        started = _time.time()
+        method.confirm_each(series)
+        self.assertGreaterEqual(_time.time() - started, 0.9)
+
+    def test_cutting_the_wait_short_never_changes_a_verdict_that_had_arrived(self):
+        listener = OOBListener()
+        method = self._method(listener, wait=30.0)
+        method._waited_once = True
+        import random as _random
+        probes = method.build_probes(self.rec, _random.Random(1))[:2]
+        listener.record("dns", "10.0.0.9", f"{probes[0].expected}.x.example")
+        series = [(p, Observation(status=200, body="ok")) for p in probes]
+        verdicts = {p.payload: v.status for p, v in method.confirm_each(series)}
+        self.assertEqual(verdicts[probes[0].payload], "confirmed")
+        self.assertEqual(verdicts[probes[1].payload], "negative")
+
+
 class OobSafetyGateTestCase(unittest.TestCase):
     """Detection methods build their own probes and so bypass every corpus-level
     safety filter. That was harmless while every method was inert, but `oob`
@@ -3595,10 +3748,16 @@ class TimingScreenDepthTestCase(unittest.TestCase):
         self.rec = make_record(environment="unix", context="raw")
 
     def _separators(self, depth):
+        """Every separator the screen tries, across all of its waves."""
         import random as _random
-        probes = ParametricTime(self.gen, {"time_base": 1.0, "probe_depth": depth}).build_probes(
-            self.rec, _random.Random(1))
-        return {p.separator for p in probes}
+        method = ParametricTime(self.gen, {"time_base": 1.0, "probe_depth": depth})
+        series, batch, seen = [], method.build_probes(self.rec, _random.Random(1)), set()
+        while batch and not any(p.phase == "regress" for p in batch):
+            seen |= {p.separator for p in batch}
+            # Nothing breaks out, so the screen keeps widening until exhausted.
+            series += [(p, Observation(status=200, body="", elapsed=0.1)) for p in batch]
+            batch = method.next_probes(series)
+        return seen
 
     def test_both_depths_screen_every_separator(self):
         expected = {"; ", "| ", "|| ", "&& ", "\n"}

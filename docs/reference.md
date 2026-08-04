@@ -77,7 +77,11 @@ the canonical probes:
 
 - **substitution-free** (`awk`, bare `expr`) — both canonical probes route the
   arithmetic through `$((…))` or a backtick, so a sink that strips `$(` blocks
-  them while remaining exploitable through a plain `;`.
+  them while remaining exploitable through a plain `;`. The `awk` shape carries
+  double quotes, so it is not sent into a context that *wraps* the payload in
+  them (`attribute`): the quote would close early and the probe could only ever
+  come back negative. Break-out contexts such as `shell_double_quoted` close the
+  sink's quote and comment its tail, so they still get it.
 - **keyword-diverse** (`awk` again) — a filter on `echo`/`expr` blocks both
   canonical probes; `awk` is not on those blocklists.
 - **comment-terminated** (`… #`) — comments out whatever the application appends
@@ -87,6 +91,10 @@ the canonical probes:
 
 `quick` sends only the canonical probes — roughly half the requests, for
 rate-limited targets or when the sink's shape is already known.
+
+**All of these shapes are Unix.** `cmd.exe` has no `#` comment, no `${IFS}`, and
+no `awk`, so `--environments windows` gets the one `set /a` probe at either
+depth and `--probe-depth` changes nothing for it.
 
 `--probe-depth` governs probe *shapes* only. It does not narrow the separator
 sweep, and it does not narrow the separator screen `--methods time` runs: both

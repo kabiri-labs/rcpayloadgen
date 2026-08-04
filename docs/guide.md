@@ -183,6 +183,10 @@ sweep every separator, and both screen every separator in `--methods time`,
 because dropping one is not a saving in requests but a blind spot. Narrow that
 deliberately with `--separators`.
 
+The extra shapes are all Unix ones — `cmd.exe` has no `#` comment, no `${IFS}`
+and no `awk` — so `--environments windows` sends the same single probe at either
+depth.
+
 **Scope the environments to cut noise.** The shell methods (`reflected`, `file`,
 `time`) apply to any environment whose runtime reaches a shell — the shell
 environments themselves *plus* the language runtimes, because PHP's `system()`,
