@@ -52,6 +52,7 @@ starting point — this page is for looking things up once you know what you wan
 | `--separators` | Break-out separators for shell probes; `\n` = newline | `; `, `\| `, `\|\| `, `&& `, newline |
 | `--evade` | WAF posture: `none`, or `low` for minimal `${IFS}`-for-spaces | `none` |
 | `--probe-depth` | `full` (also the substitution-free and comment-terminated shapes) or `quick` | `full` |
+| `--detect-json` | Also write the run to this path as JSON: overall verdict, counts, every probe | None |
 
 | `--methods` value | Confirms | Tier it can reach |
 |---|---|---|
@@ -100,6 +101,36 @@ depth and `--probe-depth` changes nothing for it.
 sweep, and it does not narrow the separator screen `--methods time` runs: both
 depths try every candidate break-out, because dropping one is not a saving in
 requests but a blind spot. Use `--separators` to narrow that deliberately.
+
+### Machine-readable results
+
+`--detect-json PATH` writes the run as JSON alongside the usual text report:
+
+```json
+{
+  "rcekit_version": "2.25.0",
+  "target": "https://target.example/lookup?host=FUZZ",
+  "methods": ["reflected"],
+  "verdict": "confirmed",
+  "counts": {"confirmed": 4, "negative": 9},
+  "probes": [{"verdict": "confirmed", "method": "reflected", "environment": "unix",
+              "context": "raw", "payload": "...", "detail": "target computed ..."}]
+}
+```
+
+Use it instead of parsing stdout. Two things make the text report unsafe to
+scrape: a probe payload may contain a literal newline — the newline separator is
+a real one — so line-oriented parsing splits a payload in half, and the
+detection path exits 0 whether it confirmed or came back clean.
+
+The top-level `verdict` collapses the run, ordered by what you must not miss
+rather than by what is most frequent: one `confirmed` among a hundred negatives
+is the finding. `error` appears only when *nothing* reached the target, and a run
+that built no probes is `nothing-tested` — never `negative`, which would read as
+"not vulnerable".
+
+This is the channel [`tests/bench/`](../tests/bench/README.md) reads to check
+verdicts against real vulnerable targets.
 
 ### Out-of-band detection
 

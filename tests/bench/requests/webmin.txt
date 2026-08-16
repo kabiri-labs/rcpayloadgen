@@ -1,0 +1,7 @@
+POST /password_change.cgi HTTP/1.1
+Host: 127.0.0.1:10000
+Cookie: redirect=1; testing=1; sid=x; sessiontest=1
+Referer: https://127.0.0.1:10000/session_login.cgi
+Content-Type: application/x-www-form-urlencoded
+
+user=rootxx&pam=&expired=2&old=test&new1=test2&new2=test2
