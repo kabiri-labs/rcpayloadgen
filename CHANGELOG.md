@@ -43,6 +43,15 @@ unchanged; only the set of places searched is wider.
 
 ### Security
 
+- **A deeply nested JSON response can no longer silence detection.** `json.loads`
+  recurses in C and raises `RecursionError` past roughly a thousand levels, and
+  channels are built inside the delivery `try`/`except` — so an escaping
+  exception reported a response that arrived perfectly well as "request never
+  reached the target". Measured: every one of the 46 probes in a default
+  `reflected` run turned into `error`, which a target could induce deliberately
+  to hide a live sink behind a thousand nested arrays. The leaf walk is now
+  iterative and depth-capped, `RecursionError` costs the JSON channels only, and
+  building channels can never turn a delivered response into a delivery failure.
 - **Transport headers are excluded from the sweep.** `Content-Length`, `Date`,
   `Age`, `ETag` and their neighbours are generated below the application and can
   never carry a computed value, but they *are* numeric — and the `expr` probe's

@@ -1541,7 +1541,8 @@ class RCEKit:
                 continue
         return any(re.search(pattern, c) for c in candidates)
 
-    def _json_leaf_channels(self, body: str, limit: int = 256) -> List[Tuple[str, str]]:
+    def _json_leaf_channels(self, body: str, limit: int = 256,
+                            max_depth: int = 64) -> List[Tuple[str, str]]:
         """One channel per leaf of a JSON response body, addressed by its path.
 
         Substring-matching the serialised JSON misses a value the encoder split
@@ -1551,27 +1552,36 @@ class RCEKit:
         shape: ``{"error": {"detail": "cannot render 2058898001"}}``.
 
         Booleans and nulls carry no computed value and are skipped. ``limit``
-        caps the walk so a pathological response cannot turn one probe into an
-        unbounded search."""
+        caps the number of leaves and ``max_depth`` the nesting descended, so a
+        pathological response cannot turn one probe into an unbounded search.
+
+        The walk is iterative, and ``json.loads`` — whose scanner recurses in C
+        — may raise ``RecursionError`` on a deeply nested body. Treating that as
+        "no JSON channels" rather than letting it propagate matters more than it
+        looks: the caller builds channels inside the delivery try/except, so an
+        escaping exception would report a response that arrived perfectly well
+        as a failed request. A target could then hide a live sink behind a
+        thousand nested arrays."""
         try:
             parsed = json.loads(body)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             return []
         leaves: List[Tuple[str, str]] = []
-
-        def walk(node: Any, path: str) -> None:
-            if len(leaves) >= limit:
-                return
+        # (node, path, depth), LIFO with children pushed in reverse so leaves come
+        # out in document order and the evidence path is stable between runs.
+        stack: List[Tuple[Any, str, int]] = [(parsed, "", 0)]
+        while stack and len(leaves) < limit:
+            node, path, depth = stack.pop()
+            if depth > max_depth:
+                continue
             if isinstance(node, dict):
-                for key, value in node.items():
-                    walk(value, f"{path}.{key}" if path else str(key))
+                for key, value in reversed(list(node.items())):
+                    stack.append((value, f"{path}.{key}" if path else str(key), depth + 1))
             elif isinstance(node, list):
-                for index, value in enumerate(node):
-                    walk(value, f"{path}[{index}]")
+                for index in range(len(node) - 1, -1, -1):
+                    stack.append((node[index], f"{path}[{index}]", depth + 1))
             elif isinstance(node, str) or isinstance(node, (int, float)) and not isinstance(node, bool):
                 leaves.append((f"JSON field {path or '(root)'}", str(node)))
-
-        walk(parsed, "")
         return leaves
 
     def _response_channels(self, headers: Iterable[Tuple[str, str]], body: str,
@@ -1660,16 +1670,25 @@ class RCEKit:
         """Adapt a urllib response (or an ``HTTPError``, which is one) to
         :meth:`_response_channels`. Every attribute is read defensively: a
         response object that is missing one must cost a channel, never a
-        traceback in the middle of a live engagement."""
+        traceback in the middle of a live engagement.
+
+        This must never raise. The caller builds channels inside the delivery
+        try/except, so an exception here would be caught as a network failure
+        and a response that arrived perfectly well would be reported as though
+        it never reached the target — an `error` verdict on a live sink. A
+        response that was delivered always yields at least its body."""
         try:
-            header_items = list(getattr(response, "headers", None).items())
+            try:
+                header_items = list(getattr(response, "headers", None).items())
+            except Exception:
+                header_items = []
+            return self._response_channels(
+                header_items, text,
+                reason=getattr(response, "reason", None),
+                final_url=getattr(response, "url", None),
+                requested_url=requested_url)
         except Exception:
-            header_items = []
-        return self._response_channels(
-            header_items, text,
-            reason=getattr(response, "reason", None),
-            final_url=getattr(response, "url", None),
-            requested_url=requested_url)
+            return [("response body", text)]
 
     def _verify_ssl_context(self):
         """SSL context for verification/detection requests. Returns ``None``
