@@ -75,7 +75,59 @@ class CaseValidationTestCase(unittest.TestCase):
         case = minimal_case(negative_control={"expect": "negative"})
         with self.assertRaises(runner.CaseError) as ctx:
             runner.validate_case(case)
-        self.assertIn("not a control", str(ctx.exception))
+        self.assertIn("measures nothing", str(ctx.exception))
+
+    def test_an_explicitly_copied_control_invocation_is_rejected_too(self):
+        # Key presence is not the test — what the control would actually run is.
+        # Spelling the vulnerable invocation out again is the same non-control as
+        # omitting it, and this case expects `needs-review`, where a duplicated
+        # control would otherwise pass and prove nothing.
+        case = minimal_case(
+            expect="needs-review",
+            negative_control={"invocation": list(minimal_case()["invocation"]),
+                              "expect": "needs-review"})
+        with self.assertRaises(runner.CaseError) as ctx:
+            runner.validate_case(case)
+        self.assertIn("measures nothing", str(ctx.exception))
+
+    def test_the_same_invocation_against_a_different_build_is_a_valid_control(self):
+        # The patched-build control: identical command, different target. That is
+        # the strongest control there is, so the duplication check must not
+        # mistake it for a duplicate.
+        case = minimal_case(vulhub_path="webmin/CVE-2019-15107",
+                            negative_control={"vulhub_path": "webmin/patched",
+                                              "expect": "negative"})
+        self.assertEqual(runner.validate_case(case)["name"], "example")
+
+    def test_a_control_may_not_expect_an_outcome_that_never_reached_the_target(self):
+        # `error` and `nothing-tested` mean nothing was exercised, so such a
+        # control would stay green with the detection engine entirely broken.
+        for expectation in ("error", "nothing-tested"):
+            case = minimal_case(negative_control={"invocation": ["--bogus"],
+                                                  "expect": expectation})
+            with self.assertRaises(runner.CaseError, msg=expectation) as ctx:
+                runner.validate_case(case)
+            self.assertIn("never exercised", str(ctx.exception))
+
+    def test_a_control_may_expect_any_exercised_outcome(self):
+        for expectation in runner.CONTROL_EXPECTATIONS:
+            case = minimal_case(negative_control={"invocation": ["--other"],
+                                                  "expect": expectation})
+            self.assertEqual(runner.validate_case(case)["name"], "example", expectation)
+
+    def test_the_vulnerable_half_may_still_expect_error(self):
+        # Narrowing control expectations must not narrow the case's own: "an
+        # unreachable target reports error, not negative" is worth pinning.
+        self.assertEqual(runner.validate_case(minimal_case(expect="error"))["name"], "example")
+
+    def test_validation_and_execution_read_the_same_control_plan(self):
+        # The duplication the validator rejects must be the duplication the
+        # runner would have run, so both go through control_plan.
+        case = minimal_case(compose=["docker", "compose", "up", "-d"],
+                            negative_control={"invocation": ["--other"], "expect": "negative"})
+        invocation, setup = runner.control_plan(case)
+        self.assertEqual(invocation, ["--other"])
+        self.assertEqual(runner.target_setup(setup), runner.target_setup(case))
 
     def test_a_control_expecting_confirmed_is_rejected(self):
         case = minimal_case(negative_control={"invocation": ["--x"], "expect": "confirmed"})

@@ -51,10 +51,50 @@ RCEKIT = REPO_ROOT / "rcekit.py"
 REQUIRED_KEYS = ("name", "rce_class", "target", "invocation", "expect", "negative_control")
 VALID_EXPECTATIONS = ("confirmed", "needs-review", "negative", "inconclusive",
                       "error", "nothing-tested")
+# What a control may expect. Narrower than VALID_EXPECTATIONS on purpose:
+# `error` and `nothing-tested` both mean the run never exercised the target, so a
+# control expecting either proves nothing about false confirmation -- it would
+# stay green with the detection engine entirely broken, which is the one thing a
+# control exists to catch. `confirmed` is excluded as a contradiction.
+#
+# The vulnerable half may still expect them: "an unreachable target reports
+# `error`, not `negative`" is a real property worth pinning.
+CONTROL_EXPECTATIONS = ("negative", "inconclusive", "needs-review")
 
 
 class CaseError(Exception):
     """A case file that cannot be trusted to measure anything."""
+
+
+def target_setup(case: Dict[str, Any]) -> Tuple[Any, Tuple[str, ...], Tuple[str, ...]]:
+    """The part of a case that decides *which* target comes up."""
+    return (case.get("vulhub_path"), tuple(case.get("compose", ())),
+            tuple(case.get("compose_down", ())))
+
+
+def control_plan(case: Dict[str, Any]) -> Tuple[List[str], Dict[str, Any]]:
+    """The control's effective invocation and target setup.
+
+    A control inherits the case's target unless it overrides it — the common
+    controls (probe for the wrong class, probe with a weaker method) deliberately
+    run against the *same* container, and only a patched-build control brings up
+    a different one.
+
+    One function, used by both validation and execution, so the two cannot
+    drift: the duplication the validator rejects has to be the same duplication
+    the runner would otherwise have run."""
+    control = case["negative_control"]
+    invocation = list(control.get("invocation", case["invocation"]))
+    setup = dict(case)
+    for key in ("vulhub_path", "compose", "compose_down"):
+        if key in control:
+            setup[key] = control[key]
+    # A control naming its own vulhub_path without its own compose wants the
+    # standard compose commands in that directory, not the parent's explicit ones.
+    if "vulhub_path" in control and "compose" not in control:
+        setup.pop("compose", None)
+        setup.pop("compose_down", None)
+    return invocation, setup
 
 
 def validate_case(case: Dict[str, Any], source: str = "<case>") -> Dict[str, Any]:
@@ -74,15 +114,24 @@ def validate_case(case: Dict[str, Any], source: str = "<case>") -> Dict[str, Any
     control = case["negative_control"]
     if not isinstance(control, dict):
         raise CaseError(f"{source}: 'negative_control' must be an object")
-    if "invocation" not in control and "compose" not in control:
-        raise CaseError(f"{source}: 'negative_control' needs its own 'invocation' or 'compose' — "
-                        "a control that reuses the vulnerable target's is not a control")
+    # Compare what the control would *actually* run, not merely whether it
+    # declared a key. Copying the vulnerable invocation into the control passes a
+    # key-presence check while running the identical command against the
+    # identical target twice, which measures nothing.
+    control_invocation, control_setup = control_plan(case)
+    if (control_invocation == list(case["invocation"])
+            and target_setup(control_setup) == target_setup(case)):
+        raise CaseError(f"{source}: the negative control runs the identical invocation against "
+                        "an identical target, so it measures nothing — vary the invocation "
+                        "(a different method or injection point) or the target (a patched build)")
     control_expect = control.get("expect", "negative")
     if control_expect == "confirmed":
         raise CaseError(f"{source}: a negative control expecting 'confirmed' is a contradiction")
-    if control_expect not in VALID_EXPECTATIONS:
+    if control_expect not in CONTROL_EXPECTATIONS:
         raise CaseError(f"{source}: negative_control 'expect' must be one of "
-                        f"{', '.join(VALID_EXPECTATIONS)}, got {control_expect!r}")
+                        f"{', '.join(CONTROL_EXPECTATIONS)} — an outcome that means the target "
+                        f"was never exercised cannot show RCEKit avoids a false confirmation; "
+                        f"got {control_expect!r}")
     return case
 
 
@@ -289,13 +338,9 @@ def run_case(case: Dict[str, Any], vulhub_root: Optional[Path] = None,
     outcome["methods"] = sorted(set(method_signatures(report, outcome["verdict"])))
 
     control = case["negative_control"]
-    control_case = dict(case)
-    control_case.update({k: v for k, v in control.items() if k in ("vulhub_path", "compose",
-                                                                   "compose_down")})
-    if "vulhub_path" in control and "compose" not in control:
-        control_case.pop("compose", None)
+    control_invocation, control_case = control_plan(case)
     control_ok, control_detail, control_report = run_one(
-        control_case, control.get("invocation", case["invocation"]),
+        control_case, control_invocation,
         control.get("expect", "negative"), control.get("expect_method"),
         control.get("wait_for", case.get("wait_for")), control_case, vulhub_root,
         keep_up, verbose)

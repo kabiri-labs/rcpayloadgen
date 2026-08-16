@@ -37,8 +37,24 @@ Docker.
 A benchmark without negative controls measures nothing. A tool that shouted
 `confirmed` at every target would score full marks on the vulnerable half, and
 the harness would report that as progress. So a case passes only when **both**
-halves land, and `negative_control` is a required key — the runner refuses to
-load a case without one, and refuses a control that expects `confirmed`.
+halves land, and `negative_control` is a required key.
+
+The runner refuses to load a case whose control cannot measure anything:
+
+- **No control at all.**
+- **A control that expects `confirmed`** — a contradiction.
+- **A control that runs the identical invocation against an identical target.**
+  Judged on what it would actually run, not on which keys it declares: copying
+  the vulnerable `invocation` into the control is the same non-control as
+  omitting it. Vary the invocation (a different method or injection point) or
+  the target (a patched build). Reusing the *same* target with a *different*
+  invocation is the normal case and is fine.
+- **A control that expects `error` or `nothing-tested`.** Both mean the run never
+  exercised the target, so such a control would stay green with the detection
+  engine entirely broken — exactly what a control exists to catch. A control may
+  expect `negative`, `inconclusive`, or `needs-review`. (The vulnerable half may
+  still expect `error`: "an unreachable target reports `error`, not `negative`"
+  is a real property worth pinning.)
 
 Controls come in three kinds. All three share one invariant: the control must
 not reach `confirmed`.

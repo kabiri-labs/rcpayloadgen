@@ -30,13 +30,18 @@ from a given response; it cannot prove it confirms Webmin.
   images — so it runs by hand or in a dedicated job, and exits non-zero if any
   case fails. Two cases ship, transcribed from `docs/verify-it-yourself.md`:
   Webmin CVE-2019-15107 and Struts2 S2-001.
-- **A negative control is a required key.** The runner refuses to load a case
-  without one, refuses a control that expects `confirmed`, and refuses a control
-  that just repeats the vulnerable invocation. A benchmark without controls
-  measures nothing: a tool that shouted `confirmed` at every target would score
-  full marks on the vulnerable half. Three kinds are supported — a patched
-  build, the same target probed for the wrong class, and a weaker method that
-  must stay below `confirmed` on a target where it happens to be right.
+- **A negative control is a required key.** A benchmark without controls measures
+  nothing: a tool that shouted `confirmed` at every target would score full marks
+  on the vulnerable half. Three kinds are supported — a patched build, the same
+  target probed for the wrong class, and a weaker method that must stay below
+  `confirmed` on a target where it happens to be right. The runner refuses four
+  shapes of non-control: no control at all; one expecting `confirmed`; one that
+  runs the identical invocation against an identical target (judged on what it
+  would actually run, so an explicit copy of the vulnerable invocation is caught
+  as well as an omitted one); and one expecting `error` or `nothing-tested`,
+  since both mean the target was never exercised and such a control would stay
+  green with the detection engine entirely broken. Validation and execution
+  share one `control_plan` so they cannot drift.
 - **`overall_detection_verdict`** collapses a run to one verdict, ordered by what
   an operator must not miss rather than by frequency: one `confirmed` among a
   hundred negatives is the finding. `error` is reported only when *nothing*
