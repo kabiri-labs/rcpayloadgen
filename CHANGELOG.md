@@ -8,6 +8,49 @@ formats, or the template schema.
 
 ## [Unreleased]
 
+## [2.24.0] — 2026-08-16
+
+The computed value is no longer looked for in the response body alone. A sink
+whose output surfaces anywhere else in the response was reported `negative` — a
+false negative on a class RCEKit already claims to cover, which is worse than a
+missing class. The oracle, the random operands and the control differential are
+unchanged; only the set of places searched is wider.
+
+### Added
+
+- **Whole-response evidence search.** Every confirmation now sweeps the response
+  body, the application response headers, individual cookie values, the redirect
+  target RCEKit actually landed on, the HTTP reason phrase, and each leaf of a
+  parsed JSON body. Real sinks put command output in a debug header or a
+  `Set-Cookie`, and API targets surface an evaluator's result inside a nested
+  error envelope — `{"error": {"detail": "cannot render 2058898001"}}` — where a
+  substring search of the serialised body misses a value the encoder escaped.
+- **The evidence line names the channel that carried the value**, e.g.
+  `target computed 'RK…' in header X-Cmd-Out (random operands, absent from
+  control)`, so the finding stays reproducible by hand. A body-carried
+  confirmation reads exactly as it did before.
+
+### Changed
+
+- **The control differential now covers every channel, not just the body.** A
+  value present anywhere in the payload-free control is not attributable to
+  execution, so it yields `inconclusive` wherever it turned up. This is stricter
+  than comparing only the channel that matched, and it is what keeps a wider
+  search from becoming a looser verdict.
+- **The `file` method's control check covers every channel too**, on the same
+  reasoning: its token is random, so its presence in any control channel means
+  it did not get there by being written and served.
+
+### Security
+
+- **Transport headers are excluded from the sweep.** `Content-Length`, `Date`,
+  `Age`, `ETag` and their neighbours are generated below the application and can
+  never carry a computed value, but they *are* numeric — and the `expr` probe's
+  expected value is a bare boundary-fenced number. Searching them would let a
+  byte count collide with an arithmetic result and read as execution. Locked in
+  by a test that puts the expected value in `Content-Length` and requires
+  `negative`.
+
 ## [2.23.3] — 2026-08-04
 
 Four items from the same review: requests and seconds spent on work that could
@@ -285,7 +328,8 @@ this file and have not been restated here.
 - **[2.7.0]**
 - **[2.1.0]**
 
-[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.23.3...HEAD
+[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.24.0...HEAD
+[2.24.0]: https://github.com/kabiri-labs/rcekit/compare/v2.23.3...v2.24.0
 [2.23.3]: https://github.com/kabiri-labs/rcekit/compare/v2.23.2...v2.23.3
 [2.23.2]: https://github.com/kabiri-labs/rcekit/compare/v2.23.1...v2.23.2
 [2.23.1]: https://github.com/kabiri-labs/rcekit/compare/v2.23.0...v2.23.1

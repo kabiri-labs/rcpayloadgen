@@ -8,10 +8,10 @@ import re
 import string
 import sys
 import urllib.parse
-from dataclasses import asdict, dataclass, replace as dataclass_replace
+from dataclasses import asdict, dataclass, field as dataclass_field, replace as dataclass_replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
 # Configure logging
 logging.basicConfig(
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.23.3"
+__version__ = "2.24.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -1541,14 +1541,100 @@ class RCEKit:
                 continue
         return any(re.search(pattern, c) for c in candidates)
 
+    def _json_leaf_channels(self, body: str, limit: int = 256) -> List[Tuple[str, str]]:
+        """One channel per leaf of a JSON response body, addressed by its path.
+
+        Substring-matching the serialised JSON misses a value the encoder split
+        or escaped — ``"12\\u002f34"``, a number rendered inside a deeply nested
+        error envelope — so the parsed leaves are searched as their own decoded
+        strings. API targets surface an evaluator's output in exactly that
+        shape: ``{"error": {"detail": "cannot render 2058898001"}}``.
+
+        Booleans and nulls carry no computed value and are skipped. ``limit``
+        caps the walk so a pathological response cannot turn one probe into an
+        unbounded search."""
+        try:
+            parsed = json.loads(body)
+        except (ValueError, TypeError):
+            return []
+        leaves: List[Tuple[str, str]] = []
+
+        def walk(node: Any, path: str) -> None:
+            if len(leaves) >= limit:
+                return
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    walk(value, f"{path}.{key}" if path else str(key))
+            elif isinstance(node, list):
+                for index, value in enumerate(node):
+                    walk(value, f"{path}[{index}]")
+            elif isinstance(node, str) or isinstance(node, (int, float)) and not isinstance(node, bool):
+                leaves.append((f"JSON field {path or '(root)'}", str(node)))
+
+        walk(parsed, "")
+        return leaves
+
+    def _response_channels(self, headers: Iterable[Tuple[str, str]], body: str,
+                           reason: Optional[str] = None, final_url: Optional[str] = None,
+                           requested_url: Optional[str] = None) -> List[Tuple[str, str]]:
+        """Every place in one response where a computed value could surface,
+        as ordered ``(channel name, text)`` pairs.
+
+        Searching the body alone reports a genuinely vulnerable target as
+        negative whenever the sink's output lands somewhere else — a debug
+        header, a ``Set-Cookie`` value, the target of a redirect, an HTTP reason
+        phrase, or a leaf of a JSON error envelope are all real sinks. The body
+        stays first so the common case keeps its existing evidence line, and the
+        differential rule is unchanged: whatever channel carries the value, the
+        payload-free control must not carry it.
+
+        Transport headers are skipped (see ``NON_APPLICATION_HEADERS``)."""
+        channels: List[Tuple[str, str]] = [("response body", body)]
+        for name, value in headers:
+            if name.lower() in NON_APPLICATION_HEADERS:
+                continue
+            channels.append((f"header {name}", value))
+            if name.lower() == "set-cookie":
+                crumb = value.split(";", 1)[0]
+                cookie_name, _, cookie_value = crumb.partition("=")
+                if cookie_value:
+                    channels.append((f"cookie {cookie_name.strip()}", cookie_value.strip()))
+        # urllib follows redirects, so the Location header of an intermediate hop
+        # is already gone by the time we see a response. The URL we actually
+        # landed on preserves it, which is what a sink reflecting into a redirect
+        # target looks like from here.
+        if final_url and requested_url and final_url != requested_url:
+            channels.append(("redirect target", final_url))
+        if reason:
+            channels.append(("reason phrase", str(reason)))
+        channels.extend(self._json_leaf_channels(body))
+        return channels
+
     def _fire(self, payload: str, url: str, method: str, data: Optional[str],
               headers: Optional[List[str]], url_location: str, body_location: str,
               timeout: float) -> Tuple[Optional[int], str, float]:
+        """Deliver one request and return ``(status, body, elapsed)``.
+
+        The body-only view of :meth:`_fire_channels`, kept for callers whose
+        oracle reads the body alone (the classic ``run_verification`` path)."""
+        status, body, _channels, elapsed = self._fire_channels(
+            payload, url, method, data, headers, url_location, body_location, timeout)
+        return status, body, elapsed
+
+    def _fire_channels(self, payload: str, url: str, method: str, data: Optional[str],
+                       headers: Optional[List[str]], url_location: str, body_location: str,
+                       timeout: float) -> Tuple[Optional[int], str, List[Tuple[str, str]], float]:
         """Deliver one request with ``payload`` substituted at the FUZZ marker(s),
         encoded independently for each injection point. Returns
-        ``(status, body, elapsed)`` — ``status`` is ``None`` on a delivery error
-        or timeout. Shared delivery layer for ``run_verification`` and the
-        method-driven detection engine so both encode payloads identically."""
+        ``(status, body, channels, elapsed)`` — ``status`` is ``None`` on a
+        delivery error or timeout, in which case ``channels`` is empty. Shared
+        delivery layer for ``run_verification`` and the method-driven detection
+        engine so both encode payloads identically.
+
+        A non-2xx response is read, not discarded: many evaluators surface the
+        computed value only in a 500 stack trace or a 400 validation error, so
+        an early exit on status would silently suppress a whole class of
+        confirmations."""
         import time
         import urllib.request
         import urllib.error
@@ -1559,11 +1645,31 @@ class RCEKit:
         start = time.time()
         try:
             with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
-                return response.status, response.read().decode(errors="replace"), time.time() - start
+                text = response.read().decode(errors="replace")
+                return (response.status, text, self._channels_from_response(response, text, target),
+                        time.time() - start)
         except urllib.error.HTTPError as exc:
-            return exc.code, exc.read().decode(errors="replace"), time.time() - start
+            text = exc.read().decode(errors="replace")
+            return (exc.code, text, self._channels_from_response(exc, text, target),
+                    time.time() - start)
         except Exception as exc:  # network error, timeout, etc.
-            return None, str(exc), time.time() - start
+            return None, str(exc), [], time.time() - start
+
+    def _channels_from_response(self, response: Any, text: str,
+                                requested_url: str) -> List[Tuple[str, str]]:
+        """Adapt a urllib response (or an ``HTTPError``, which is one) to
+        :meth:`_response_channels`. Every attribute is read defensively: a
+        response object that is missing one must cost a channel, never a
+        traceback in the middle of a live engagement."""
+        try:
+            header_items = list(getattr(response, "headers", None).items())
+        except Exception:
+            header_items = []
+        return self._response_channels(
+            header_items, text,
+            reason=getattr(response, "reason", None),
+            final_url=getattr(response, "url", None),
+            requested_url=requested_url)
 
     def _verify_ssl_context(self):
         """SSL context for verification/detection requests. Returns ``None``
@@ -1746,9 +1852,10 @@ class RCEKit:
         selected = [DETECTION_METHODS[name](self, config) for name in methods
                     if name in DETECTION_METHODS]
 
-        # One payload-free control body for the reflection differential: the
-        # computed value must be absent here for a confirmation to hold.
-        _, control_body, _ = self._fire(
+        # One payload-free control for the reflection differential: the computed
+        # value must be absent from every one of its channels for a confirmation
+        # to hold.
+        _, control_body, control_channels, _ = self._fire_channels(
             f"rcekit-control-{self._generate_canary()}", url, method, data, headers,
             url_location, resolved_body_location, timeout)
 
@@ -1787,12 +1894,13 @@ class RCEKit:
                             break
                         for probe in batch:
                             req_timeout = timeout + (probe.delay_s or 0.0) + 2.0
-                            status, body, elapsed = self._fire(
+                            status, body, chans, elapsed = self._fire_channels(
                                 probe.payload, url, method, data, headers, url_location,
                                 resolved_body_location, req_timeout)
                             series.append((probe, Observation(
                                 status=status, body=body, control_body=control_body,
-                                elapsed=elapsed)))
+                                elapsed=elapsed, channels=chans,
+                                control_channels=control_channels)))
                             if delay:
                                 time.sleep(delay)
                         batch = meth.next_probes(series)
@@ -1825,7 +1933,7 @@ class RCEKit:
                     if probe.payload in seen:
                         continue
                     seen.add(probe.payload)
-                    status, body, elapsed = self._fire(
+                    status, body, chans, elapsed = self._fire_channels(
                         probe.payload, url, method, data, headers, url_location,
                         resolved_body_location, timeout)
                     # A followup fetch (file-based self-OOB): retrieve the file the
@@ -1837,7 +1945,8 @@ class RCEKit:
                             "", probe.followup["url"], "GET", None, None, "raw", "raw", timeout)
                         followup_body = f_body if f_status is not None else None
                     obs = Observation(status=status, body=body, control_body=control_body,
-                                      elapsed=elapsed, followup_body=followup_body)
+                                      elapsed=elapsed, followup_body=followup_body,
+                                      channels=chans, control_channels=control_channels)
                     verdict = meth.confirm(obs, probe)
                     result = {
                         "verdict": verdict.status, "detail": verdict.evidence,
@@ -2235,6 +2344,22 @@ SHELL_CAPABLE_ENVIRONMENTS = UNIX_SHELL_ENVIRONMENTS | {"windows"} | {
     "php", "python", "nodejs", "java", "dotnet", "ruby", "perl", "go",
 }
 
+# Response headers generated by the transport/entity layer rather than by the
+# application, so they can never carry a value the sink computed.
+#
+# They are excluded from the channel sweep because including them would open a
+# false-positive path, not because they are merely uninteresting: a probe whose
+# expected value is a bare boundary-fenced number (the `expr` shape computes a
+# 6-7 digit sum) can collide with an equally numeric Content-Length or Age, and
+# that collision would read as a confirmation the target never earned. The
+# guarantee that `confirmed` means executed outranks the last few percent of
+# channel coverage.
+NON_APPLICATION_HEADERS = frozenset({
+    "content-length", "content-range", "content-encoding", "transfer-encoding",
+    "date", "age", "expires", "last-modified", "etag", "retry-after",
+    "connection", "keep-alive", "accept-ranges", "vary",
+})
+
 
 @dataclass
 class Probe:
@@ -2281,6 +2406,12 @@ class Observation:
     elapsed: float = 0.0
     baseline: float = 0.0
     followup_body: Optional[str] = None
+    # Every channel of the response and of the control, as ``(name, text)``
+    # pairs — body, application headers, cookie values, the redirect target, the
+    # reason phrase, and JSON leaves. Empty means "body only", so an Observation
+    # built from a body alone behaves exactly as it did before channels existed.
+    channels: List[Tuple[str, str]] = dataclass_field(default_factory=list)
+    control_channels: List[Tuple[str, str]] = dataclass_field(default_factory=list)
 
 
 class DetectionMethod:
@@ -2356,6 +2487,23 @@ class DetectionMethod:
             pattern = r"(?<!\d)" + pattern + r"(?!\d)"
         return self.gen._encoded_search(pattern, body)
 
+    def _channels_of(self, body: str,
+                     channels: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
+        """The channels to search, falling back to the body when a caller built
+        the Observation from a body alone."""
+        return channels if channels else ([("response body", body)] if body else [])
+
+    def _search_channels(self, literal: str, channels: List[Tuple[str, str]],
+                         boundary: bool = False) -> Optional[str]:
+        """The name of the first channel carrying ``literal``, or ``None``.
+
+        Same encoded-aware, optionally digit-fenced match as :meth:`_search`,
+        applied across the whole response rather than the body alone."""
+        for name, text in channels:
+            if self._search(literal, text, boundary=boundary):
+                return name
+        return None
+
     def _confirm_computed(self, obs: "Observation", probe: "Probe",
                           noun: str = "computed value", boundary: bool = False) -> Verdict:
         """Shared confirmation for methods that make the target compute a value on
@@ -2368,15 +2516,30 @@ class DetectionMethod:
         may also appear when the target echoes the payload verbatim — the single
         most common command-injection pattern (``PING <input> ...``). That is NOT
         a reason to withhold confirmation: the computed value is already proof, so
-        the reflected literal is only noted, never a downgrade."""
+        the reflected literal is only noted, never a downgrade.
+
+        The value is looked for across every channel of the response, not the
+        body alone, and the matching channel is named in the evidence so the
+        finding stays reproducible by hand. The control differential is applied
+        across every channel of the control too — deliberately stricter than
+        comparing only the channel that matched, because a payload-free response
+        that already contains the expected value means the value is not
+        attributable to execution no matter where it turned up."""
         if obs.status is None:
             return Verdict("error", f"request never reached the target ({obs.body[:120]})")
-        if not self._search(probe.expected, obs.body, boundary=boundary):
+        channels = self._channels_of(obs.body, obs.channels)
+        where = self._search_channels(probe.expected, channels, boundary=boundary)
+        if where is None:
             return Verdict("negative", f"{noun} absent from the response")
-        if obs.control_body and self._search(probe.expected, obs.control_body, boundary=boundary):
-            return Verdict("inconclusive", f"{noun} also present in the payload-free control")
-        evidence = f"target computed {probe.expected!r} (random operands, absent from control)"
-        if probe.forbidden and self._search(probe.forbidden, obs.body):
+        control = self._channels_of(obs.control_body, obs.control_channels)
+        control_where = self._search_channels(probe.expected, control, boundary=boundary)
+        if control_where is not None:
+            detail = "" if control_where == "response body" else f" ({control_where})"
+            return Verdict("inconclusive", f"{noun} also present in the payload-free control{detail}")
+        channel_note = "" if where == "response body" else f" in {where}"
+        evidence = (f"target computed {probe.expected!r}{channel_note} "
+                    "(random operands, absent from control)")
+        if probe.forbidden and self._search_channels(probe.forbidden, channels):
             evidence += "; target also reflects the payload verbatim"
         return Verdict("confirmed", evidence)
 
@@ -2695,7 +2858,11 @@ class FileBased(DetectionMethod):
                            "could not fetch the written file (no write, wrong web root, or blocked)")
         if not self._search(probe.expected, obs.followup_body):
             return Verdict("negative", "token absent from the fetched file")
-        if obs.control_body and self._search(probe.expected, obs.control_body):
+        # The token is random, so its presence anywhere in the payload-free
+        # control — any channel, not just the body — means it did not get there
+        # by being written and served.
+        if self._search_channels(probe.expected,
+                                 self._channels_of(obs.control_body, obs.control_channels)):
             return Verdict("inconclusive", "token also present without the payload")
         return Verdict("confirmed",
                        f"target wrote and served token {probe.expected!r} (execution + write primitive)")
