@@ -43,15 +43,19 @@ unchanged; only the set of places searched is wider.
 
 ### Security
 
-- **A deeply nested JSON response can no longer silence detection.** `json.loads`
-  recurses in C and raises `RecursionError` past roughly a thousand levels, and
-  channels are built inside the delivery `try`/`except` — so an escaping
-  exception reported a response that arrived perfectly well as "request never
-  reached the target". Measured: every one of the 46 probes in a default
-  `reflected` run turned into `error`, which a target could induce deliberately
-  to hide a live sink behind a thousand nested arrays. The leaf walk is now
-  iterative and depth-capped, `RecursionError` costs the JSON channels only, and
-  building channels can never turn a delivered response into a delivery failure.
+- **A deeply nested JSON response can no longer silence detection.** Channels are
+  built inside the delivery `try`/`except`, so a `RecursionError` while parsing
+  or walking the body escaped as a network failure: a response that arrived
+  perfectly well was reported "request never reached the target". Measured:
+  every one of the 46 probes in a default `reflected` run turned into `error`,
+  which a target could induce deliberately to hide a live sink behind a thousand
+  nested arrays. Version-independent, though the source moves — CPython 3.12
+  raised the C recursion limit its JSON scanner runs under, so on 3.12/3.13 the
+  parser survives a depth that breaks it on 3.8–3.11 and the recursive leaf walk
+  hit the ordinary Python limit instead. The walk is now iterative and
+  depth-capped, `RecursionError` from the parser costs the JSON channels only,
+  and building channels can never turn a delivered response into a delivery
+  failure.
 - **Transport headers are excluded from the sweep.** `Content-Length`, `Date`,
   `Age`, `ETag` and their neighbours are generated below the application and can
   never carry a computed value, but they *are* numeric — and the `expr` probe's

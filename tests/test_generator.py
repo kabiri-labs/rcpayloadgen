@@ -102,6 +102,23 @@ def local_target(route):
         server.server_close()
 
 
+def deep_json_nesting():
+    """A JSON nesting depth that no *recursive* traversal can survive here.
+
+    Deliberately not "the depth at which `json.loads` raises": that threshold
+    moved between interpreters. CPython 3.12 raised the C recursion limit its
+    scanner runs under, so a body 2000 levels deep parses fine on 3.12/3.13 and
+    raises on 3.8-3.11. The defect was version-independent even so — where the
+    parser survived, the recursive leaf walk hit the ordinary Python limit
+    instead, and either way the exception escaped as a delivery failure.
+
+    Keying off ``sys.getrecursionlimit()`` states the premise that actually
+    holds everywhere: at this depth a recursive walk exceeds the interpreter's
+    own limit, so a test using it cannot go quietly vacuous."""
+    import sys
+    return max(2000, sys.getrecursionlimit() * 2)
+
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "rcekit.py"
 
@@ -3872,14 +3889,22 @@ class ResponseChannelTestCase(unittest.TestCase):
         # as a failed request -- letting a target hide a live sink behind a
         # thousand nested arrays. Losing the JSON leaves is the acceptable cost;
         # losing the response is not.
-        deep = "[" * 2000 + '"x"' + "]" * 2000
-        # Assert the premise, so this test cannot quietly stop exercising the
-        # recursion path if a future interpreter raises the limit.
-        with self.assertRaises(RecursionError):
-            json.loads(deep)
+        nesting = deep_json_nesting()
+        deep = "[" * nesting + '"x"' + "]" * nesting
         self.assertEqual(self.gen._json_leaf_channels(deep), [])
         channels = self.gen._response_channels([("X-Debug", "v")], deep)
         self.assertEqual(channels[0], ("response body", deep))
+        self.assertIn(("header X-Debug", "v"), channels)
+
+    def test_a_recursion_error_from_the_json_parser_costs_only_its_channels(self):
+        # The parser's own limit moved between interpreter versions, so the
+        # handling is pinned deterministically rather than through whichever
+        # nesting depth happens to break the current CPython.
+        import unittest.mock as mock
+        with mock.patch("rcekit.json.loads", side_effect=RecursionError("too deep")):
+            self.assertEqual(self.gen._json_leaf_channels('{"a": 1}'), [])
+            channels = self.gen._response_channels([("X-Debug", "v")], '{"a": 1}')
+        self.assertEqual(channels[0], ("response body", '{"a": 1}'))
         self.assertIn(("header X-Debug", "v"), channels)
 
     def test_leaf_walk_is_bounded_by_depth_and_count(self):
@@ -4033,9 +4058,7 @@ class ResponseChannelTestCase(unittest.TestCase):
         # target" -- and a live sink would read as untestable.
         import os
 
-        nesting = 2000
-        with self.assertRaises(RecursionError):
-            json.loads("[" * nesting + '"x"' + "]" * nesting)
+        nesting = deep_json_nesting()
 
         def route(method, path, params, headers, body):
             pipe = os.popen("echo " + params.get("host", "") + " 2>&1")
