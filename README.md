@@ -1,6 +1,6 @@
 # RCEKit — prove RCE, don't guess it
 
-**Version 2.23.3** · MIT · Python 3.8+ · zero third-party dependencies
+**Version 2.24.0** · MIT · Python 3.8+ · zero third-party dependencies
 
 RCEKit is an **RCE detection &amp; confirmation toolkit** for authorised penetration
 testing, red teaming, and security research. Point it at a target you are allowed
@@ -189,6 +189,12 @@ verdict, and they run on every confirmation:
 - **Encoding-aware evidence search.** A sink that base64-, hex-, URL-, HTML- or
   unicode-escapes its output still confirms — the raw body is checked first, so
   decoding only ever turns a missed hit into a hit, never the reverse.
+- **Whole-response evidence search.** The computed value is looked for in every
+  channel of the response — body, application headers, cookie values, the
+  redirect target, the HTTP reason phrase, and each leaf of a JSON error
+  envelope — and the finding names the channel that carried it. The control
+  differential is applied to every channel too, so widening where RCEKit looks
+  does not widen what it will call `confirmed`.
 
 And timing **never self-confirms**: a linear `0/N/2N` regression is capped at
 `needs-review` and reported in its own tier, because it produces no computed
