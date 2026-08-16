@@ -8,6 +8,54 @@ formats, or the template schema.
 
 ## [Unreleased]
 
+## [2.25.0] — 2026-08-16
+
+A coverage benchmark, so a claim about what RCEKit confirms can be checked
+instead of asserted. The unit suite proves the tool reaches the right verdict
+from a given response; it cannot prove it confirms Webmin.
+
+### Added
+
+- **`--detect-json PATH`** writes a detection run as JSON: the run's overall
+  verdict, per-verdict counts, and every probe with its payload, method, context
+  and evidence. Text output is unchanged. This is the supported way to consume a
+  run programmatically — scraping stdout cannot be made reliable, because a
+  probe payload may contain a literal newline (the newline separator is a real
+  one, so line-oriented parsing splits a payload in half) and the detection path
+  exits 0 whether it confirmed or came back clean.
+- **`tests/bench/` — the coverage benchmark harness.** Each case brings a real
+  vulnerable build up, runs RCEKit as an operator would, checks the verdict, and
+  tears it down; `--markdown` emits the coverage table. Not part of
+  `python -m unittest discover -s tests` — cases need Docker and pull real
+  images — so it runs by hand or in a dedicated job, and exits non-zero if any
+  case fails. Two cases ship, transcribed from `docs/verify-it-yourself.md`:
+  Webmin CVE-2019-15107 and Struts2 S2-001.
+- **A negative control is a required key.** The runner refuses to load a case
+  without one, refuses a control that expects `confirmed`, and refuses a control
+  that just repeats the vulnerable invocation. A benchmark without controls
+  measures nothing: a tool that shouted `confirmed` at every target would score
+  full marks on the vulnerable half. Three kinds are supported — a patched
+  build, the same target probed for the wrong class, and a weaker method that
+  must stay below `confirmed` on a target where it happens to be right.
+- **`overall_detection_verdict`** collapses a run to one verdict, ordered by what
+  an operator must not miss rather than by frequency: one `confirmed` among a
+  hundred negatives is the finding. `error` is reported only when *nothing*
+  reached the target, and a run that built no probes is `nothing-tested` —
+  never `negative`, which would read as "not vulnerable".
+
+### Changed
+
+- `CONTRIBUTING.md` asks for a bench case alongside new detection coverage, and
+  for the README table to state the tier the case actually reached.
+
+### Notes
+
+- The two shipped cases have **not yet been executed through the harness** — it
+  was written where no Docker daemon was available. Their invocations come from
+  a documented, reproduced guide, but the case files themselves are unvalidated;
+  `tests/bench/README.md` says so and flags the one field that is a guess. No
+  README claim was changed to assert benchmark results.
+
 ## [2.24.0] — 2026-08-16
 
 The computed value is no longer looked for in the response body alone. A sink
@@ -341,7 +389,8 @@ this file and have not been restated here.
 - **[2.7.0]**
 - **[2.1.0]**
 
-[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.24.0...HEAD
+[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.25.0...HEAD
+[2.25.0]: https://github.com/kabiri-labs/rcekit/compare/v2.24.0...v2.25.0
 [2.24.0]: https://github.com/kabiri-labs/rcekit/compare/v2.23.3...v2.24.0
 [2.23.3]: https://github.com/kabiri-labs/rcekit/compare/v2.23.2...v2.23.3
 [2.23.2]: https://github.com/kabiri-labs/rcekit/compare/v2.23.1...v2.23.2

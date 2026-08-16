@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.24.0"
+__version__ = "2.25.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -3352,6 +3352,57 @@ HIGH_RISK_CATEGORIES = {
 }
 
 
+def overall_detection_verdict(results: List[Dict[str, Any]]) -> str:
+    """The one verdict that describes a whole detection run.
+
+    Ordered by what the operator must not miss, and deliberately not by
+    frequency: one ``confirmed`` among a hundred negatives is the finding, so it
+    wins. ``needs-review`` outranks ``negative`` for the same reason.
+
+    ``error`` is reported only when *nothing* reached the target. A run that
+    reached the target and found nothing is a real negative even if some probes
+    errored on the way; a run where every probe failed to arrive tested nothing
+    at all, and calling that ``negative`` would read as "not vulnerable".
+    ``nothing-tested`` is its sibling: no probes were built, so there is not
+    even a delivery to speak of."""
+    if not results:
+        return "nothing-tested"
+    verdicts = {result["verdict"] for result in results}
+    for tier in ("confirmed", "needs-review"):
+        if tier in verdicts:
+            return tier
+    if verdicts == {"error"}:
+        return "error"
+    if "inconclusive" in verdicts:
+        return "inconclusive"
+    return "negative"
+
+
+def write_detection_json(path: str, results: List[Dict[str, Any]], target: str,
+                         methods: List[str]) -> None:
+    """Write a detection run to ``path`` as JSON.
+
+    The machine-readable sibling of the ``[detect]`` text report, for callers
+    that need the outcome rather than a human summary — the benchmark harness
+    is the first. Scraping stdout cannot work: a probe payload may contain a
+    literal newline (the newline separator is a real one, so line-oriented
+    parsing splits a payload in half), and the detection path exits 0 whether it
+    confirmed or came back clean."""
+    counts: Dict[str, int] = {}
+    for result in results:
+        counts[result["verdict"]] = counts.get(result["verdict"], 0) + 1
+    payload = {
+        "rcekit_version": __version__,
+        "target": target,
+        "methods": list(methods),
+        "verdict": overall_detection_verdict(results),
+        "counts": counts,
+        "probes": results,
+    }
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+
+
 def oob_channel_warnings(args: Any, dns_up: bool) -> List[str]:
     """Which of the OOB probe shapes can actually reach this listener.
 
@@ -3802,6 +3853,13 @@ def main():
                              "time (hardened blind-timing regression, needs-review only). "
                              "Opt-in and additive: when omitted, verification keeps its existing behaviour "
                              "unchanged.")
+    parser.add_argument("--detect-json", default=None, metavar="PATH",
+                        help="(--methods) Also write the detection results to PATH as JSON: the run's "
+                             "overall verdict, per-verdict counts, and every probe with its payload, "
+                             "method, context and evidence. Text output is unchanged. Use this instead "
+                             "of scraping stdout — a probe payload may contain a literal newline, and "
+                             "the process exit status does not distinguish a confirmation from a clean "
+                             "negative.")
     parser.add_argument("--verify-chain", default=None,
                         help="Path to a JSON chain profile: deliver each payload through a multi-step, "
                              "session-aware flow (login/CSRF -> prerequisites -> payload delivery -> trigger) "
@@ -4193,6 +4251,17 @@ def main():
                 url_location=args.verify_url_location, body_location=args.verify_body_location,
                 config=detection_config,
             )
+            if args.detect_json:
+                # Written before the text report and regardless of outcome, so a
+                # caller always gets a file to read -- including the
+                # nothing-tested case, which is exactly the one a benchmark must
+                # not mistake for a clean negative.
+                try:
+                    write_detection_json(args.detect_json, results, verify_url, method_names)
+                    print(f"[detect] results written to {args.detect_json}")
+                except OSError as exc:
+                    print(f"[!] could not write --detect-json {args.detect_json}: {exc}")
+                    return 1
             by_verdict = {}
             for result in results:
                 by_verdict[result["verdict"]] = by_verdict.get(result["verdict"], 0) + 1

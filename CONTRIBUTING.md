@@ -55,3 +55,30 @@ To add one:
 4. Add a `/vuln` (executes) vs `/reflect` (echoes) test to
    `DetectionMethodTestCase`: the method must `confirm` on `/vuln` and stay
    unconfirmed on `/reflect`. No third-party deps; keep the suite green on 3.8+.
+5. Add a **bench case** (see below). A unit test proves the method reaches the
+   right verdict from a given response; only a bench case proves it reaches that
+   verdict against the real software.
+
+## Adding a bench case
+
+`tests/bench/` runs RCEKit against real vulnerable targets and checks the
+verdicts, so a coverage claim can be checked rather than asserted. It needs
+Docker and a [vulhub](https://github.com/vulhub/vulhub) checkout, so it is
+deliberately **not** part of `python -m unittest discover -s tests`:
+
+```bash
+python tests/bench/runner.py --list
+python tests/bench/runner.py --all --vulhub-root ~/vulhub --markdown coverage.md
+```
+
+New detection coverage should arrive with a case. Every case needs a **negative
+control** — the runner refuses to load one without it — because a benchmark with
+no controls rewards aggressive probing instead of measuring accuracy. The
+control may be a patched build, the same target probed for the wrong class, or a
+weaker method that must stay below `confirmed` on a target where it happens to
+be right.
+
+Run your case against the real target before submitting, and update the README
+table with the verdict tier it **actually** reached. A README claim the bench
+cannot reproduce is worse than a missing feature.
+[`tests/bench/README.md`](tests/bench/README.md) documents the case format.

@@ -1,0 +1,46 @@
+{
+  "name": "struts2-s2-001",
+  "rce_class": "Expression injection (OGNL)",
+  "target": "Apache Struts2 — S2-001",
+  "vulhub_path": "struts2/s2-001",
+  "compose": ["docker", "compose", "up", "-d", "--build"],
+  "compose_down": ["docker", "compose", "down", "-v"],
+  "wait_for": {
+    "url": "http://127.0.0.1:8080/",
+    "status": 200,
+    "timeout": 240
+  },
+  "invocation": [
+    "--verify-url", "http://127.0.0.1:8080/login.action",
+    "--verify-method", "POST",
+    "--verify-data", "username=FUZZ",
+    "--methods", "eval"
+  ],
+  "expect": "confirmed",
+  "expect_method": "eval",
+  "negative_control": {
+    "kind": "class-attribution",
+    "invocation": [
+      "--verify-url", "http://127.0.0.1:8080/login.action",
+      "--verify-method", "POST",
+      "--verify-data", "username=FUZZ",
+      "--methods", "reflected"
+    ],
+    "expect": "negative"
+  },
+  "notes": [
+    "The control is class attribution: the same vulnerable target, probed for the",
+    "wrong class, must come back clean. S2-001 re-evaluates submitted values as",
+    "OGNL — there is no shell behind it — so the shell-syntax probes of `reflected`",
+    "have nothing to execute. A tool that confirmed here would be flagging the",
+    "parameter, not the class.",
+    "Both halves are stated as reproduced in docs/verify-it-yourself.md.",
+    "UNVERIFIED IN THIS FORM: that document deliberately tells the operator to read",
+    "the form's action and field name off the running app rather than trusting a",
+    "guess. /login.action + username are vulhub's documented defaults for s2-001,",
+    "but this case has not been executed. Confirm them on the first run:",
+    "  curl -s http://127.0.0.1:8080/ | grep -iE '<form|<input'",
+    "and correct this file if they differ.",
+    "--build is in the compose command because vulhub's s2-001 ships a Dockerfile."
+  ]
+}
