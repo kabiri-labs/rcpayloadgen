@@ -3865,6 +3865,44 @@ class ResponseChannelTestCase(unittest.TestCase):
     def test_non_json_body_yields_no_leaf_channels(self):
         self.assertEqual(self.gen._json_leaf_channels("<html>not json</html>"), [])
 
+    def test_deeply_nested_json_costs_a_channel_not_the_request(self):
+        # json.loads' scanner recurses in C and raises RecursionError on a deeply
+        # nested body. Channels are built inside the delivery try/except, so an
+        # escaping exception would report a response that arrived perfectly well
+        # as a failed request -- letting a target hide a live sink behind a
+        # thousand nested arrays. Losing the JSON leaves is the acceptable cost;
+        # losing the response is not.
+        deep = "[" * 2000 + '"x"' + "]" * 2000
+        # Assert the premise, so this test cannot quietly stop exercising the
+        # recursion path if a future interpreter raises the limit.
+        with self.assertRaises(RecursionError):
+            json.loads(deep)
+        self.assertEqual(self.gen._json_leaf_channels(deep), [])
+        channels = self.gen._response_channels([("X-Debug", "v")], deep)
+        self.assertEqual(channels[0], ("response body", deep))
+        self.assertIn(("header X-Debug", "v"), channels)
+
+    def test_leaf_walk_is_bounded_by_depth_and_count(self):
+        nested = json.dumps({"a": {"b": {"c": "deep"}}})
+        self.assertEqual(self.gen._json_leaf_channels(nested, max_depth=1), [])
+        self.assertTrue(self.gen._json_leaf_channels(nested, max_depth=8))
+        wide = json.dumps({"k%d" % i: i for i in range(50)})
+        self.assertEqual(len(self.gen._json_leaf_channels(wide, limit=10)), 10)
+
+    def test_channel_construction_never_turns_a_response_into_an_error(self):
+        # Belt and braces for the same failure mode: whatever goes wrong while
+        # building channels, a delivered response keeps its body channel.
+        class Hostile:
+            reason = "OK"
+            url = "http://t/x"
+
+            @property
+            def headers(self):
+                raise RuntimeError("boom")
+
+        self.assertEqual(self.gen._channels_from_response(Hostile(), "hello", "http://t/x")[0],
+                         ("response body", "hello"))
+
     # -- verdicts ------------------------------------------------------------
 
     def test_confirms_a_value_carried_only_by_a_header(self):
@@ -3988,6 +4026,30 @@ class ResponseChannelTestCase(unittest.TestCase):
                 [self.rec], url=f"{base}/err?host=FUZZ", methods=["reflected"])
         self.assertTrue([r for r in results if r["verdict"] == "confirmed"],
                         "a 500 response carrying the computed value must confirm")
+
+    def test_deeply_nested_json_does_not_silence_detection_end_to_end(self):
+        # The evasion this guards against: a target that buries its response in
+        # deep JSON would make every probe report `error` -- "never reached the
+        # target" -- and a live sink would read as untestable.
+        import os
+
+        nesting = 2000
+        with self.assertRaises(RecursionError):
+            json.loads("[" * nesting + '"x"' + "]" * nesting)
+
+        def route(method, path, params, headers, body):
+            pipe = os.popen("echo " + params.get("host", "") + " 2>&1")
+            out = pipe.read()
+            pipe.close()
+            return 200, "[" * nesting + json.dumps(out) + "]" * nesting
+
+        with local_target(route) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/deep?host=FUZZ", methods=["reflected"])
+        self.assertFalse([r for r in results if r["verdict"] == "error"],
+                         "a delivered response must never be reported as a delivery failure")
+        self.assertTrue([r for r in results if r["verdict"] == "confirmed"],
+                        "the body channel still carries the computed value")
 
     def test_a_clean_target_stays_negative_across_all_channels(self):
         # False-positive resistance, restated for the wider sweep: a target that
