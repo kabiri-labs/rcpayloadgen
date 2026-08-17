@@ -9,6 +9,7 @@ starting point — this page is for looking things up once you know what you wan
 - [Choosing the target](#choosing-the-target)
 - [Detection methods](#detection-methods)
 - [Sink shape](#sink-shape)
+- [The sink shell](#the-sink-shell)
 - [Safety &amp; consent](#safety--consent)
 - [Out-of-band listener](#out-of-band-listener)
 - [Generation &amp; output](#generation--output)
@@ -56,6 +57,7 @@ starting point — this page is for looking things up once you know what you wan
 | `--probe-depth` | `full` (also the substitution-free and comment-terminated shapes) or `quick` | `full` |
 | `--detect-json` | Also write the run to this path as JSON: overall verdict, counts, every probe | None |
 | `--sink-shape` | Sink shapes the shell probes try: `auto`, or any of `sep`, `raw`, `chain`, `newline`, `dq`, `sq`, `subshell` | `auto` |
+| `--sink-env` | Shell that runs the injected command: `auto`, `unix`, `windows`, `powershell` | `auto` |
 | `--eval-engines` | (`eval`) Engine carriers to add to the bare expression probes: `auto`, or names from `eval_carriers` | `auto` |
 | `--auto-params` | (`-r` with `--methods`) Enumerate injection points: kinds from `query`, `json`, `form`, `cookie`, `header`, `path`, or `all`. Implied by `-p all` | off |
 | `--point-order` | (enumeration) `fast` (curated high-yield headers) or `thorough` (every non-hop-by-hop header) | `fast` |
@@ -303,6 +305,51 @@ too. The plan is printed before anything is sent:
 
 `eval` does not ride the ladder: its probes are template/expression syntax, not
 shell, so no separator or quote break-out applies to them.
+
+### The sink shell
+
+The ladder says *where the value lands*; `--sink-env` says *which shell reads
+it*. Every part of a shell probe is dialect-specific, so the two questions are
+independent and both have to be right:
+
+| | `unix` | `windows` (cmd.exe) | `powershell` |
+|---|---|---|---|
+| computed value | `$((a+b))` | `for /f … ('set /a a+b')` | `Write-Output T1$(a*b)T2` |
+| delay | `sleep N` | `ping 127.0.0.1 -n k >nul` | `Start-Sleep -Milliseconds N` |
+| write | `echo TOK > path` | `echo TOK>path` | `Set-Content -Path path -Value TOK` |
+| call back | `curl`, `nslookup`, `host` | `certutil`, `nslookup` | `iwr -useb`, `nslookup` |
+| separators | `;` `\|` `\|\|` `&&` newline | `&` `\|` `\|\|` `&&` | `;` newline `&&` `\|\|` |
+| break-out contexts | `sq` `dq` `subshell` (`$( )` and backtick) | none | `sq` `dq` `subshell` (`$( )` only) |
+
+A probe written for the wrong shell costs a request and can only come back
+negative — `$((a+b))` is inert text on cmd.exe, and `sleep 5` is not a command
+there at all. Three of those rows are worth stating outright because they are
+not symmetric:
+
+- **cmd.exe has no comment character and no command substitution**, so the `sq`,
+  `dq` and `subshell` rungs have no shape it can execute and no carriers are
+  built for them. Narrowing to `--sink-env windows` therefore also narrows the
+  ladder, and the pre-flight plan says so.
+- **PowerShell has no pipe break-out.** `cmd | Start-Sleep -Milliseconds 500` is
+  a parameter-binding error, not a fresh command with stdin attached, and it
+  fails that way for every cmdlet the probes use. `;`, a newline and (on
+  PowerShell 7) `&&`/`||` are the working ones.
+- **The backtick is PowerShell's escape character**, not a substitution, so the
+  `subshell` rung is `$( )` alone there.
+
+`auto` infers the dialect per carrier: the `powershell` context takes the
+PowerShell shape, `windows_cmd` and the rest of the `windows` environment take
+cmd.exe, everything else takes POSIX. Pin it when the corpus environment names
+the *application runtime* rather than the OS — `--environments php --sink-env
+windows` is a PHP application on IIS, which `auto` cannot see. The `dotnet`
+environment is the one runtime that also gets cmd.exe and PowerShell carriers
+under `auto`; every other runtime keeps the POSIX shape, since a language does
+not say which OS it runs on.
+
+```
+[detect] sink shell: auto (per carrier)
+[detect] sink shapes: auto (full ladder)
+```
 
 ### Machine-readable results
 
