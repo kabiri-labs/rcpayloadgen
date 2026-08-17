@@ -51,6 +51,20 @@ tried.
 - A JSON leaf is **replaced, never created**. Assigning to a missing key would
   have injected into a field the application never sends — a probe that cannot
   say anything about the parameter that does exist. Caught by its own test.
+- **JSON points are addressed by tokens, not by a joined path string.** A key may
+  itself contain the separator: `{"user.name": ..., "user": {"name": ...}}`
+  rendered *both* leaves as `user.name`, so the literal key was never probed and
+  both candidates mutated the nested field — a false negative and a misattributed
+  finding at once. Tokens remove the ambiguity, and the display form
+  bracket-quotes such a key (`["user.name"]`) so the two stay distinguishable on
+  screen.
+- **A deeply nested captured body no longer ends `-p all` with a traceback.**
+  `json.loads` recurses in C, so `RecursionError` joins the caught exceptions in
+  both the enumerator and the placer, as it already had in the response-channel
+  parser. The body yields no candidates; the rest of the request still enumerates.
+- **The cost estimate honours `--max-payloads`.** It counted every probe the
+  carriers could produce while the run stops at the cap, so the figure was wrong
+  exactly when the operator had reached for the budget guard.
 - `Host`, `Content-Length`, `Cookie` and the hop-by-hop headers are never
   candidates: injecting into those changes the request's plumbing rather than
   testing the application, and two of them are rebuilt by the delivery layer.

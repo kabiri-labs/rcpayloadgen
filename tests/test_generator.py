@@ -3903,7 +3903,15 @@ class InjectionPointPlacementTestCase(unittest.TestCase):
         self.req = parse_raw_request(RAW_CAPTURE)
 
     def _place(self, kind, name):
-        point = rcekit.InjectionPoint(kind, name, f"{kind} '{name}'")
+        if kind == "json":
+            # JSON points are addressed by tokens, so take the real enumerated
+            # point rather than hand-building one — that is the pairing that
+            # actually runs.
+            point = next((p for p in rcekit.enumerate_injection_points(self.req)
+                          if p.kind == "json" and p.name == name),
+                         rcekit.InjectionPoint("json", name, name, ()))
+        else:
+            point = rcekit.InjectionPoint(kind, name, f"{kind} '{name}'")
         return rcekit.place_injection_point(
             self.req["target"], self.req["headers"], self.req["body"], point, "FUZZ")
 
@@ -4025,26 +4033,86 @@ class EnumerationEndToEndTestCase(unittest.TestCase):
 
 
 class JsonPathTestCase(unittest.TestCase):
-    def test_tokens_split_names_and_indices(self):
-        self.assertEqual(rcekit._json_path_tokens("user.profile.name"),
-                         ["user", "profile", "name"])
-        self.assertEqual(rcekit._json_path_tokens("items[0].v"), ["items", 0, "v"])
-        self.assertEqual(rcekit._json_path_tokens("a[1][2]"), ["a", 1, 2])
-
-    def test_leaf_paths_skip_containers_booleans_and_nulls(self):
+    def test_leaf_tokens_skip_containers_booleans_and_nulls(self):
         obj = {"a": {"b": 1}, "ok": True, "none": None, "list": [{"c": "x"}]}
-        self.assertEqual(rcekit._json_leaf_paths(obj), ["a.b", "list[0].c"])
+        self.assertEqual(rcekit._json_leaf_tokens(obj), [("a", "b"), ("list", 0, "c")])
+
+    def test_rendering_is_readable_and_quotes_ambiguous_keys(self):
+        self.assertEqual(rcekit._render_json_path(("user", "profile", "name")),
+                         "user.profile.name")
+        self.assertEqual(rcekit._render_json_path(("items", 0, "v")), "items[0].v")
+        # A key containing the separator must not render as the nested path of
+        # the same spelling.
+        self.assertEqual(rcekit._render_json_path(("user.name",)), '["user.name"]')
+        self.assertNotEqual(rcekit._render_json_path(("user.name",)),
+                            rcekit._render_json_path(("user", "name")))
 
     def test_setting_a_missing_path_fails_rather_than_creating_it(self):
         obj = {"a": {"b": 1}}
-        self.assertFalse(rcekit._set_json_path(obj, "a.zzz.q", "X"))
-        self.assertFalse(rcekit._set_json_path(obj, "list[3]", "X"))
-        self.assertTrue(rcekit._set_json_path(obj, "a.b", "X"))
+        self.assertFalse(rcekit._set_json_tokens(obj, ("a", "zzz", "q"), "X"))
+        self.assertFalse(rcekit._set_json_tokens(obj, ("list", 3), "X"))
+        self.assertFalse(rcekit._set_json_tokens(obj, (), "X"))
+        self.assertTrue(rcekit._set_json_tokens(obj, ("a", "b"), "X"))
         self.assertEqual(obj["a"]["b"], "X")
 
     def test_a_deeply_nested_body_is_bounded_not_fatal(self):
         deep = json.loads("[" * 400 + '"x"' + "]" * 400)
-        self.assertEqual(rcekit._json_leaf_paths(deep, max_depth=8), [])
+        self.assertEqual(rcekit._json_leaf_tokens(deep, max_depth=8), [])
+
+
+class JsonKeyBoundaryTestCase(unittest.TestCase):
+    """A JSON key may itself contain the characters a dotted path uses.
+
+    Addressing by a joined string could not tell `{"user.name": ...}` from
+    `{"user": {"name": ...}}`: both rendered as `user.name`, so the literal key
+    was never probed and both candidates mutated the nested field — a false
+    negative and a misattributed finding at once."""
+
+    RAW = ('POST /a HTTP/1.1\r\nHost: t.example\r\nContent-Type: application/json\r\n\r\n'
+           '{"user.name": "sinkA", "user": {"name": "sinkB"}, "a[0]": "sinkC"}')
+
+    def setUp(self):
+        self.req = parse_raw_request(self.RAW)
+        self.points = [p for p in rcekit.enumerate_injection_points(self.req)
+                       if p.kind == "json"]
+
+    def _place(self, point):
+        placed = rcekit.place_injection_point(
+            self.req["target"], self.req["headers"], self.req["body"], point, "FUZZ")
+        return json.loads(placed[2]) if placed else None
+
+    def test_ambiguous_keys_get_distinct_labels(self):
+        names = [p.name for p in self.points]
+        self.assertEqual(len(names), len(set(names)), names)
+        self.assertIn('["user.name"]', names)
+        self.assertIn("user.name", names)
+        self.assertIn('["a[0]"]', names)
+
+    def test_each_candidate_reaches_its_own_leaf(self):
+        placed = {p.name: self._place(p) for p in self.points}
+        self.assertEqual(placed['["user.name"]']["user.name"], "FUZZ")
+        self.assertEqual(placed['["user.name"]']["user"]["name"], "sinkB",
+                         "the nested field must be untouched")
+        self.assertEqual(placed["user.name"]["user"]["name"], "FUZZ")
+        self.assertEqual(placed["user.name"]["user.name"], "sinkA",
+                         "the literal key must be untouched")
+        self.assertEqual(placed['["a[0]"]']["a[0]"], "FUZZ")
+
+    def test_no_candidate_is_silently_skipped(self):
+        for point in self.points:
+            self.assertIsNotNone(self._place(point), point.name)
+
+    def test_a_deeply_nested_capture_does_not_kill_enumeration(self):
+        # json.loads recurses in C, so a deep body would end `-p all` with a
+        # traceback rather than an enumeration.
+        deep = "[" * 3000 + '"x"' + "]" * 3000
+        raw = ('POST /a?q=1 HTTP/1.1\r\nHost: t.example\r\n'
+               'Content-Type: application/json\r\n\r\n' + deep)
+        points = rcekit.enumerate_injection_points(parse_raw_request(raw))
+        self.assertFalse([p for p in points if p.kind == "json"],
+                         "an unparseable body yields no JSON candidates")
+        self.assertTrue([p for p in points if p.kind == "query"],
+                        "and the rest of the request still enumerates")
 
 
 class DetectionCostEstimateTestCase(unittest.TestCase):
@@ -4077,6 +4145,22 @@ class DetectionCostEstimateTestCase(unittest.TestCase):
 
     def test_an_unknown_method_is_ignored_rather_than_fatal(self):
         self.assertEqual(self.gen.estimate_detection_probes(self.records, ["nosuchmethod"]), 0)
+
+    def test_the_estimate_honours_max_payloads(self):
+        # An estimate that ignores the cap is wrong exactly when the operator
+        # reached for the budget guard.
+        uncapped = self.gen.estimate_detection_probes(self.records, ["reflected"])
+        self.assertGreater(uncapped, 12)
+        self.assertEqual(
+            self.gen.estimate_detection_probes(self.records, ["reflected"], max_payloads=12), 12)
+
+    def test_the_capped_estimate_still_matches_a_capped_run(self):
+        with local_target(lambda *a: (200, "static")) as base:
+            results = self.gen.run_detection(
+                self.records, url=f"{base}/?x=FUZZ", methods=["reflected"], max_payloads=12)
+        self.assertEqual(
+            self.gen.estimate_detection_probes(self.records, ["reflected"], max_payloads=12),
+            len(results))
 
 
 class EvalCarrierTestCase(unittest.TestCase):
