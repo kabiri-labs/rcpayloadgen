@@ -8,6 +8,48 @@ formats, or the template schema.
 
 ## [Unreleased]
 
+## [2.27.0] — 2026-08-17
+
+Engine carriers for the `eval` probe. Three template engines evaluate the
+injected expression perfectly and still made RCEKit report `negative`, because
+what came back was not the bare product the oracle searches for.
+
+### Added
+
+- **`eval_carriers` in the corpus**, and `--eval-engines auto|<names>` to select
+  them. A carrier wraps the same random-operand arithmetic in an engine-specific
+  form; it never changes the oracle, and the bare probes still run first. Each
+  entry records `notes` (why it exists) and `verified` (what it was measured
+  against). Declarative, so a new carrier is a JSON entry rather than a code
+  change.
+
+  | Engine | Bare `${a*b}` returned | Carrier | Carrier returned |
+  |---|---|---|---|
+  | Freemarker | `2,070,761,401` (locale grouping) | `${(a*b)?c}` | `2070761401` |
+  | Velocity | `${a*b}` verbatim — a *reference*, not an expression | `#set($rk=a*b)$rk` | `2070761401` |
+  | Thymeleaf | `${a*b}` verbatim — needs inlining brackets | `[[${a*b}]]` | `2070761401` |
+
+  Measured against freemarker 2.3.32, velocity-engine-core 2.3 and thymeleaf
+  3.1.2, running RCEKit's own generated probes through each engine: bare form
+  `CONFIRMS=no`, carrier `CONFIRMS=YES`, for all three.
+- **The evidence line names the carrier** — `target computed '3979016' via the
+  freemarker carrier` — so a finding says which engine quirk it worked around.
+  A bare confirmation reads exactly as before.
+
+### Notes
+
+- **Carriers are not sandbox escapes, and no sandbox-escape carrier ships.** The
+  premise that a sandboxed engine blocks the arithmetic probe did not survive
+  measurement: a member-access sandbox restricts method and field access, and
+  arithmetic needs neither. With OGNL member access denied for *everything*,
+  `40277*51413` still returned `2070761401` while `@java.lang.Math@max(1,2)` was
+  blocked; SpEL's restricted `SimpleEvaluationContext` and Jinja2's
+  `SandboxedEnvironment` behaved the same way. The bare probes already cover
+  those engines.
+- The frequently-cited OGNL escape `(#_memberAccess=@ognl.OgnlContext@DEFAULT_MEMBER_ACCESS)`
+  additionally targets a field that **no longer exists in OGNL 3.3.4**, so on a
+  current engine it is a probe that can only come back negative.
+
 ## [2.26.0] — 2026-08-16
 
 The sink-shape ladder. An injected value lands in a *shape* — mid-command,
@@ -458,7 +500,8 @@ this file and have not been restated here.
 - **[2.7.0]**
 - **[2.1.0]**
 
-[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.26.0...HEAD
+[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.27.0...HEAD
+[2.27.0]: https://github.com/kabiri-labs/rcekit/compare/v2.26.0...v2.27.0
 [2.26.0]: https://github.com/kabiri-labs/rcekit/compare/v2.25.0...v2.26.0
 [2.25.0]: https://github.com/kabiri-labs/rcekit/compare/v2.24.0...v2.25.0
 [2.24.0]: https://github.com/kabiri-labs/rcekit/compare/v2.23.3...v2.24.0
