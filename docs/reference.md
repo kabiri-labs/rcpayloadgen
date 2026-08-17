@@ -55,6 +55,10 @@ starting point — this page is for looking things up once you know what you wan
 | `--detect-json` | Also write the run to this path as JSON: overall verdict, counts, every probe | None |
 | `--sink-shape` | Sink shapes the shell probes try: `auto`, or any of `sep`, `raw`, `chain`, `newline`, `dq`, `sq`, `subshell` | `auto` |
 | `--eval-engines` | (`eval`) Engine carriers to add to the bare expression probes: `auto`, or names from `eval_carriers` | `auto` |
+| `--auto-params` | (`-r` with `--methods`) Enumerate injection points: kinds from `query`, `json`, `form`, `cookie`, `header`, `path`, or `all`. Implied by `-p all` | off |
+| `--point-order` | (enumeration) `fast` (curated high-yield headers) or `thorough` (every non-hop-by-hop header) | `fast` |
+| `--max-points` | (enumeration) Stop after N candidates; the run reports how many it dropped | `40` |
+| `--include-path-segments` | (enumeration) Also inject into URL path segments | off |
 
 | `--methods` value | Confirms | Tier it can reach |
 |---|---|---|
@@ -103,6 +107,62 @@ depth and `--probe-depth` changes nothing for it.
 sweep, and it does not narrow the separator screen `--methods time` runs: both
 depths try every candidate break-out, because dropping one is not a saving in
 requests but a blind spot. Use `--separators` to narrow that deliberately.
+
+### Enumerating injection points
+
+`-p NAME` needs you to already know which parameter is the sink. A real capture
+carries ten to forty candidates, and some of the highest-value classes inject
+through a **header** — Shellshock through `User-Agent`, Struts2 S2-045 through
+`Content-Type` — or through a JSON leaf several levels down that no top-level
+parameter name addresses.
+
+```bash
+python rcekit.py --acknowledge-consent -r request.txt -p all --methods reflected
+```
+
+Candidates are tried in expected-yield order, each rewritten in **its own**
+serialization rather than blanket-encoded:
+
+| Kind | Addressed as | Rewritten by |
+|---|---|---|
+| `query` | parameter name | the `a=1&b=2` encoder |
+| `json` | path — `user.profile.name`, `tags[1]` | the JSON encoder, re-serialised |
+| `form` | field name | the `a=1&b=2` encoder |
+| `cookie` | crumb name | the `Cookie` header, other crumbs untouched |
+| `header` | header name | single-line header escaping |
+| `path` | segment index | the URL path (opt-in, see below) |
+
+A JSON leaf is only *replaced*, never created: assigning to a missing key would
+test a field the application never sends.
+
+`Host`, `Content-Length`, `Cookie` and the hop-by-hop headers are never
+candidates — injecting into those changes the request's plumbing rather than
+testing the app, and two of them are rebuilt by the delivery layer.
+
+Path segments are off by default (`--include-path-segments`): rewriting one
+usually just produces a 404, which costs a request and proves nothing.
+
+**The cost is printed before the traffic**, because enumeration multiplies an
+already-laddered probe count by the number of candidates:
+
+```
+[detect] enumerating 6 injection point(s) x 1 method(s)
+[detect] cost: 6 points x ~61 probes = at least 372 requests (each point carries its own payload-free control)
+[detect]   query param 'view': negative (61 probes)
+[detect]   header 'User-Agent': confirmed (61 probes)  <-- CONFIRMED
+```
+
+Each candidate gets **its own** payload-free control: differencing a header
+probe against a query probe's control would compare two different responses and
+prove nothing. Use `--max-points` and `--max-payloads` to bound a run, and
+`--verify-delay` to pace it — the delay applies across the whole enumeration.
+
+Cheap methods run first per candidate. `reflected` and `eval` cost one response
+each; `time` sleeps and `oob` waits for a callback. Once a candidate has proven
+execution, the slow methods on *that* candidate are skipped — they would buy a
+second name for a finding already made. Candidates that stay clean still get
+every method. Single-point runs (`-p NAME`, or a `FUZZ` marker) are unchanged
+and still run every method.
 
 ### Expression-engine carriers
 

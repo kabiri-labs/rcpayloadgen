@@ -8,6 +8,53 @@ formats, or the template schema.
 
 ## [Unreleased]
 
+## [2.28.0] — 2026-08-17
+
+Injection-point enumeration. `-p NAME` needed the tester to already know which
+parameter was the sink, so a capture's other candidates — including the headers
+and nested JSON leaves that carry some of the highest-value classes — were never
+tried.
+
+### Added
+
+- **`-p all` / `--auto-params KINDS`** expands one captured request into every
+  candidate injection point and runs the selected `--methods` against each.
+  Query values, JSON leaves addressed by path (`user.profile.name`, `tags[1]`),
+  form fields, cookie crumbs and headers, each rewritten in **its own**
+  serialization rather than blanket-encoded. Verified end to end: a sink
+  reachable only through `User-Agent` is confirmed from `-r request.txt -p all`
+  with no manual header selection.
+- **`--point-order fast|thorough`** — `fast` tries a curated high-yield header
+  list (the headers real published RCEs inject through); `thorough` adds every
+  remaining non-hop-by-hop header. **`--max-points N`** bounds the run and
+  reports what it dropped. **`--include-path-segments`** is opt-in, because
+  rewriting a path segment usually just produces a 404.
+- **The run states its cost before sending it** —
+  `6 points x ~61 probes = at least 372 requests` — via a new
+  `estimate_detection_probes`, which builds the probes and counts them without
+  firing any. Enumeration multiplies an already-laddered probe count by the
+  candidate count, and an operator on a monitored engagement has to see that
+  before it happens rather than infer it from the traffic.
+- **Findings name the point they came from**: `[reflected/unix/raw] at header
+  'User-Agent' ...`.
+
+### Changed
+
+- **Each candidate carries its own payload-free control.** Differencing a header
+  probe against a query probe's control would compare two different responses
+  and prove nothing.
+- **Cheap methods run first per candidate, and a candidate stops at its first
+  confirmation.** `reflected` and `eval` cost one response each; `time` sleeps
+  and `oob` waits for a callback, and on a candidate that has already proven
+  execution those buy a second name for the same finding. Candidates that stay
+  clean still get every method, and single-point runs are unchanged.
+- A JSON leaf is **replaced, never created**. Assigning to a missing key would
+  have injected into a field the application never sends — a probe that cannot
+  say anything about the parameter that does exist. Caught by its own test.
+- `Host`, `Content-Length`, `Cookie` and the hop-by-hop headers are never
+  candidates: injecting into those changes the request's plumbing rather than
+  testing the application, and two of them are rebuilt by the delivery layer.
+
 ## [2.27.0] — 2026-08-17
 
 Engine carriers for the `eval` probe. Three template engines evaluate the
@@ -500,7 +547,8 @@ this file and have not been restated here.
 - **[2.7.0]**
 - **[2.1.0]**
 
-[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.27.0...HEAD
+[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.28.0...HEAD
+[2.28.0]: https://github.com/kabiri-labs/rcekit/compare/v2.27.0...v2.28.0
 [2.27.0]: https://github.com/kabiri-labs/rcekit/compare/v2.26.0...v2.27.0
 [2.26.0]: https://github.com/kabiri-labs/rcekit/compare/v2.25.0...v2.26.0
 [2.25.0]: https://github.com/kabiri-labs/rcekit/compare/v2.24.0...v2.25.0
