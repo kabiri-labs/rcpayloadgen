@@ -8,6 +8,63 @@ formats, or the template schema.
 
 ## [Unreleased]
 
+## [2.32.0] — 2026-08-17
+
+The second-order oracle. Execution frequently happens on a **different request**
+than injection — stored SSTI rendered on a profile page, a payload written to a
+log a template engine later renders, a queued job run asynchronously. The engine
+diffs the response it injected into, so every one of those read `negative`
+however exploitable the target was.
+
+### Added
+
+- **`--observe-url URL`** names the endpoint where the execution surfaces. It is
+  read after each probe and then polled after the batch, and a probe whose
+  computed value turns up there is upgraded to `confirmed`.
+
+  It stays fully differential, which is why it reaches `confirmed` rather than
+  `needs-review`: the value was computed locally from operands random to that
+  probe, it must be absent from a snapshot of the endpoint taken **before any
+  probe was sent**, and — the rule that carries the weight — a probe's value is
+  looked for there **only when the probe's own payload does not contain it**.
+
+  Without that last rule the oracle would be a false-positive generator: `file`
+  and `oob` expect a random token that sits verbatim in the payload, so a target
+  that merely stores the payload and renders it back would hand that token
+  straight to the observed page and every such probe would confirm without
+  executing anything. Measured against a store-and-echo target: **0**
+  confirmations. The computed-value methods pass the same rule for the opposite
+  reason — reflection returns `$((a+b))`, never the sum — so it selects them
+  without naming them, and a method added later inherits the right answer.
+
+- **`--observe-request FILE`** takes a captured request instead, for the common
+  case where the page a stored payload renders on is behind a login. It needs no
+  `FUZZ` marker: the observed endpoint is read, never injected into.
+
+- **`--observe-poll` / `--observe-timeout`** control the polling window
+  (defaults 5s and 60s). One poll always happens, even at a zero timeout.
+
+- Every probe result carries an `observe_status` in `--detect-json`:
+  `confirmed`, `polled` (read, value not there), `in-control`, `not-observed`
+  (not eligible) or `unreachable`. When the endpoint never answered, the run
+  says so outright — negatives decided without ever reading the observed channel
+  are not second-order negatives.
+
+### Changed
+
+- The observed channel is read once after **each** probe as well as polled after
+  the batch, so a run with `--observe-url` sends roughly twice the requests.
+  Batch-then-poll alone is only correct for a channel that *accumulates* (a log,
+  a comment list); where the store overwrites — a profile field, which is the
+  shape this oracle most exists for — every probe but the last is gone by the
+  time the batch poll runs, and the oracle confirmed nothing. The extra read is
+  skipped for probes that are already confirmed in-band or not eligible, so
+  `file` and `oob` add none.
+
+Observing is additive throughout: the in-band verdict is computed exactly as
+before and only a non-`confirmed` one can be upgraded, so a run without the flag
+is byte-for-byte unchanged and a run with it can only gain findings.
+
 ## [2.31.0] — 2026-08-17
 
 The `write` method: a write primitive proven to be RCE by executing what it
@@ -727,7 +784,8 @@ this file and have not been restated here.
 - **[2.7.0]**
 - **[2.1.0]**
 
-[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.31.0...HEAD
+[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.32.0...HEAD
+[2.32.0]: https://github.com/kabiri-labs/rcekit/compare/v2.31.0...v2.32.0
 [2.31.0]: https://github.com/kabiri-labs/rcekit/compare/v2.30.0...v2.31.0
 [2.30.0]: https://github.com/kabiri-labs/rcekit/compare/v2.29.0...v2.30.0
 [2.29.0]: https://github.com/kabiri-labs/rcekit/compare/v2.28.0...v2.29.0

@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.31.0"
+__version__ = "2.32.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -169,6 +169,46 @@ def parse_sink_env(value: Optional[str]) -> Optional[str]:
         raise ValueError(f"unknown sink environment: {value}; "
                          f"choose from auto, {', '.join(SINK_ENVIRONMENTS)}")
     return value
+
+
+def observe_request(config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The observed endpoint as a ready-to-fire request, or ``None``.
+
+    One place resolves ``--observe-url`` and ``--observe-request`` so the two
+    forms cannot drift: the captured-request form exists because the page a
+    stored payload renders on is usually behind a login, and a URL alone cannot
+    carry that session."""
+    url = config.get("observe_url")
+    if not url:
+        return None
+    return {
+        "url": str(url),
+        "method": config.get("observe_method") or "GET",
+        "data": config.get("observe_data"),
+        "headers": config.get("observe_headers"),
+        "poll": config.get("observe_poll"),
+        "timeout": config.get("observe_timeout"),
+    }
+
+
+def build_plain_request(text: str, scheme: Optional[str] = None
+                        ) -> Tuple[str, str, Optional[str], List[str]]:
+    """``(url, method, data, headers)`` from a raw HTTP request with **no**
+    injection point.
+
+    :func:`build_request_inputs` requires a marker because its job is to place a
+    payload. The observed endpoint is the opposite: it is read, never injected
+    into, so requiring a marker there would mean inventing one."""
+    req = parse_raw_request(text)
+    host = req["host"]
+    if not host:
+        raise ValueError("raw request has no Host header; cannot build an absolute URL")
+    if scheme is None:
+        scheme = _infer_request_scheme(host)
+    headers = [f"{name}: {value}" for name, value in req["headers"]
+               if name.lower() not in {"host", "content-length"}]
+    return (f"{scheme}://{host}{req['target']}", req["method"],
+            req["body"] or None, headers)
 
 
 def parse_write_langs(value: Optional[str]) -> Optional[Tuple[str, ...]]:
@@ -2311,6 +2351,18 @@ class RCEKit:
             f"rcekit-control-{self._generate_canary()}", url, method, data, headers,
             url_location, resolved_body_location, timeout)
 
+        # The observed channel's control has to be taken *before* any probe is
+        # sent, not after: the whole premise is that a probe changes what that
+        # endpoint renders, so a control taken afterwards would already contain
+        # what it is supposed to rule out.
+        observe = observe_request(config or {})
+        observe_control: List[Tuple[str, str]] = []
+        observe_reached = False
+        if observe is not None:
+            o_status, o_body, o_channels, _ = self._fire_observed(observe, timeout)
+            observe_reached = o_status is not None
+            observe_control = o_channels or ([("response body", o_body)] if o_body else [])
+
         # Reduce records to distinct (environment, context) carriers so the same
         # probe shape is not refired for every payload sharing that carrier.
         carriers = self._detection_carriers(records, config or {})
@@ -2414,11 +2466,155 @@ class RCEKit:
                     if probe.followup and probe.followup.get("cleanup"):
                         result["cleanup"] = probe.followup["cleanup"]
                     results.append(result)
+                    # Read the observed channel now, before the next probe.
+                    # Batch-then-poll alone is only correct for a channel that
+                    # *accumulates* (a log, a comment list): where the store
+                    # overwrites -- a profile field, a single setting, which is
+                    # the shape the acceptance case uses -- every probe but the
+                    # last is gone by the time the batch poll runs, so the one
+                    # oracle this mode exists for confirmed nothing. One extra
+                    # request, and only for a probe that could actually be
+                    # judged there: already-confirmed probes and probes whose
+                    # value rides in their own payload are skipped.
+                    if (observe is not None and verdict.status != "confirmed"
+                            and self._observable(result)):
+                        o_status, o_body, o_chans, _ = self._fire_observed(observe, timeout)
+                        if o_status is not None:
+                            observe_reached = True
+                            self._observe_match(
+                                result, o_chans or ([("response body", o_body)] if o_body else []),
+                                observe_control, observe["url"])
                     if delay:
                         time.sleep(delay)
                     if max_payloads and len(results) >= max_payloads:
-                        return results
+                        return self._resolve_observed(
+                            results, observe, observe_control, observe_reached, timeout)
+        return self._resolve_observed(
+            results, observe, observe_control, observe_reached, timeout)
+
+    # A probe's expected value may only be looked for on the observed channel
+    # when the payload does not already carry it. That single rule is what keeps
+    # the second-order oracle differential, and it is not a detail: `file` and
+    # `oob` expect a random *token* that sits verbatim in the payload, so a
+    # target that merely stores the payload and renders it on the observed page
+    # would hand back that token by reflection and every one of those probes
+    # would read as confirmed. The computed-value methods are safe for the
+    # opposite reason -- reflection returns `$((a+b))`, never the sum -- so the
+    # rule selects them without naming them, and a method added later inherits
+    # the right answer instead of the current one.
+    @staticmethod
+    def _observable(result: Dict[str, Any]) -> bool:
+        expected = result.get("expected") or ""
+        return bool(expected) and expected not in (result.get("payload") or "")
+
+    def _fire_observed(self, observe: Dict[str, Any], timeout: float
+                       ) -> Tuple[Optional[int], str, List[Tuple[str, str]], float]:
+        """One request to the observed endpoint. No payload is substituted: this
+        is a plain read of the place the execution is expected to surface."""
+        return self._fire_channels(
+            "", observe["url"], observe.get("method") or "GET", observe.get("data"),
+            observe.get("headers"), "raw", "raw", timeout)
+
+    def _resolve_observed(self, results: List[Dict[str, Any]],
+                          observe: Optional[Dict[str, Any]],
+                          observe_control: List[Tuple[str, str]],
+                          observe_reached: bool,
+                          timeout: float) -> List[Dict[str, Any]]:
+        """Poll the observed channel and upgrade the probes whose value lands there.
+
+        Execution frequently happens on a *different* request than injection:
+        stored SSTI rendered on a profile page, a payload written to a log a
+        template engine later renders, a queued job run asynchronously. The
+        engine diffs the response it injected into, so every one of those read
+        `negative` however exploitable the target was.
+
+        Additive by construction. The in-band verdict is computed exactly as
+        before and only a non-`confirmed` one can be upgraded here, so a run
+        without ``--observe-url`` behaves identically and a run with it can only
+        gain findings.
+
+        Still fully differential, which is why this can legitimately reach
+        `confirmed`: the value was computed locally from random operands, it is
+        absent from the endpoint's pre-injection control, and (see
+        :meth:`_observable`) it cannot have arrived by the payload being stored
+        and echoed. Each probe carries its own operands, so a value left behind
+        by an earlier probe cannot confirm a later one."""
+        import time
+        if observe is None:
+            return results
+        for result in results:
+            result.setdefault("observe_status", "not-observed")
+        pending = [r for r in results
+                   if r["verdict"] != "confirmed" and self._observable(r)
+                   and r.get("observe_status") != "in-control"]
+        # `or` would be wrong here and was: a deliberate --observe-timeout 0
+        # ("read it once, do not wait") is falsy, so it fell through to the
+        # 60-second default and the run polled a dead endpoint for a minute.
+        limit = observe.get("timeout")
+        deadline = time.time() + (60.0 if limit is None else float(limit))
+        gap = observe.get("poll")
+        interval = max(0.5, 5.0 if gap is None else float(gap))
+        # At least one poll always happens, even with a zero timeout: an
+        # observed run that polled zero times and reported negatives would be
+        # the "tested nothing, looks clean" failure in a new place.
+        while True:
+            status, body, channels, _ = self._fire_observed(observe, timeout)
+            if status is not None:
+                observe_reached = True
+                searched = channels or ([("response body", body)] if body else [])
+                for result in list(pending):
+                    if self._observe_match(result, searched, observe_control, observe["url"]):
+                        pending.remove(result)
+                    elif result.get("observe_status") == "in-control":
+                        pending.remove(result)
+            if not pending or time.time() >= deadline:
+                break
+            time.sleep(interval)
+        if not observe_reached:
+            # The operator asked for a channel that never answered. Saying so is
+            # the point: the run's negatives were decided without ever reading
+            # the place the execution was expected to appear.
+            for result in results:
+                result["observe_status"] = "unreachable"
         return results
+
+    def _observe_match(self, result: Dict[str, Any], searched: List[Tuple[str, str]],
+                       observe_control: List[Tuple[str, str]], observe_url: str) -> bool:
+        """Upgrade ``result`` if its computed value is on the observed channel.
+
+        Returns whether it was upgraded. The differential is applied here and
+        nowhere else, so the per-probe read and the post-batch poll cannot
+        disagree about what counts as proof."""
+        where = self._observed_hit(result["expected"], searched)
+        if where is None:
+            # Read, and the value was not there. Recorded distinctly from
+            # "never looked": an operator reading --detect-json has to be able
+            # to tell a probe the observed channel cleared from one it never saw.
+            result["observe_status"] = "polled"
+            return False
+        if self._observed_hit(result["expected"], observe_control) is not None:
+            result["observe_status"] = "in-control"
+            return False
+        channel_note = "" if where == "response body" else f" in {where}"
+        result["verdict"] = "confirmed"
+        result["observe_status"] = "confirmed"
+        result["detail"] = (
+            f"target computed {result['expected']!r} on the OBSERVED channel"
+            f"{channel_note} ({observe_url}) -- second-order execution: the value is absent "
+            "from that endpoint's pre-injection control and cannot be reflected, since the "
+            "payload never carried it")
+        return True
+
+    def _observed_hit(self, expected: str,
+                      channels: List[Tuple[str, str]]) -> Optional[str]:
+        """The channel of ``channels`` carrying ``expected``, or ``None``.
+
+        Uses the same encoded-aware search every verdict uses, so a stored
+        channel that base64/hex/url/html-wraps what it renders confirms too."""
+        for name, text in channels:
+            if expected and self._encoded_search(re.escape(expected), text):
+                return name
+        return None
 
     def run_verification_chain(self, records: Iterator[PayloadRecord], chain: Dict[str, Any],
                                delay: float = 0.0, timeout: float = 20.0,
@@ -5096,6 +5292,24 @@ def main():
                              "command; sq/dq break out of a surrounding quote; subshell reaches a "
                              "quoted value through $(...) and backticks without closing the quote. "
                              "Narrow it to cut request count once the sink's shape is known.")
+    parser.add_argument("--observe-url", default=None, metavar="URL",
+                        help="(--methods) Second-order execution: an endpoint POLLED for the "
+                             "computed value after the probes are sent. Use it when execution "
+                             "happens on a different request than injection -- stored SSTI "
+                             "rendered on a profile page, a payload written to a log a template "
+                             "later renders, a queued job. Still differential, so it reaches "
+                             "confirmed: the value must be absent from this endpoint's "
+                             "pre-injection control.")
+    parser.add_argument("--observe-request", default=None, metavar="FILE",
+                        help="(--methods) Raw HTTP request for the observed endpoint, instead of "
+                             "--observe-url. No FUZZ marker: it is read, never injected into. Use "
+                             "this when the page the payload renders on needs a session.")
+    parser.add_argument("--observe-poll", type=float, default=5.0, metavar="SECONDS",
+                        help="(--observe-url) Seconds between polls of the observed endpoint "
+                             "(default 5).")
+    parser.add_argument("--observe-timeout", type=float, default=60.0, metavar="SECONDS",
+                        help="(--observe-url) Stop polling the observed endpoint after this many "
+                             "seconds (default 60). One poll always happens, even at 0.")
     parser.add_argument("--write-url-template", default=None, metavar="URL",
                         help="(--methods write) URL the file written through the injection point "
                              "is served at, e.g. https://target/uploads/rcekit-probe.jsp. Required "
@@ -5188,6 +5402,23 @@ def main():
     except ValueError as exc:
         print(f"[!] {exc}")
         return 1
+    # The observed endpoint, from either form. Resolved once, here, so the run
+    # and the pre-flight plan describe the same request.
+    observe_url = from_profile(args.observe_url, "observe_url")
+    observe_method, observe_data, observe_headers = "GET", None, None
+    if args.observe_request:
+        if observe_url:
+            print("[!] --observe-url and --observe-request name the same endpoint two ways; "
+                  "pass one.")
+            return 1
+        try:
+            with open(args.observe_request, "r", encoding="utf-8") as observe_fh:
+                observe_raw = observe_fh.read()
+            observe_url, observe_method, observe_data, observe_headers = build_plain_request(
+                observe_raw, args.request_scheme)
+        except (OSError, ValueError) as exc:
+            print(f"[!] Unable to use --observe-request {args.observe_request}: {exc}")
+            return 1
     eval_engines_raw = from_profile(args.eval_engines, "eval_engines")
     if isinstance(eval_engines_raw, str):
         eval_engines_raw = None if eval_engines_raw.strip() == "auto" else [
@@ -5494,6 +5725,12 @@ def main():
                                 "sink_shapes": sink_shapes, "sink_env": sink_env,
                                 "write_read_url": args.write_url_template,
                                 "write_langs": write_langs,
+                                "observe_url": observe_url,
+                                "observe_method": observe_method,
+                                "observe_data": observe_data,
+                                "observe_headers": observe_headers,
+                                "observe_poll": args.observe_poll,
+                                "observe_timeout": args.observe_timeout,
                                 "eval_engines": eval_engines,
                                 "probe_depth": args.probe_depth,
                                 "contexts_explicit": bool(selected_contexts),
@@ -5580,6 +5817,13 @@ def main():
                           f"the write is attempted at each of {len(injection_runs)} candidate "
                           "point(s). Narrow with -p/--max-points if that is more target state "
                           "than you intend to change.")
+            if observe_url:
+                print(f"[detect] observing {observe_url} for second-order execution: polled every "
+                      f"{args.observe_poll:g}s for up to {args.observe_timeout:g}s after the "
+                      "probes are sent, differenced against a snapshot taken before any probe.")
+                print("[detect]   only probes whose expected value is NOT in their own payload "
+                      "are looked for there -- a stored payload rendered back would otherwise "
+                      "confirm by reflection.")
             if set(method_names) & SHELL_PROBE_METHODS:
                 # The ladder multiplies request count, so say which shapes are
                 # about to be tried before trying them. An operator on a
@@ -5730,6 +5974,13 @@ def main():
                     # only under CONFIRMED would leave it there unmentioned.
                     if result.get("cleanup"):
                         print(f"      cleanup: {result['cleanup']}")
+            if observe_url and all(r.get("observe_status") == "unreachable" for r in results):
+                # The operator asked for a channel that never answered, so the
+                # verdicts below were decided without ever reading the place the
+                # execution was expected to appear.
+                print(f"\n[!] The OBSERVED endpoint ({observe_url}) never answered, so nothing "
+                      "was read from it. Any negative below was decided from the injected "
+                      "response alone — that is not a second-order result.")
             if not confirmed:
                 errored = [r for r in results if r["verdict"] == "error"]
                 if errored:
