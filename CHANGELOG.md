@@ -8,6 +8,67 @@ formats, or the template schema.
 
 ## [Unreleased]
 
+## [2.30.0] — 2026-08-17
+
+Per-dialect shell probes. `$((a+b))`, `sleep` and `$(echo TAG)` are POSIX
+constructs: on a cmd.exe or PowerShell sink they are inert literal text. The
+dialect was inferred from the corpus environment alone, so a run could send a
+probe no shell on the target would ever execute — including on the carrier whose
+context is literally named `powershell`.
+
+### Added
+
+- **`--sink-env auto|unix|windows|powershell`** states which shell runs the
+  injected command. The computed-value core, the separators and the break-out
+  contexts are all chosen from it. `auto` (the default) infers it per carrier;
+  pin it when the corpus environment names the *application runtime* rather than
+  the OS — `--environments php --sink-env windows` is a PHP application on IIS,
+  which no inference can see.
+
+- **A PowerShell probe shape for every shell method**, validated against
+  pwsh 7.4: `Write-Output T1$(a*b)T2` for `reflected` (an unquoted argument is an
+  expandable string, so the core carries no quote and the quote-wrapping
+  contexts can still carry it), `Start-Sleep -Milliseconds N` for `time`,
+  `Set-Content` for `file` and `iwr -useb` for `oob`. PowerShell was previously
+  reachable by no probe in any method.
+
+- **cmd.exe and PowerShell carriers for the `dotnet` environment.** It is the
+  one corpus environment that names a platform, and it was taking the POSIX
+  shape — so .NET on Windows, the case the environment exists for, was the case
+  it could not confirm on. Every other runtime keeps the POSIX shape: a language
+  does not say which OS it runs on.
+
+### Fixed
+
+- **The `powershell` carrier was written in cmd.exe.** Every `windows` carrier
+  took the `for /f ... ('set /a a+b')` core regardless of context, so the one
+  carrier explicitly shaped for PowerShell sent a payload PowerShell cannot
+  execute. The dialect now follows the carrier's context first, and a carrier's
+  break-out variants stay in its dialect rather than re-deriving from the
+  environment.
+
+- **`Set-Content`, not `>`, for the PowerShell write.** In Windows PowerShell
+  5.1 the redirect is `Out-File`, whose default encoding is UTF-16LE: the write
+  lands and the read-back still does not find the token, so the probe reports
+  negative on a target it owns.
+
+### Changed
+
+- **cmd.exe no longer gets the `sq`, `dq` and `subshell` carriers.** It has
+  neither a comment character to swallow the sink's tail nor a
+  command-substitution syntax, so those four carriers per Windows run were
+  requests that could only come back negative. PowerShell takes the quote
+  break-outs and `$( )` — both measured — but not the backtick, which is its
+  escape character rather than a substitution.
+
+- **PowerShell's separator sweep carries no pipe.** `cmd | Start-Sleep
+  -Milliseconds 500` is a parameter-binding error, not a fresh command with
+  stdin attached the way a POSIX pipe is, and it fails that way for every cmdlet
+  the probes use. `;`, a newline and (on PowerShell 7) `&&`/`||` remain.
+
+- The pre-flight plan prints the sink shell alongside the sink shapes, and a
+  pinned dialect narrows the printed ladder to the rungs it has syntax for.
+
 ## [2.29.0] — 2026-08-17
 
 Generalised read-back for the `file` method. It required a writable **web root**
@@ -609,7 +670,8 @@ this file and have not been restated here.
 - **[2.7.0]**
 - **[2.1.0]**
 
-[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.29.0...HEAD
+[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.30.0...HEAD
+[2.30.0]: https://github.com/kabiri-labs/rcekit/compare/v2.29.0...v2.30.0
 [2.29.0]: https://github.com/kabiri-labs/rcekit/compare/v2.28.0...v2.29.0
 [2.28.0]: https://github.com/kabiri-labs/rcekit/compare/v2.27.0...v2.28.0
 [2.27.0]: https://github.com/kabiri-labs/rcekit/compare/v2.26.0...v2.27.0

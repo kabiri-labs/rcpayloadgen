@@ -3093,7 +3093,7 @@ class ProbeDepthTestCase(unittest.TestCase):
         import random as _random
         method = ReflectedMath(self.gen, {})
         windows = method._wrap_variants(make_record(environment="windows", context="raw"),
-                                        "echo x", windows=True, terminate=True)
+                                        "echo x", "windows", terminate=True)
         self.assertEqual(windows, [])
         quoted = method._wrap_variants(make_record(environment="unix", context="attribute"),
                                        "echo x", terminate=True)
@@ -4745,30 +4745,30 @@ class SinkShapeLadderTestCase(unittest.TestCase):
 
     def test_separator_rungs_select_their_own_separators(self):
         method = ReflectedMath(self.gen, {"sink_shapes": ("chain",)})
-        self.assertEqual(method._separators(windows=False), ("| ", "|| ", "&& "))
+        self.assertEqual(method._separators("unix"), ("| ", "|| ", "&& "))
         method = ReflectedMath(self.gen, {"sink_shapes": ("sep", "newline")})
-        self.assertEqual(method._separators(windows=False), ("; ", "\n"))
+        self.assertEqual(method._separators("unix"), ("; ", "\n"))
 
     def test_selecting_no_separator_rung_empties_the_sweep(self):
         # With only sq/subshell selected, a separator-led probe is a request
         # that cannot confirm.
         method = ReflectedMath(self.gen, {"sink_shapes": ("sq", "subshell")})
-        self.assertEqual(method._separators(windows=False), ())
+        self.assertEqual(method._separators("unix"), ())
 
     def test_explicit_separators_still_win_outright(self):
         method = ReflectedMath(self.gen, {"sink_shapes": ("chain",), "separators": ["; "]})
-        self.assertEqual(method._separators(windows=False), ("; ",))
+        self.assertEqual(method._separators("unix"), ("; ",))
 
     def test_windows_rungs_map_to_cmd_vocabulary(self):
         # ';' is not a cmd.exe separator, so a rung name must resolve against
         # the environment's own table rather than a global one.
         method = ReflectedMath(self.gen, {"sink_shapes": ("sep",)})
-        self.assertEqual(method._separators(windows=True), (" & ",))
+        self.assertEqual(method._separators("windows"), (" & ",))
         method = ReflectedMath(self.gen, {"sink_shapes": ("newline",)})
-        self.assertEqual(method._separators(windows=True), ())
+        self.assertEqual(method._separators("windows"), ())
 
     def test_auto_is_unchanged_for_the_separator_sweep(self):
-        self.assertEqual(ReflectedMath(self.gen)._separators(windows=False),
+        self.assertEqual(ReflectedMath(self.gen)._separators("unix"),
                          ReflectedMath.DEFAULT_SEPARATORS["unix"])
 
     # -- end to end ----------------------------------------------------------
@@ -5104,6 +5104,273 @@ class ResponseChannelTestCase(unittest.TestCase):
                 [self.rec], url=f"{base}/safe?host=FUZZ", methods=["reflected", "eval"])
         self.assertFalse([r for r in results if r["verdict"] == "confirmed"],
                          "a non-executing target must not confirm through any channel")
+
+
+class SinkEnvDialectTestCase(unittest.TestCase):
+    """The sink shell: which dialect a probe is written in.
+
+    `$((a+b))`, `sleep` and `$(echo TAG)` are POSIX constructs. On cmd.exe or
+    PowerShell they are inert literal text, so a probe written in the wrong
+    dialect costs a request and can only ever come back negative. The dialect
+    was previously inferred from the corpus environment alone, which put every
+    `windows` carrier -- including the one whose context is literally named
+    `powershell` -- on the cmd.exe core.
+
+    The PowerShell shapes asserted here were each validated against pwsh 7.4
+    before being written down; the tests pin the shapes, not the shell."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+
+    # -- which dialect a carrier gets ----------------------------------------
+
+    def test_the_dialect_follows_the_carrier(self):
+        cases = [
+            (dict(environment="unix", context="raw"), "unix"),
+            (dict(environment="php", context="raw"), "unix"),
+            (dict(environment="windows", context="raw"), "windows"),
+            (dict(environment="windows", context="windows_cmd"), "windows"),
+            (dict(environment="windows", context="unix_shell"), "windows"),
+            (dict(environment="windows", context="powershell"), "powershell"),
+            (dict(environment="dotnet", context="powershell"), "powershell"),
+            (dict(environment="dotnet", context="windows_cmd"), "windows"),
+            (dict(environment="dotnet", context="raw"), "unix"),
+        ]
+        for overrides, expected in cases:
+            with self.subTest(**overrides):
+                self.assertEqual(
+                    rcekit.sink_env_for(make_record(**overrides), {}), expected)
+
+    def test_a_powershell_carriers_breakouts_stay_powershell(self):
+        # The quote and substitution carriers are built by replacing the
+        # context, so re-deriving the dialect from the environment alone would
+        # hand a PowerShell carrier's break-outs to cmd.exe. That is the defect
+        # this ordering exists to prevent, so it is pinned rather than implied.
+        for context in ("shell_single_quoted", "shell_double_quoted", "shell_subshell"):
+            with self.subTest(context=context):
+                record = make_record(environment="windows", context=context)
+                self.assertEqual(rcekit.sink_env_for(record, {}), "powershell")
+
+    def test_an_explicit_dialect_wins_over_every_inference(self):
+        # The corpus environment names the application runtime, not the OS: a
+        # PHP application on IIS is a case only the operator can see.
+        record = make_record(environment="php", context="raw")
+        self.assertEqual(rcekit.sink_env_for(record, {"sink_env": "windows"}), "windows")
+        windows = make_record(environment="windows", context="powershell")
+        self.assertEqual(rcekit.sink_env_for(windows, {"sink_env": "unix"}), "unix")
+
+    def test_parse_sink_env_refuses_a_typo(self):
+        self.assertIsNone(rcekit.parse_sink_env(None))
+        self.assertIsNone(rcekit.parse_sink_env("auto"))
+        self.assertEqual(rcekit.parse_sink_env(" PowerShell "), "powershell")
+        with self.assertRaises(ValueError) as caught:
+            rcekit.parse_sink_env("win32")
+        # Silently falling back to POSIX is the one outcome an operator who
+        # reached for this flag is trying to avoid.
+        self.assertIn("win32", str(caught.exception))
+
+    # -- the cores -----------------------------------------------------------
+
+    def _probes(self, method, record, config=None):
+        import random as _random
+        return method(self.gen, config or {}).build_probes(record, _random.Random(3))
+
+    def test_a_powershell_carrier_no_longer_gets_the_cmd_core(self):
+        record = make_record(environment="windows", context="powershell")
+        payloads = [p.payload for p in self._probes(ReflectedMath, record)]
+        self.assertTrue(payloads)
+        for payload in payloads:
+            self.assertNotIn("set /a", payload, "cmd.exe arithmetic on a PowerShell sink")
+            self.assertNotIn("for /f", payload)
+
+    def test_the_powershell_core_computes_a_product_locally(self):
+        record = make_record(environment="windows", context="powershell")
+        probes = self._probes(ReflectedMath, record)
+        self.assertTrue(probes)
+        for probe in probes:
+            operands = re.search(r"\$\((\d+)\*(\d+)\)", probe.payload)
+            self.assertIsNotNone(operands, probe.payload)
+            product = int(operands.group(1)) * int(operands.group(2))
+            # Reflection returns the literal `$(a*b)`, never the product.
+            self.assertIn(str(product), probe.expected)
+            self.assertEqual(probe.forbidden, operands.group(0))
+
+    def test_the_canonical_powershell_core_carries_no_quote(self):
+        # An unquoted PowerShell argument is an expandable string, so the core
+        # needs no quote -- which is what lets the quote-wrapping contexts carry
+        # it at all (see _context_swallows).
+        record = make_record(environment="windows", context="powershell")
+        probes = self._probes(ReflectedMath, record, {"probe_depth": "quick"})
+        self.assertTrue(probes)
+        for probe in probes:
+            self.assertNotIn('"', probe.payload)
+            self.assertNotIn("'", probe.payload)
+
+    def test_powershell_writes_with_set_content_not_a_redirect(self):
+        # `>` is Out-File, whose default encoding on Windows PowerShell 5.1 is
+        # UTF-16LE: the write would land and the read-back would still not find
+        # the token, so the probe would report negative on a target it owned.
+        record = make_record(environment="windows", context="powershell")
+        config = {"file_write_path": "C:\\inetpub\\wwwroot",
+                  "file_read_url": "http://t/{name}"}
+        probes = self._probes(FileBased, record, config)
+        self.assertTrue(probes)
+        for probe in probes:
+            self.assertIn("Set-Content -Path C:\\inetpub\\wwwroot\\rcekit-", probe.payload)
+            self.assertNotIn(">", probe.payload)
+            self.assertTrue(probe.followup["cleanup"].startswith("Remove-Item -Force "))
+
+    def test_powershell_sleeps_in_milliseconds(self):
+        method = ParametricTime(self.gen, {})
+        # -Seconds takes an integer, so a fractional --time-base would collapse
+        # two of the regression's three levels onto each other.
+        self.assertEqual(method._sleep_core(2.5, "powershell"),
+                         "Start-Sleep -Milliseconds 2500")
+        self.assertEqual(method._sleep_core(0.0, "powershell"),
+                         "Start-Sleep -Milliseconds 0")
+        self.assertEqual(method._sleep_core(2.0, "unix"), "sleep 2")
+
+    def test_powershell_calls_back_without_a_nested_shell(self):
+        record = make_record(environment="windows", context="powershell")
+        probes = self._probes(rcekit.OobCallback, record,
+                              {"oob_host": "oob.example", "probe_depth": "quick"})
+        payloads = [p.payload for p in probes]
+        self.assertTrue(any("iwr -useb http://" in p for p in payloads), payloads)
+        # The cmd.exe shape reaches PowerShell through `powershell -c "..."`,
+        # and those double quotes are what stop a quoted context carrying it.
+        self.assertFalse([p for p in payloads if "powershell -c" in p])
+
+    def test_the_unix_cores_are_unchanged(self):
+        # Backward compatibility: the dialect split must not move the shape that
+        # every existing target is confirmed by.
+        record = make_record(environment="unix", context="raw")
+        payloads = [p.payload for p in self._probes(ReflectedMath, record)]
+        self.assertTrue(any("$((" in p for p in payloads), payloads)
+        self.assertEqual(ParametricTime(self.gen, {})._sleep_core(2.0), "sleep 2")
+
+    # -- separators and carriers ---------------------------------------------
+
+    def test_powershell_has_no_pipe_break_out(self):
+        # Measured: `cmd | Start-Sleep -Milliseconds 500` is a parameter-binding
+        # error, not a fresh command with stdin attached, and it fails that way
+        # for every cmdlet these probes use.
+        separators = ReflectedMath(self.gen)._separators("powershell")
+        self.assertNotIn("| ", separators)
+        self.assertEqual(separators[0], "; ")
+        self.assertIn("\n", separators)
+
+    def test_the_chain_rung_resolves_per_dialect(self):
+        method = ReflectedMath(self.gen, {"sink_shapes": ("chain",)})
+        self.assertEqual(method._separators("powershell"), ("&& ", "|| "))
+        self.assertEqual(method._separators("windows"), (" | ", " || ", " && "))
+        self.assertEqual(method._separators("unix"), ("| ", "|| ", "&& "))
+
+    def _contexts(self, environment, config=None):
+        records = [make_record(environment=environment, context="raw")]
+        carriers = self.gen._detection_carriers(iter(records), config or {})
+        return sorted(c.context for c in carriers)
+
+    def test_cmd_gets_no_quote_or_substitution_carriers(self):
+        # cmd.exe has no comment character and no command substitution, so all
+        # three rungs were previously built for it as payloads it cannot run.
+        self.assertEqual(self._contexts("windows"), ["raw"])
+
+    def test_powershell_gets_the_quote_rungs_but_not_the_backtick(self):
+        # In PowerShell the backtick is the escape character, not a
+        # substitution, so that context is inert there.
+        contexts = self._contexts("unix", {"sink_env": "powershell"})
+        self.assertIn("shell_subshell", contexts)
+        self.assertIn("shell_single_quoted", contexts)
+        self.assertNotIn("shell_backtick", contexts)
+
+    def test_unix_keeps_both_substitution_forms(self):
+        contexts = self._contexts("unix")
+        self.assertIn("shell_subshell", contexts)
+        self.assertIn("shell_backtick", contexts)
+
+    def test_dotnet_also_gets_the_windows_dialect_carriers(self):
+        # The one runtime whose corpus environment names a platform. Every other
+        # runtime keeps the POSIX shape: a language does not say which OS it
+        # runs on.
+        self.assertEqual(
+            [c for c in self._contexts("dotnet") if c in ("windows_cmd", "powershell")],
+            ["powershell", "windows_cmd"])
+        self.assertIn("raw", self._contexts("dotnet"))
+        for runtime in ("java", "python", "php"):
+            with self.subTest(runtime=runtime):
+                contexts = self._contexts(runtime)
+                self.assertNotIn("windows_cmd", contexts)
+                self.assertNotIn("powershell", contexts)
+
+    def test_pinning_the_dialect_suppresses_the_extra_carriers(self):
+        # The operator has already answered the question the inference exists
+        # for, so paying for a second dialect is not this function's call.
+        self.assertEqual(self._contexts("dotnet", {"sink_env": "unix"}),
+                         ["raw", "shell_backtick", "shell_double_quoted",
+                          "shell_single_quoted", "shell_subshell"])
+
+    def test_a_pinned_cmd_dialect_narrows_the_printed_ladder(self):
+        # The pre-flight plan is an audit of the traffic about to be sent, so it
+        # must not name rungs cmd.exe has no syntax for.
+        shapes = rcekit.effective_sink_shapes({"sink_env": "windows"})
+        self.assertEqual(shapes, ("sep", "raw", "chain"))
+        self.assertEqual(rcekit.effective_sink_shapes({"sink_env": "powershell"}),
+                         ("sep", "raw", "chain", "newline", "dq", "sq", "subshell"))
+
+    # -- end to end ----------------------------------------------------------
+
+    def test_a_powershell_only_sink_confirms(self):
+        """A sink that understands *only* the PowerShell shape.
+
+        The route stands in for `powershell.exe -Command`: it evaluates the
+        subexpression the PowerShell core is built from and echoes anything else
+        back verbatim, so a POSIX or cmd.exe probe reaching it can only be
+        reflected. That is the whole asymmetry this phase closes -- the
+        arithmetic shapes for the other two dialects are inert here, exactly as
+        they are on a real Windows host."""
+        def route(method, path, params, headers, body):
+            raw = params.get("host", "")
+            rendered = re.sub(r"\$\((\d+)\*(\d+)\)",
+                              lambda m: str(int(m.group(1)) * int(m.group(2))), raw)
+            return 200, "PING %s\n" % rendered
+
+        record = make_record(environment="windows", context="powershell")
+        with local_target(route) as base:
+            results = self.gen.run_detection(
+                [record], url=f"{base}/lookup?host=FUZZ", methods=["reflected"])
+        confirmed = [r for r in results if r["verdict"] == "confirmed"]
+        self.assertTrue(confirmed, results)
+        self.assertEqual(rcekit.overall_detection_verdict(results), "confirmed")
+
+        # And the same target, told the sink is POSIX: the probes are then
+        # written in a dialect this sink does not evaluate, so nothing confirms.
+        unix_record = make_record(environment="unix", context="raw")
+        with local_target(route) as base:
+            unix_results = self.gen.run_detection(
+                [unix_record], url=f"{base}/lookup?host=FUZZ", methods=["reflected"],
+                config={"sink_env": "unix"})
+        self.assertFalse([r for r in unix_results if r["verdict"] == "confirmed"],
+                         "a POSIX probe must not confirm on a sink that only "
+                         "evaluates PowerShell")
+
+    def test_a_dialect_with_no_shape_for_a_rung_tests_nothing_and_says_so(self):
+        """The recurring defect class, restated for the dialect split.
+
+        `--sink-env windows --sink-shape subshell` names a rung cmd.exe has no
+        syntax for, so there is nothing to send. The run must report
+        `nothing-tested`, not `negative`: a run that tested nothing reading as
+        "not vulnerable" is the failure mode that most damages the tool."""
+        def route(method, path, params, headers, body):
+            return 200, "PING %s" % params.get("host", "")
+
+        record = make_record(environment="windows", context="raw")
+        config = {"sink_env": "windows", "sink_shapes": ("subshell",)}
+        with local_target(route) as base:
+            results = self.gen.run_detection(
+                [record], url=f"{base}/lookup?host=FUZZ",
+                methods=["reflected", "time"], config=config)
+        self.assertEqual([r["verdict"] for r in results], [])
+        self.assertEqual(rcekit.overall_detection_verdict(results), "nothing-tested")
 
 
 if __name__ == "__main__":

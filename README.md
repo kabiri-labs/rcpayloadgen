@@ -1,6 +1,6 @@
 # RCEKit — prove RCE, don't guess it
 
-**Version 2.29.0** · MIT · Python 3.8+ · zero third-party dependencies
+**Version 2.30.0** · MIT · Python 3.8+ · zero third-party dependencies
 
 RCEKit is an **RCE detection &amp; confirmation toolkit** for authorised penetration
 testing, red teaming, and security research. Point it at a target you are allowed
@@ -264,6 +264,7 @@ what it sends, and how to read what comes back.
 | The sink strips `;` | [When the sink filters separators](docs/guide.md#when-the-sink-filters-separators) |
 | My input lands inside `'quotes'` | [Injecting inside quotes](docs/guide.md#injecting-inside-quotes) |
 | The sink runs my input as the whole command | [Whole-command sinks](docs/guide.md#whole-command-sinks) |
+| The target is Windows or the sink is PowerShell | [Windows and PowerShell sinks](docs/guide.md#windows-and-powershell-sinks) |
 | There's a WAF | [Working around a WAF](docs/guide.md#working-around-a-waf) |
 | No output comes back at all | [Blind targets](docs/guide.md#blind-targets) |
 | No output *and* no egress | [No-egress targets](docs/guide.md#no-egress-targets) |

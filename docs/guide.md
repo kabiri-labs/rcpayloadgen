@@ -17,6 +17,7 @@ only ever run it against systems you are authorised to test.
 - [When the sink filters separators](#when-the-sink-filters-separators)
 - [Injecting inside quotes](#injecting-inside-quotes)
 - [Whole-command sinks](#whole-command-sinks)
+- [Windows and PowerShell sinks](#windows-and-powershell-sinks)
 - [Working around a WAF](#working-around-a-waf)
 - [Blind targets](#blind-targets)
 - [No-egress targets](#no-egress-targets)
@@ -270,6 +271,47 @@ python rcekit.py --acknowledge-consent \
 ```
 
 `--sink-raw` sends the probes as bare commands and ignores `--separators`.
+
+---
+
+## Windows and PowerShell sinks
+
+A shell probe is written in a dialect. `$((a+b))`, `sleep 5` and `$(echo TAG)`
+are POSIX constructs — on `cmd.exe` or PowerShell they are inert text, so a probe
+in the wrong dialect costs a request and can only come back `negative`.
+
+By default RCEKit infers the dialect per carrier, so an ordinary run already
+sends cmd.exe and PowerShell probes alongside the POSIX ones. You need
+`--sink-env` when the inference cannot see the answer, and there is one common
+case where it cannot: **the corpus environment names the application runtime,
+not the OS.** A PHP or Java application on IIS is a Windows target that every
+inference reads as POSIX.
+
+```bash
+# A PHP application on Windows: the runtime says PHP, the shell is cmd.exe
+python rcekit.py --acknowledge-consent \
+  --verify-url "https://target.example/tool?host=FUZZ" \
+  --environments php --methods reflected --sink-env windows
+
+# The sink goes through powershell.exe
+python rcekit.py --acknowledge-consent \
+  --verify-url "https://target.example/tool?host=FUZZ" \
+  --methods reflected,time --sink-env powershell
+```
+
+Two dialect facts change what a run can reach, and both are worth knowing before
+you read a `negative`:
+
+- **cmd.exe has no comment character and no command substitution**, so the `sq`,
+  `dq` and `subshell` rungs have no shape it can execute. Pinning
+  `--sink-env windows` narrows the ladder to `sep`, `raw` and `chain`, and the
+  pre-flight plan prints that.
+- **PowerShell has no pipe break-out.** `cmd | Start-Sleep -Milliseconds 500` is
+  a parameter-binding error, not a fresh command with stdin attached. If the sink
+  strips `;`, reach for a newline or — on PowerShell 7 — `&&`.
+
+The full per-dialect table (cores, separators, contexts) is in
+[reference.md](reference.md#the-sink-shell).
 
 ---
 
