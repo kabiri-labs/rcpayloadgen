@@ -45,8 +45,10 @@ starting point — this page is for looking things up once you know what you wan
 | Option | Description | Default |
 |---|---|---|
 | `--methods` | Comma-separated: `reflected`, `eval`, `file`, `oob`, `time` | None |
-| `--webroot` | (`file`) server-side directory the target writes and serves | None |
-| `--web-base-url` | (`file`) base URL that serves `--webroot` | None |
+| `--file-write-path` | (`file`) server-side directory the target can write to, e.g. `/tmp` | None |
+| `--file-read-url` | (`file`) URL template that reads it back: `{name}`, `{path}`, `{path_enc}` | None |
+| `--webroot` | (`file`) web-root alias for `--file-write-path` | None |
+| `--web-base-url` | (`file`) web-root alias for `--file-read-url '<base>/{name}'` | None |
 | `--oob-host` | (`oob`) host the **target** calls back to; required for `oob` | None |
 | `--time-base` | (`time`) base delay `N`; the regression fires `0/N/2N` | `2.0` |
 | `--separators` | Break-out separators for shell probes; `\n` = newline | `; `, `\| `, `\|\| `, `&& `, newline |
@@ -107,6 +109,49 @@ depth and `--probe-depth` changes nothing for it.
 sweep, and it does not narrow the separator screen `--methods time` runs: both
 depths try every candidate break-out, because dropping one is not a saving in
 requests but a blind spot. Use `--separators` to narrow that deliberately.
+
+### File-based confirmation, and what counts as read-back
+
+`--methods file` makes the target write a random token to a file and then
+fetches it back. The token is present only if the command executed *and* the
+write landed somewhere readable — the confirmation channel is the target's own
+read-back path, so no external listener is needed.
+
+That path **does not have to be a web root**. Name the two halves directly:
+
+```bash
+# An LFI / download / export handler that takes a server-side path
+python rcekit.py --acknowledge-consent --verify-url "https://target/lookup?host=FUZZ" \
+  --methods file \
+  --file-write-path /tmp \
+  --file-read-url "https://target/download?f={path_enc}"
+```
+
+| Placeholder | Expands to | Suits |
+|---|---|---|
+| `{name}` | the generated filename | a handler that takes a filename |
+| `{path}` | the full server-side path | an LFI-style parameter |
+| `{path_enc}` | that path, percent-encoded | a handler that rejects raw separators |
+
+Only those three are substituted, so a URL that legitimately contains braces
+survives unchanged.
+
+`--webroot` + `--web-base-url` remain as the **web-root alias** — a web root is
+just the case where the read URL is the base plus the filename, so
+`--webroot DIR --web-base-url BASE` is exactly
+`--file-write-path DIR --file-read-url 'BASE/{name}'`. Existing command lines
+are unaffected. The alias and the general form are resolved in one place, so
+they cannot drift.
+
+Why it matters: requiring a writable web root ruled out the LFI endpoint, the
+download handler, the attachment fetcher and the `/tmp`-backed preview — on
+exactly the internal, no-egress targets this method exists for. Measured against
+a target with a download handler and nothing serving the write directory, the
+web-root form confirms 0 and the general form confirms 7.
+
+This method changes target state (one file per confirmed probe), so it stays
+gated on the operator naming both halves, and **every finding prints its own
+cleanup command**.
 
 ### Enumerating injection points
 

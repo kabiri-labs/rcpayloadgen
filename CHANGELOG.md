@@ -8,6 +8,36 @@ formats, or the template schema.
 
 ## [Unreleased]
 
+## [2.29.0] — 2026-08-17
+
+Generalised read-back for the `file` method. It required a writable **web root**
+the tester already knew, which ruled out every other way a target can hand a
+file back — on exactly the internal, no-egress targets the method exists for.
+
+### Added
+
+- **`--file-write-path DIR` + `--file-read-url URL`** name the two halves of the
+  read-back channel directly, so an LFI endpoint, a download or export handler,
+  an attachment fetcher or a `/tmp`-backed preview all work. The template takes
+  `{name}` (the filename), `{path}` (the full server-side path) and `{path_enc}`
+  (that path percent-encoded); only those three are substituted, so a URL that
+  legitimately contains braces survives unchanged.
+
+  Measured against a target with a download handler and nothing serving the
+  write directory: the web-root form confirms **0** — reporting an exploitable
+  target clean — and the general form confirms **7**.
+
+### Changed
+
+- **`--webroot` / `--web-base-url` are now the web-root alias** for the general
+  form: a web root is just the case where the read URL is the base plus the
+  filename. Existing command lines are unaffected. Both are resolved in one
+  place inside the method, so the alias and the general form cannot drift — and
+  the gate, the pre-flight banner and the blind-sink advice all ask that same
+  resolver instead of testing for the webroot pair.
+- `blind_sink_advice` reads its flags defensively, so an args-like object
+  missing a newer field costs a line of advice rather than a traceback.
+
 ## [2.28.0] — 2026-08-17
 
 Injection-point enumeration. `-p NAME` needed the tester to already know which
@@ -561,7 +591,8 @@ this file and have not been restated here.
 - **[2.7.0]**
 - **[2.1.0]**
 
-[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.28.0...HEAD
+[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.29.0...HEAD
+[2.29.0]: https://github.com/kabiri-labs/rcekit/compare/v2.28.0...v2.29.0
 [2.28.0]: https://github.com/kabiri-labs/rcekit/compare/v2.27.0...v2.28.0
 [2.27.0]: https://github.com/kabiri-labs/rcekit/compare/v2.26.0...v2.27.0
 [2.26.0]: https://github.com/kabiri-labs/rcekit/compare/v2.25.0...v2.26.0
