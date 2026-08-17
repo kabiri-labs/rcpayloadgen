@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.28.0"
+__version__ = "2.29.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -3110,26 +3110,65 @@ class ReflectedMath(DetectionMethod):
 
 class FileBased(DetectionMethod):
     """Self-OOB confirmation for internal / no-egress targets. The probe makes
-    the target *write* a random token to a web-reachable file, then a followup
-    request fetches that file: the token is present only if the command executed
-    AND the write landed under the web root. No external listener is needed —
-    the confirmation channel is the target's own web server.
+    the target *write* a random token to a file it can also serve back, then a
+    followup request fetches it: the token is present only if the command
+    executed AND the write landed somewhere readable. No external listener is
+    needed — the confirmation channel is the target's own read-back path.
 
-    This changes target state (one file per confirmed probe), so it is gated on
-    ``--webroot`` + ``--web-base-url`` (the operator names the write location and
-    fetch base) and every finding carries an explicit cleanup command."""
+    That path does not have to be a web root. An LFI endpoint, a download or
+    export handler, an attachment fetcher and a ``/tmp``-backed preview are all
+    read-back channels, and requiring a writable web root ruled every one of
+    them out — on exactly the internal, no-egress targets this method exists
+    for. ``--file-write-path`` and ``--file-read-url`` name the two halves
+    directly; ``--webroot``/``--web-base-url`` remain as the convenience alias
+    that builds them for the web-root case.
+
+    This changes target state (one file per confirmed probe), so it stays gated
+    on the operator naming both halves, and every finding carries an explicit
+    cleanup command."""
     name = "file"
     tier = "confirmed"
 
+    def _channel(self) -> Optional[Tuple[str, str]]:
+        """``(write_path, read_url_template)``, or ``None`` when not configured.
+
+        ``--webroot``/``--web-base-url`` are resolved here rather than at the
+        CLI so the alias and the general form cannot drift: a web root is just
+        the case where the read URL is the base plus the filename."""
+        write_path = self.config.get("file_write_path") or self.config.get("webroot")
+        read_url = self.config.get("file_read_url")
+        if not read_url and self.config.get("web_base_url"):
+            read_url = self.config["web_base_url"].rstrip("/") + "/{name}"
+        if not (write_path and read_url):
+            return None
+        return str(write_path), str(read_url)
+
     def applicable(self, record: "PayloadRecord") -> bool:
-        if not (self.config.get("webroot") and self.config.get("web_base_url")):
+        if self._channel() is None:
             return False
         return record.environment in SHELL_CAPABLE_ENVIRONMENTS
 
+    @staticmethod
+    def _render_read_url(template: str, path: str, name: str) -> str:
+        """Fill a read-back template.
+
+        ``{name}`` suits a handler that takes a filename, ``{path}`` an LFI-style
+        parameter that takes the whole server-side path, and ``{path_enc}`` the
+        same percent-encoded for a handler that rejects raw separators. Only
+        these three are substituted, so a URL containing other braces survives
+        unchanged."""
+        return (template
+                .replace("{path_enc}", urllib.parse.quote(path, safe=""))
+                .replace("{path}", path)
+                .replace("{name}", name))
+
     def build_probes(self, record: "PayloadRecord", rng: "random.Random") -> List[Probe]:
-        webroot = self.config["webroot"].rstrip("/")
-        base = self.config["web_base_url"].rstrip("/")
+        channel = self._channel()
+        if channel is None:
+            return []
+        write_root, read_template = channel
         windows = record.environment == "windows"
+        write_root = write_root.rstrip("\\") if windows else write_root.rstrip("/")
         probes: List[Probe] = []
         # One filename and token per separator. Sharing them would make every
         # probe's followup succeed as soon as any one separator wrote the file,
@@ -3141,15 +3180,16 @@ class FileBased(DetectionMethod):
             token = self._tag(rng) + "".join(rng.choice(string.ascii_uppercase + string.digits)
                                              for _ in range(10))
             if windows:
-                write_path = f"{webroot}\\{name}"
+                write_path = f"{write_root}\\{name}"
                 core = f"echo {token}>{write_path}"
                 cleanup = f"del {write_path}"
             else:
-                write_path = f"{webroot}/{name}"
+                write_path = f"{write_root}/{name}"
                 core = f"echo {token} > {write_path}"
                 cleanup = f"rm -f {write_path}"
             body = core if separator is None else f"{separator}{core}"
-            followup = {"url": f"{base}/{name}", "cleanup": cleanup, "path": write_path}
+            followup = {"url": self._render_read_url(read_template, write_path, name),
+                        "cleanup": cleanup, "path": write_path}
             # The write uses a `>` redirect, which ${IFS} would turn into an
             # ambiguous redirect, so this probe stays canonical under --evade low.
             probes.append(Probe(payload=self._wrap_context(record, body),
@@ -3161,7 +3201,8 @@ class FileBased(DetectionMethod):
             return Verdict("error", f"write request never reached the target ({obs.body[:120]})")
         if obs.followup_body is None:
             return Verdict("negative",
-                           "could not fetch the written file (no write, wrong web root, or blocked)")
+                           "could not fetch the written file (no write, wrong write path or "
+                           "read-back URL, or blocked)")
         if not self._search(probe.expected, obs.followup_body):
             return Verdict("negative", "token absent from the fetched file")
         # The token is random, so its presence anywhere in the payload-free
@@ -3778,11 +3819,14 @@ def blind_sink_advice(method_names: List[str], args: Any) -> List[str]:
     # to run is its own small version of the problem this function exists for.
     lines.append("[detect]   --methods oob --oob-host HOST --verify-active-risk intrusive   "
                  "(needs egress from the target; confirms)")
-    if not (args.webroot and args.web_base_url):
-        lines.append("[detect]   --methods file --webroot DIR --web-base-url URL   "
-                     "(needs a writable web root; confirms)")
+    if not ((getattr(args, "webroot", None) and getattr(args, "web_base_url", None))
+            or (getattr(args, "file_write_path", None)
+                and getattr(args, "file_read_url", None))):
+        lines.append("[detect]   --methods file --file-write-path DIR --file-read-url URL   "
+                     "(needs somewhere writable the target can also read back -- a web root, an "
+                     "LFI endpoint, a download handler; confirms)")
     lines.append("[detect]   --methods time                     "
-                 "(no egress and no web root needed; needs-review only)")
+                 "(no egress and no read-back needed; needs-review only)")
     return lines
 
 
@@ -4441,10 +4485,24 @@ def main():
                              "a request carrying credential headers over plain http is flagged.")
     parser.add_argument("--webroot", default=None,
                         help="(file-based detection) server-side directory the target can write to and "
-                             "serve, e.g. /var/www/html. Required with --methods file.")
+                             "serve, e.g. /var/www/html. Convenience alias for --file-write-path "
+                             "when the read-back channel is a web root.")
     parser.add_argument("--web-base-url", default=None,
                         help="(file-based detection) base URL that serves --webroot, e.g. "
-                             "https://target.example. Required with --methods file.")
+                             "https://target.example. Convenience alias for "
+                             "--file-read-url '<base>/{name}'.")
+    parser.add_argument("--file-write-path", default=None, metavar="DIR",
+                        help="(--methods file) server-side directory the target can write to, e.g. "
+                             "/tmp. Pairs with --file-read-url. Unlike --webroot this does not have "
+                             "to be served by a web server — anything the target can read back works.")
+    parser.add_argument("--file-read-url", default=None, metavar="URL",
+                        help="(--methods file) URL template that reads the written file back. "
+                             "Placeholders: {name} (filename), {path} (full server-side path), "
+                             "{path_enc} (that path percent-encoded). This is what generalises the "
+                             "method past a writable web root — an LFI endpoint, a download/export "
+                             "handler or an attachment fetcher is a read-back channel too, e.g. "
+                             "--file-write-path /tmp --file-read-url "
+                             "'https://target/download?f={path_enc}'.")
     parser.add_argument("--time-base", type=float, default=2.0,
                         help="(time-based detection) base delay N in seconds; the regression fires "
                              "0/N/2N and requires the response time to track it (default: 2.0).")
@@ -4478,8 +4536,8 @@ def main():
                         help="Comma-separated RCE detection methods to run against --verify-url/-r instead of "
                              "the classic per-payload oracle. Available: reflected (results-based execution "
                              "proof via computed arithmetic); eval (SSTI/SpEL/OGNL/Groovy/raw-eval via a "
-                             "computed product); file (self-OOB write+fetch, needs --webroot and "
-                             "--web-base-url); oob (DNS/HTTP callback to the built-in listener, needs "
+                             "computed product); file (self-OOB write+read-back, needs --file-write-path "
+                             "and --file-read-url, or the --webroot/--web-base-url alias); oob (DNS/HTTP callback to the built-in listener, needs "
                              "--oob-host — the only confirmed-tier method for a fully blind sink); "
                              "time (hardened blind-timing regression, needs-review only). "
                              "Opt-in and additive: when omitted, verification keeps its existing behaviour "
@@ -4915,6 +4973,8 @@ def main():
                       f"Available: {', '.join(sorted(DETECTION_METHODS))}.")
                 return 1
             detection_config = {"webroot": args.webroot, "web_base_url": args.web_base_url,
+                                "file_write_path": args.file_write_path,
+                                "file_read_url": args.file_read_url,
                                 "time_base": args.time_base, "evade": args.evade,
                                 "sink_raw": sink_raw, "separators": separators,
                                 "sink_shapes": sink_shapes, "eval_engines": eval_engines,
@@ -4957,12 +5017,15 @@ def main():
                 for line in oob_channel_warnings(args, dns_up):
                     print(line)
             if "file" in method_names:
-                if not (args.webroot and args.web_base_url):
+                file_channel = FileBased(generator, detection_config)._channel()
+                if file_channel is None:
                     print("[!] --methods file writes a file to the target and fetches it back, so it "
-                          "needs both --webroot (server-side write dir) and --web-base-url (fetch base).")
+                          "needs both halves: --file-write-path DIR and --file-read-url URL "
+                          "(or the web-root alias --webroot DIR --web-base-url URL).")
                     return 1
-                print(f"[detect] file-based method WRITES to {args.webroot} on the target and fetches via "
-                      f"{args.web_base_url}; each confirmed finding lists a cleanup command.")
+                print(f"[detect] file-based method WRITES to {file_channel[0]} on the target and "
+                      f"reads it back via {file_channel[1]}; each confirmed finding lists a "
+                      "cleanup command.")
             if set(method_names) & SHELL_PROBE_METHODS:
                 # The ladder multiplies request count, so say which shapes are
                 # about to be tried before trying them. An operator on a
@@ -5074,8 +5137,10 @@ def main():
                         print(f"[!] {', '.join(shell_methods)} {verb} an environment whose runtime "
                               "reaches a shell. Add --environments unix if the sink shells out, or "
                               f"use --methods {EvalExpr.name} for a template/expression sink.")
-                    if FileBased.name in method_names and not (args.webroot and args.web_base_url):
-                        print("[!] --methods file also needs --webroot and --web-base-url.")
+                    if (FileBased.name in method_names
+                            and FileBased(generator, detection_config)._channel() is None):
+                        print("[!] --methods file also needs --file-write-path and --file-read-url "
+                              "(or --webroot and --web-base-url).")
                 return 1
             confirmed = [r for r in results if r["verdict"] == "confirmed"]
             if confirmed:

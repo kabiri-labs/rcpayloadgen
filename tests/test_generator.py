@@ -3472,9 +3472,12 @@ class BlindSinkAdviceTestCase(unittest.TestCase):
     "no execution confirmed" reads exactly like a clean target."""
 
     class _Args:
-        def __init__(self, webroot=None, web_base_url=None):
+        def __init__(self, webroot=None, web_base_url=None,
+                     file_write_path=None, file_read_url=None):
             self.webroot = webroot
             self.web_base_url = web_base_url
+            self.file_write_path = file_write_path
+            self.file_read_url = file_read_url
 
     def test_in_band_only_runs_get_the_advice(self):
         lines = rcekit.blind_sink_advice(["reflected", "eval"], self._Args())
@@ -3830,6 +3833,168 @@ RAW_CAPTURE = (
     "\r\n"
     '{"user": {"profile": {"name": "ali"}}, "tags": ["a", 2]}'
 )
+
+
+class FileReadBackTestCase(unittest.TestCase):
+    """The `file` method's read-back channel does not have to be a web root.
+
+    An LFI endpoint, a download or export handler, an attachment fetcher and a
+    /tmp-backed preview are all read-back channels. Requiring a writable web
+    root ruled every one of them out — on exactly the internal, no-egress
+    targets this method exists for."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+        self.rec = make_record(environment="unix", context="raw")
+
+    def _channel(self, config):
+        return FileBased(self.gen, config)._channel()
+
+    # -- resolving the two halves -------------------------------------------
+
+    def test_the_explicit_pair_is_used_as_given(self):
+        self.assertEqual(
+            self._channel({"file_write_path": "/tmp",
+                           "file_read_url": "http://t/dl?f={path}"}),
+            ("/tmp", "http://t/dl?f={path}"))
+
+    def test_the_webroot_alias_builds_the_same_shape(self):
+        # Backward compatibility: a web root is just the case where the read URL
+        # is the base plus the filename.
+        self.assertEqual(
+            self._channel({"webroot": "/var/www/html", "web_base_url": "http://t/"}),
+            ("/var/www/html", "http://t/{name}"))
+
+    def test_half_a_channel_is_not_a_channel(self):
+        for config in ({"file_write_path": "/tmp"}, {"file_read_url": "http://t/{name}"},
+                       {"webroot": "/var/www"}, {"web_base_url": "http://t"}, {}):
+            self.assertIsNone(self._channel(config), config)
+            self.assertFalse(FileBased(self.gen, config).applicable(self.rec), config)
+            import random as _random
+            self.assertEqual(FileBased(self.gen, config).build_probes(
+                self.rec, _random.Random(1)), [], config)
+
+    def test_the_explicit_flags_win_over_the_alias(self):
+        self.assertEqual(
+            self._channel({"webroot": "/var/www", "web_base_url": "http://t",
+                           "file_write_path": "/tmp",
+                           "file_read_url": "http://t/dl?f={path}"}),
+            ("/tmp", "http://t/dl?f={path}"))
+
+    # -- template rendering --------------------------------------------------
+
+    def test_every_placeholder_is_substituted(self):
+        render = FileBased._render_read_url
+        self.assertEqual(render("http://t/{name}", "/tmp/a.txt", "a.txt"), "http://t/a.txt")
+        self.assertEqual(render("http://t/dl?f={path}", "/tmp/a.txt", "a.txt"),
+                         "http://t/dl?f=/tmp/a.txt")
+        self.assertEqual(render("http://t/dl?f={path_enc}", "/tmp/a.txt", "a.txt"),
+                         "http://t/dl?f=%2Ftmp%2Fa.txt")
+
+    def test_other_braces_in_the_url_survive(self):
+        # Only the three placeholders are substituted, so a URL that legitimately
+        # contains braces is not mangled.
+        self.assertEqual(
+            FileBased._render_read_url("http://t/dl?q={\"a\":1}&f={name}", "/tmp/a.txt", "a.txt"),
+            "http://t/dl?q={\"a\":1}&f=a.txt")
+
+    # -- probe construction --------------------------------------------------
+
+    def _probes(self, config, environment="unix"):
+        import random as _random
+        return FileBased(self.gen, config).build_probes(
+            make_record(environment=environment, context="raw"), _random.Random(3))
+
+    def test_the_written_path_and_the_read_url_agree(self):
+        probes = self._probes({"file_write_path": "/tmp",
+                               "file_read_url": "http://t/dl?f={path}"})
+        self.assertTrue(probes)
+        for probe in probes:
+            path = probe.followup["path"]
+            self.assertTrue(path.startswith("/tmp/"))
+            self.assertEqual(probe.followup["url"], f"http://t/dl?f={path}")
+            self.assertIn(path, probe.followup["cleanup"])
+
+    def test_a_trailing_separator_on_the_write_path_is_not_doubled(self):
+        probe = self._probes({"file_write_path": "/tmp/",
+                              "file_read_url": "http://t/{name}"})[0]
+        self.assertNotIn("//", probe.followup["path"])
+
+    def test_windows_writes_with_a_backslash_and_cleans_up_with_del(self):
+        probe = self._probes({"file_write_path": "C:\\inetpub\\",
+                              "file_read_url": "http://t/{name}"}, environment="windows")[0]
+        self.assertTrue(probe.followup["path"].startswith("C:\\inetpub\\"))
+        self.assertNotIn("\\\\", probe.followup["path"])
+        self.assertTrue(probe.followup["cleanup"].startswith("del "))
+
+    def test_the_token_is_never_in_the_payload(self):
+        # The oracle is unchanged: the token appears only if the target wrote it.
+        for probe in self._probes({"file_write_path": "/tmp",
+                                   "file_read_url": "http://t/{name}"}):
+            self.assertIn(probe.expected, probe.payload,
+                          "the write command carries the token by construction")
+            self.assertNotIn(probe.expected, probe.followup["url"])
+
+    # -- end to end ----------------------------------------------------------
+
+    def _target(self, writedir, serve_webroot):
+        import os
+
+        def route(method, path, params, headers, body):
+            if path == "/download":
+                served = params.get("f", "")
+                if served and os.path.exists(served):
+                    with open(served) as handle:
+                        return 200, handle.read()
+                return 200, "no such export"
+            if serve_webroot and path.startswith("/files/"):
+                served = os.path.join(writedir, os.path.basename(path))
+                if os.path.exists(served):
+                    with open(served) as handle:
+                        return 200, handle.read()
+                return 404, "not found"
+            pipe = os.popen("echo LOOKUP " + params.get("host", "") + " 2>&1")
+            out = pipe.read()
+            pipe.close()
+            return 200, out
+        return route
+
+    def test_a_download_handler_is_a_read_back_channel(self):
+        # The case the method could not reach before: somewhere writable that no
+        # web server serves, plus a handler that reads a path back.
+        import tempfile
+        writedir = tempfile.mkdtemp()
+        with local_target(self._target(writedir, serve_webroot=False)) as base:
+            without = self.gen.run_detection(
+                [self.rec], url=f"{base}/?host=FUZZ", methods=["file"],
+                config={"webroot": writedir, "web_base_url": f"{base}/files"}, timeout=15)
+            with_channel = self.gen.run_detection(
+                [self.rec], url=f"{base}/?host=FUZZ", methods=["file"],
+                config={"file_write_path": writedir,
+                        "file_read_url": base + "/download?f={path_enc}"}, timeout=15)
+        self.assertFalse([r for r in without if r["verdict"] == "confirmed"],
+                         "precondition: nothing serves the write directory")
+        self.assertTrue([r for r in with_channel if r["verdict"] == "confirmed"],
+                        "a download handler must work as the read-back channel")
+
+    def test_the_webroot_alias_still_confirms_on_a_web_root(self):
+        import tempfile
+        writedir = tempfile.mkdtemp()
+        with local_target(self._target(writedir, serve_webroot=True)) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/?host=FUZZ", methods=["file"],
+                config={"webroot": writedir, "web_base_url": f"{base}/files"}, timeout=15)
+        self.assertTrue([r for r in results if r["verdict"] == "confirmed"])
+
+    def test_a_clean_target_stays_negative_through_the_new_channel(self):
+        import tempfile
+        writedir = tempfile.mkdtemp()
+        with local_target(lambda *a: (200, "<html>static</html>")) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/?host=FUZZ", methods=["file"],
+                config={"file_write_path": writedir,
+                        "file_read_url": base + "/download?f={path_enc}"}, timeout=15)
+        self.assertFalse([r for r in results if r["verdict"] == "confirmed"])
 
 
 class InjectionPointEnumerationTestCase(unittest.TestCase):
