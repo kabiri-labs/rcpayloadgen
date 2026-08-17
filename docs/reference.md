@@ -103,9 +103,15 @@ the canonical probes:
 `quick` sends only the canonical probes — roughly half the requests, for
 rate-limited targets or when the sink's shape is already known.
 
-**All of these shapes are Unix.** `cmd.exe` has no `#` comment, no `${IFS}`, and
-no `awk`, so `--environments windows` gets the one `set /a` probe at either
-depth and `--probe-depth` changes nothing for it.
+**All of these shapes are Unix**, and `--probe-depth` therefore means something
+different per [sink shell](#the-sink-shell):
+
+- **cmd.exe** has no `#` comment, no `${IFS}` and no `awk`, so it gets the one
+  `set /a` probe at either depth — `--probe-depth` changes nothing for it.
+- **PowerShell** takes the comment terminator (`#` comments to end of line there
+  too), and `full` adds a second shape that names no cmdlet at all — a bare
+  expandable string, whose value PowerShell writes to the output stream — so a
+  filter on `Write-Output`/`echo` does not silence the method.
 
 `--probe-depth` governs probe *shapes* only. It does not narrow the separator
 sweep, and it does not narrow the separator screen `--methods time` runs: both
