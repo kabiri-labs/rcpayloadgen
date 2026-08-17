@@ -37,14 +37,33 @@ clean.
   `time` (a sleep), `file` (a redirect), `oob` (a fetch) — are completely inert
   inside those quotes. On a quote-filtering sink, `--methods file` went from **0
   confirmations to 2**: it had been reporting an exploitable target as clean.
-- **The `raw` rung is now part of `auto`.** A `qx/$input/`-style sink, where the
-  input is the whole command, previously needed `--sink-raw` — so it reported
-  clean unless the operator already suspected the shape. One extra probe per
-  carrier buys it. `--sink-raw` keeps its meaning as the narrowing alias for
-  `--sink-shape raw`, and no existing command line changes behaviour.
+- **The `raw` rung is now part of `auto`, for every shell method.** A
+  `qx/$input/`-style sink, where the input is the whole command, previously
+  needed `--sink-raw` — so it reported clean unless the operator already
+  suspected the shape. One extra probe per carrier buys it. `--sink-raw` keeps
+  its meaning as the narrowing alias for `--sink-shape raw`, and no existing
+  command line changes behaviour. `reflected`, `file`, `time` and `oob` all
+  build their candidates through one `_separator_candidates` helper, so a rung
+  cannot reach some methods and not others; `time` screens it in its second
+  wave, alongside the separators it holds back.
+
+### Fixed
+
+- **A method that builds no probes no longer reports `negative`.** An aggregate
+  method asked to judge zero samples answers honestly — "no delay was observed",
+  "no callback arrived" — and that reads as "not vulnerable" from a run that
+  tested nothing. The engine now emits no row for a carrier that produced no
+  probes, which lets its own loud nothing-tested path fire instead. Reachable
+  through any narrowing that leaves a carrier with nothing to send.
 
 ### Changed
 
+- **The pre-flight sink-shape plan is computed from the effective run**, not
+  from the `--sink-shape` value. `--separators`, `--contexts` and `--sink-raw`
+  each narrow the ladder, so printing the flag described a run that would not
+  happen — and this output is presented as an audit of the traffic about to be
+  sent. `effective_sink_shapes` is the single source of truth the engine and the
+  plan both read.
 - **The backtick context drops probe shapes that carry their own backtick.**
   Backticks do not nest, so such a probe closes the outer substitution early and
   could only ever come back negative. `$( )` does nest and keeps every shape.

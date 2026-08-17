@@ -2154,8 +2154,10 @@ class ParametricTimeTestCase(unittest.TestCase):
             series += [(p, Observation(status=200, body="", elapsed=0.1)) for p in batch]
             batch = self.method.next_probes(series)
         self.assertGreater(waves, 1, "the held-back separators must still be screened")
+        # None is the `raw` rung — a whole-command sink is screened alongside
+        # the break-outs, so the timing method finds one without being told.
         self.assertEqual({p.separator for p, _ in series},
-                         {"; ", "| ", "|| ", "&& ", "\n"})
+                         {"; ", "| ", "|| ", "&& ", "\n", None})
         self.assertFalse([p for p, _ in series if p.phase == "regress"])
         verdict = self.method.confirm_series(series)
         self.assertEqual(verdict.status, "negative")
@@ -2813,7 +2815,8 @@ class SeparatorSweepTestCase(unittest.TestCase):
         probes = FileBased(self.gen, {"webroot": "/var/www/html",
                                       "web_base_url": "http://t"}).build_probes(
             self.rec, _random.Random(1))
-        self.assertEqual(len(probes), 5)
+        # Five separators plus the `raw` rung's separator-free probe.
+        self.assertEqual(len(probes), 6)
         urls = {p.followup["url"] for p in probes}
         tokens = {p.expected for p in probes}
         self.assertEqual(len(urls), len(probes))
@@ -3793,7 +3796,10 @@ class TimingScreenDepthTestCase(unittest.TestCase):
         return seen
 
     def test_both_depths_screen_every_separator(self):
-        expected = {"; ", "| ", "|| ", "&& ", "\n"}
+        # None is the `raw` rung, screened at both depths for the same reason
+        # every separator is: leaving a whole sink shape undetectable is not the
+        # kind of saving --probe-depth is for.
+        expected = {"; ", "| ", "|| ", "&& ", "\n", None}
         self.assertEqual(self._separators("quick"), expected)
         self.assertEqual(self._separators("full"), expected)
 
@@ -3930,6 +3936,95 @@ class SinkShapeLadderTestCase(unittest.TestCase):
         self.assertTrue(payloads)
         for payload in payloads:
             self.assertTrue(payload.startswith((";", "|", "&")), payload)
+
+    def test_every_shell_method_gets_the_raw_rung(self):
+        # The rung used to live only in _wrap_variants, so it reached
+        # `reflected` and nothing else: file/time/oob read the separator list
+        # directly and never sent a bare command to a whole-command sink.
+        import random as _random
+        config = {"webroot": "/var/www", "web_base_url": "http://t",
+                  "time_base": 2, "oob_host": "x.example"}
+        for name, cls in (("reflected", ReflectedMath), ("file", FileBased),
+                          ("oob", rcekit.OobCallback)):
+            probes = cls(self.gen, config).build_probes(self.rec, _random.Random(1))
+            self.assertTrue(any(p.payload.startswith(("echo ", "sleep ", "curl ", "awk ",
+                                                      "expr ", "wget ", "nslookup ", "host "))
+                                for p in probes),
+                            f"{name} sends no bare command under the full ladder")
+
+    def test_the_timing_method_reaches_the_raw_rung_in_its_second_wave(self):
+        # time screens in two waves to avoid paying a sleep per separator up
+        # front, so the raw candidate lands in the second wave rather than the
+        # first. It must still be reached.
+        import random as _random
+        method = ParametricTime(self.gen, {"time_base": 2})
+        first = method.build_probes(self.rec, _random.Random(1))
+        series = [(p, Observation(status=200, body="", elapsed=0.1)) for p in first]
+        second = method.next_probes(series)
+        self.assertIn(None, {p.separator for p in second})
+        self.assertTrue(any(p.payload.startswith("sleep ") for p in second))
+
+    def test_narrowing_to_raw_leaves_every_method_with_probes(self):
+        # Narrowing to `raw` used to empty the separator list, so file/time/oob
+        # built ZERO probes -- and an aggregate method judging zero samples
+        # answered `negative`. A run that tested nothing must never read as
+        # "not vulnerable".
+        import random as _random
+        config = {"webroot": "/var/www", "web_base_url": "http://t", "time_base": 2,
+                  "oob_host": "x.example", "sink_shapes": ("raw",)}
+        for name, cls in (("reflected", ReflectedMath), ("file", FileBased),
+                          ("time", ParametricTime), ("oob", rcekit.OobCallback)):
+            probes = cls(self.gen, config).build_probes(self.rec, _random.Random(1))
+            self.assertTrue(probes, f"{name} built no probes for --sink-shape raw")
+
+    def test_a_method_that_built_no_probes_reports_nothing_rather_than_negative(self):
+        # The engine-level guard behind that. An aggregate method's honest
+        # answer to an empty series ("no delay was observed") is `negative`, so
+        # the row must not be emitted at all -- which is what lets the engine's
+        # own nothing-tested path fire instead.
+        # An explicit --contexts suppresses the sq carrier, and naming only the
+        # sq rung leaves the raw carrier with no separators and no raw rung —
+        # so nothing anywhere builds a probe.
+        with local_target(lambda *a: (200, "ok")) as base:
+            results = self.gen.run_detection(
+                [make_record(environment="unix", context="raw")],
+                url=f"{base}/?host=FUZZ", methods=["time"],
+                config={"time_base": 1, "sink_shapes": ("sq",), "contexts_explicit": True})
+        self.assertEqual(results, [],
+                         "a carrier with no probes must not produce a verdict")
+        self.assertEqual(rcekit.overall_detection_verdict(results), "nothing-tested")
+
+    # -- the effective ladder ------------------------------------------------
+
+    def test_effective_shapes_drop_raw_when_separators_are_pinned(self):
+        self.assertNotIn("raw", rcekit.effective_sink_shapes({"separators": ["| "]}))
+        self.assertIn("raw", rcekit.effective_sink_shapes({}))
+
+    def test_effective_shapes_drop_context_rungs_when_contexts_are_explicit(self):
+        # An explicit --contexts suppresses the added carriers, so those rungs
+        # never get anything to ride on.
+        effective = rcekit.effective_sink_shapes({"contexts_explicit": True})
+        for rung in ("sq", "dq", "subshell"):
+            self.assertNotIn(rung, effective)
+        self.assertIn("sep", effective)
+
+    def test_sink_raw_reduces_the_effective_ladder_to_raw(self):
+        self.assertEqual(rcekit.effective_sink_shapes({"sink_raw": True}), ("raw",))
+
+    def test_an_explicit_shape_choice_survives_the_other_narrowings(self):
+        self.assertEqual(
+            rcekit.effective_sink_shapes({"separators": ["| "], "sink_shapes": ("sep", "raw")}),
+            ("sep", "raw"))
+
+    def test_the_printed_plan_matches_what_the_engine_will_do(self):
+        # The plan is presented as an audit of the traffic about to be sent, so
+        # printing the raw flag would describe a run that is not the one about
+        # to happen.
+        config = {"separators": ["| "]}
+        self.assertEqual(ReflectedMath(self.gen, config)._raw_rung_selected(),
+                         "raw" in rcekit.effective_sink_shapes(config))
+        lines = rcekit.sink_shape_plan(rcekit.effective_sink_shapes(config))
+        self.assertFalse(any(" raw " in line for line in lines), lines)
 
     # -- separator rungs -----------------------------------------------------
 
