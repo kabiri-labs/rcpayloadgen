@@ -22,6 +22,7 @@ only ever run it against systems you are authorised to test.
 - [Blind targets](#blind-targets)
 - [No-egress targets](#no-egress-targets)
 - [Upload and write-primitive targets](#upload-and-write-primitive-targets)
+- [When execution happens on another request](#when-execution-happens-on-another-request)
 - [Out-of-band callbacks](#out-of-band-callbacks)
 - [Multi-step chains](#multi-step-chains)
 - [Reading the results](#reading-the-results)
@@ -455,6 +456,47 @@ finding (both tiers) prints a cleanup line naming it.
 read-back URL, so a `.jsp` costs one request; with no extension to read it
 writes all five languages, which is three requests because `jsp`, `aspx` and
 `erb` share the `<%= %>` delimiters.
+
+---
+
+## When execution happens on another request
+
+You inject into `POST /bio` and the response says `saved`. Nothing to diff, so
+the run comes back `negative` — and the payload runs half a second later, when
+somebody loads the profile page. Stored SSTI, a payload written to a log a
+template renders, a queued job: same shape every time.
+
+`--observe-url` points at the place it surfaces:
+
+```bash
+python rcekit.py --acknowledge-consent \
+  --verify-url "https://target.example/bio?bio=FUZZ" --methods eval \
+  --observe-url "https://target.example/profile/42"
+```
+
+If that page needs a session, hand it a captured request instead — it takes no
+`FUZZ` marker, because it is read, never injected into:
+
+```bash
+python rcekit.py --acknowledge-consent \
+  --verify-url "https://target.example/bio?bio=FUZZ" --methods eval \
+  --observe-request profile.txt --observe-poll 10 --observe-timeout 120
+```
+
+This still reaches `confirmed` rather than `needs-review`, and the reason is
+worth knowing: the value is computed by RCEKit from operands random to that
+probe, it must be absent from a snapshot of the observed page taken *before any
+probe was sent*, and it is only looked for there when the probe's own payload
+does not already contain it. That last rule is why `file` and `oob` sit this out
+— their expected value is a token that rides in the payload, so a page that
+simply stores and re-renders your input would hand it back and "confirm" nothing.
+
+Two costs to know about. The observed page is read once after **each** probe as
+well as polled after the batch, because a store that *overwrites* (a profile
+field) keeps only the last probe by the time a batch poll runs — so a run with
+`--observe-url` sends roughly twice the requests. And if that endpoint never
+answers, RCEKit says so loudly rather than letting the negatives read as a
+second-order result.
 
 ---
 

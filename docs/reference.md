@@ -10,6 +10,7 @@ starting point — this page is for looking things up once you know what you wan
 - [Detection methods](#detection-methods)
 - [Sink shape](#sink-shape)
 - [The sink shell](#the-sink-shell)
+- [Second-order execution](#second-order-execution-the-observed-channel)
 - [Safety &amp; consent](#safety--consent)
 - [Out-of-band listener](#out-of-band-listener)
 - [Generation &amp; output](#generation--output)
@@ -52,6 +53,10 @@ starting point — this page is for looking things up once you know what you wan
 | `--web-base-url` | (`file`) web-root alias for `--file-read-url '<base>/{name}'` | None |
 | `--write-url-template` | (`write`) URL the file your request stores is served at; required for `write` | None |
 | `--write-lang` | (`write`) File types to write: `auto`, or any of `jsp`, `jspx`, `php`, `aspx`, `erb` | `auto` |
+| `--observe-url` | Second-order: endpoint polled for the computed value after the probes | None |
+| `--observe-request` | Raw HTTP request for that endpoint instead of `--observe-url` (no marker) | None |
+| `--observe-poll` | Seconds between polls of the observed endpoint | `5` |
+| `--observe-timeout` | Stop polling after this many seconds; one poll always happens | `60` |
 | `--oob-host` | (`oob`) host the **target** calls back to; required for `oob` | None |
 | `--time-base` | (`time`) base delay `N`; the regression fires `0/N/2N` | `2.0` |
 | `--separators` | Break-out separators for shell probes; `\n` = newline | `; `, `\| `, `\|\| `, `&& `, newline |
@@ -163,6 +168,66 @@ web-root form confirms 0 and the general form confirms 7.
 This method changes target state (one file per confirmed probe), so it stays
 gated on the operator naming both halves, and **every finding prints its own
 cleanup command**.
+
+### Second-order execution: the observed channel
+
+Execution frequently happens on a **different request** than injection — stored
+SSTI rendered on a profile page, a payload written to a log a template engine
+later renders, a queued job run asynchronously. The engine diffs the response it
+injected into, so every one of those reads `negative` however exploitable the
+target is.
+
+`--observe-url` names the endpoint where the execution surfaces:
+
+```bash
+python rcekit.py --acknowledge-consent \
+  --verify-url "https://target/bio?bio=FUZZ" --methods eval \
+  --observe-url "https://target/profile/42"
+
+# ...or a captured request, when that page needs a session
+python rcekit.py --acknowledge-consent \
+  --verify-url "https://target/bio?bio=FUZZ" --methods eval \
+  --observe-request profile.txt --observe-poll 10 --observe-timeout 120
+```
+
+**It is still fully differential**, which is why it can legitimately reach
+`confirmed` rather than `needs-review`:
+
+- the value was computed by RCEKit from operands random to this probe;
+- it is absent from a snapshot of that endpoint taken **before any probe was
+  sent** — after would already contain what the control is meant to rule out;
+- and a probe's value is looked for there **only when the probe's own payload
+  does not contain it**.
+
+That last rule is the one that matters. `file` and `oob` expect a random *token*
+that sits verbatim in the payload, so a target that merely stores the payload
+and renders it back would hand that token straight to the observed page and every
+such probe would confirm without executing anything. The computed-value methods
+are safe for the opposite reason — reflection returns `$((a+b))`, never the sum —
+so the rule selects them without naming them, and a method added later inherits
+the right answer.
+
+The channel is read **twice**, because the two real shapes need different
+things:
+
+| Store shape | Example | Read by |
+|---|---|---|
+| overwrite | a profile field, a single setting | one read after **each** probe |
+| append / async | a log, a comment list, a queued job | the polling loop after the batch |
+
+Without the per-probe read, an overwriting store keeps only the last probe by the
+time a batch poll runs, so the oracle would confirm nothing on the shape it most
+exists for. The cost is one extra request per probe — and only for probes that
+are eligible at all and not already confirmed in-band, so `file` and `oob` add
+nothing.
+
+Observing is **additive**: the in-band verdict is computed exactly as before and
+only a non-`confirmed` one can be upgraded, so a run without the flag is
+unchanged and a run with it can only gain findings. Each probe's result carries
+an `observe_status` in `--detect-json` — `confirmed`, `polled` (read, value not
+there), `in-control`, `not-observed` (not eligible) or `unreachable`. If the
+endpoint never answered, the run says so outright: negatives decided without ever
+reading the observed channel are not second-order negatives.
 
 ### Write-then-execute: proving a write primitive is RCE
 

@@ -5579,5 +5579,227 @@ class WriteThenExecuteTestCase(unittest.TestCase):
         self.assertIn("write", rcekit.STATE_CHANGING_METHODS)
 
 
+class ObservedChannelTestCase(unittest.TestCase):
+    """Second-order execution: the probe lands on one request and runs on another.
+
+    Stored SSTI rendered on a profile page, a payload written to a log a
+    template engine later renders, a queued job. The engine diffs the response
+    it injected into, so every one of these read `negative` however exploitable
+    the target was.
+
+    It stays fully differential — which is why it can legitimately reach
+    `confirmed` — and the rule that keeps it so is that a probe's value is
+    looked for on the observed channel **only when the payload does not already
+    carry it**. Without that rule, `file` and `oob` (whose expected value is a
+    token sitting verbatim in the payload) would confirm on any target that
+    merely stores the payload and renders it back."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+        self.rec = make_record(environment="unix", context="raw")
+
+    @staticmethod
+    def _render_ssti(text):
+        return re.sub(r"\{\{\s*(\d+)\*(\d+)\s*\}\}",
+                      lambda m: str(int(m.group(1)) * int(m.group(2))), text)
+
+    def _stored_route(self, render, store="overwrite", seed=""):
+        """A target that stores on one path and shows it on another.
+
+        `overwrite` is the shape the acceptance case uses (a profile field);
+        `append` is the log/comment-list shape. They exercise different halves
+        of the machinery, so both are modelled."""
+        held = {"value": seed}
+
+        def route(method, path, params, headers, body):
+            if path == "/profile":
+                return 200, "<h1>bio</h1>" + render(held["value"])
+            if store == "append":
+                held["value"] += "\n" + params.get("bio", "")
+            else:
+                held["value"] = params.get("bio", "")
+            return 200, "saved"
+
+        return route
+
+    # -- the eligibility rule ------------------------------------------------
+
+    def test_only_a_value_absent_from_its_own_payload_is_observable(self):
+        observable = {"expected": "RKA123RKB", "payload": "RKA$((1+2))RKB"}
+        reflected_token = {"expected": "RKTOKEN", "payload": "echo RKTOKEN > /tmp/x"}
+        self.assertTrue(RCEKit._observable(observable))
+        self.assertFalse(RCEKit._observable(reflected_token))
+        self.assertFalse(RCEKit._observable({"expected": "", "payload": "sleep 2"}))
+
+    def test_a_store_and_echo_target_confirms_nothing(self):
+        """The false-positive vector, driven end to end.
+
+        The app stores the payload and renders it verbatim — no evaluation
+        anywhere. Every probe's payload comes back on the observed page, so a
+        naive implementation would confirm all of them."""
+        with local_target(self._stored_route(lambda text: text)) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/bio?bio=FUZZ", methods=["eval"],
+                max_payloads=12,
+                config={"observe_url": f"{base}/profile", "observe_poll": 0.2,
+                        "observe_timeout": 0.5})
+        self.assertFalse([r for r in results if r["verdict"] == "confirmed"],
+                         "a target that only echoes the payload must not confirm")
+        self.assertEqual({r["observe_status"] for r in results}, {"polled"})
+
+    # -- the two channel shapes ----------------------------------------------
+
+    def test_stored_ssti_on_an_overwriting_field_confirms(self):
+        """The acceptance case: inject on POST, execution renders on GET.
+
+        The store *overwrites*, so every probe but the last is gone by the time
+        a post-batch poll would run — the observed channel has to be read
+        between probes or this oracle confirms nothing on the shape it exists
+        for."""
+        with local_target(self._stored_route(self._render_ssti)) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/bio?bio=FUZZ", methods=["eval"],
+                max_payloads=12,
+                config={"observe_url": f"{base}/profile", "observe_poll": 0.2,
+                        "observe_timeout": 1.0})
+        confirmed = [r for r in results if r["verdict"] == "confirmed"]
+        self.assertTrue(confirmed, results)
+        self.assertEqual(rcekit.overall_detection_verdict(results), "confirmed")
+        self.assertIn("OBSERVED channel", confirmed[0]["detail"])
+        self.assertEqual(confirmed[0]["observe_status"], "confirmed")
+
+    def test_an_appending_channel_confirms_after_the_batch(self):
+        with local_target(self._stored_route(self._render_ssti, store="append")) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/bio?bio=FUZZ", methods=["eval"],
+                max_payloads=12,
+                config={"observe_url": f"{base}/profile", "observe_poll": 0.2,
+                        "observe_timeout": 1.0})
+        self.assertEqual(rcekit.overall_detection_verdict(results), "confirmed")
+
+    # -- the differential ----------------------------------------------------
+
+    def test_a_value_already_in_the_pre_injection_control_does_not_confirm(self):
+        """The control is taken before any probe, and it has to be.
+
+        The premise is that a probe changes what the endpoint renders, so a
+        control taken afterwards would already contain what it is meant to rule
+        out."""
+        method = rcekit.ReflectedMath(self.gen, {})
+        result = {"verdict": "negative", "expected": "RKA999RKB",
+                  "payload": "RKA$((1+2))RKB", "detail": ""}
+        control = [("response body", "nightly report: RKA999RKB")]
+        upgraded = self.gen._observe_match(
+            result, [("response body", "RKA999RKB")], control, "http://t/o")
+        self.assertFalse(upgraded)
+        self.assertEqual(result["verdict"], "negative")
+        self.assertEqual(result["observe_status"], "in-control")
+        del method
+
+    def test_one_probes_leftover_value_cannot_confirm_another(self):
+        # Each probe carries its own operands, so a value an earlier probe left
+        # on a shared channel does not match a later probe's expectation.
+        first = {"verdict": "negative", "expected": "RKA111RKB",
+                 "payload": "RKA$((1+2))RKB", "detail": ""}
+        second = {"verdict": "negative", "expected": "RKC222RKD",
+                  "payload": "RKC$((3+4))RKD", "detail": ""}
+        channels = [("response body", "RKA111RKB")]
+        self.assertTrue(self.gen._observe_match(first, channels, [], "http://t/o"))
+        self.assertFalse(self.gen._observe_match(second, channels, [], "http://t/o"))
+
+    # -- it is additive ------------------------------------------------------
+
+    def test_a_run_without_the_flag_is_unchanged(self):
+        with local_target(self._stored_route(self._render_ssti)) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/bio?bio=FUZZ", methods=["eval"])
+        self.assertTrue(results)
+        # No observe bookkeeping at all, and no second-order confirmation: the
+        # in-band response says "saved" and nothing else.
+        self.assertFalse([r for r in results if "observe_status" in r])
+        self.assertFalse([r for r in results if r["verdict"] == "confirmed"])
+
+    def test_an_in_band_confirmation_is_never_downgraded(self):
+        # Only a non-confirmed verdict can be upgraded, so observing can add
+        # findings and never remove one.
+        def route(method, path, params, headers, body):
+            if path == "/observe":
+                return 200, "nothing here"
+            return 200, "PING " + self._render_ssti(params.get("q", ""))
+
+        with local_target(route) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/search?q=FUZZ", methods=["eval"],
+                max_payloads=12,
+                config={"observe_url": f"{base}/observe", "observe_poll": 0.2,
+                        "observe_timeout": 0.5})
+        confirmed = [r for r in results if r["verdict"] == "confirmed"]
+        self.assertTrue(confirmed)
+        for result in confirmed:
+            self.assertNotIn("OBSERVED", result["detail"])
+
+    # -- failure modes -------------------------------------------------------
+
+    def test_an_unreachable_observed_endpoint_is_reported_as_such(self):
+        """A run that never read the channel is not a second-order negative.
+
+        The same failure this project keeps finding: the operator asked for an
+        oracle, it never ran, and the verdicts below were decided without it."""
+        with local_target(self._stored_route(self._render_ssti)) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/bio?bio=FUZZ", methods=["eval"],
+                max_payloads=6,
+                config={"observe_url": "http://127.0.0.1:1/gone", "observe_poll": 0.2,
+                        "observe_timeout": 0})
+        self.assertTrue(results)
+        self.assertEqual({r["observe_status"] for r in results}, {"unreachable"})
+
+    def test_a_zero_timeout_reads_once_and_does_not_wait(self):
+        """`--observe-timeout 0` means "read it once", not "use the default".
+
+        It is falsy, so an `or`-style default silently turned a deliberate
+        no-wait read into a full minute of polling — measured against a dead
+        endpoint, where the run then took 60 seconds to say nothing."""
+        import time as _time
+        started = _time.time()
+        with local_target(self._stored_route(self._render_ssti)) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/bio?bio=FUZZ", methods=["eval"], max_payloads=4,
+                config={"observe_url": "http://127.0.0.1:1/gone", "observe_timeout": 0})
+        self.assertLess(_time.time() - started, 20)
+        self.assertEqual({r["observe_status"] for r in results}, {"unreachable"})
+
+    def test_one_poll_always_happens_even_at_a_zero_timeout(self):
+        with local_target(self._stored_route(self._render_ssti, store="append")) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/bio?bio=FUZZ", methods=["eval"],
+                max_payloads=6,
+                config={"observe_url": f"{base}/profile", "observe_timeout": 0})
+        self.assertNotIn("unreachable", {r["observe_status"] for r in results})
+
+    # -- request building ----------------------------------------------------
+
+    def test_observe_request_resolves_both_forms_in_one_place(self):
+        self.assertIsNone(rcekit.observe_request({}))
+        built = rcekit.observe_request({"observe_url": "https://t/p", "observe_poll": 3})
+        self.assertEqual(built["url"], "https://t/p")
+        self.assertEqual(built["method"], "GET")
+        self.assertEqual(built["poll"], 3)
+
+    def test_a_captured_request_needs_no_injection_marker(self):
+        # build_request_inputs requires a marker because its job is to place a
+        # payload; the observed endpoint is read, never injected into.
+        raw = ("GET /profile/42 HTTP/1.1\r\n"
+               "Host: target.example\r\n"
+               "Cookie: session=abc\r\n\r\n")
+        url, method, data, headers = rcekit.build_plain_request(raw, "https")
+        self.assertEqual(url, "https://target.example/profile/42")
+        self.assertEqual(method, "GET")
+        self.assertIsNone(data)
+        self.assertIn("Cookie: session=abc", headers)
+        with self.assertRaises(ValueError):
+            rcekit.build_plain_request("GET /x HTTP/1.1\r\n\r\n")
+
+
 if __name__ == "__main__":
     unittest.main()
