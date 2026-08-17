@@ -53,6 +53,7 @@ starting point — this page is for looking things up once you know what you wan
 | `--evade` | WAF posture: `none`, or `low` for minimal `${IFS}`-for-spaces | `none` |
 | `--probe-depth` | `full` (also the substitution-free and comment-terminated shapes) or `quick` | `full` |
 | `--detect-json` | Also write the run to this path as JSON: overall verdict, counts, every probe | None |
+| `--sink-shape` | Sink shapes the shell probes try: `auto`, or any of `sep`, `raw`, `chain`, `newline`, `dq`, `sq`, `subshell` | `auto` |
 
 | `--methods` value | Confirms | Tier it can reach |
 |---|---|---|
@@ -101,6 +102,61 @@ depth and `--probe-depth` changes nothing for it.
 sweep, and it does not narrow the separator screen `--methods time` runs: both
 depths try every candidate break-out, because dropping one is not a saving in
 requests but a blind spot. Use `--separators` to narrow that deliberately.
+
+### The sink-shape ladder
+
+An injected value lands in a *shape*, and the shape decides what can reach it.
+`--sink-shape` names which ones to try; `auto` tries the whole ladder.
+
+| Rung | Probe looks like | Sink shape |
+|---|---|---|
+| `sep` | `; cmd` | mid-command concatenation |
+| `raw` | `cmd` | the input **is** the whole command (`qx/$input/`) |
+| `chain` | `\| cmd`, `\|\| cmd`, `&& cmd` | pipes and conditional chains |
+| `newline` | newline + `cmd` | line-oriented sinks (CGI, config writers) |
+| `dq` | `"; cmd #` | value inside double quotes |
+| `sq` | `'; cmd #` | value inside single quotes |
+| `subshell` | `$(cmd)`, `` `cmd` `` | value inside quotes, reached **without closing them** |
+
+`subshell` is the rung that is easy to mis-explain, so here is what it is
+actually for. Against `system("echo PING \"$input\"")`, with the app filtering
+one metacharacter:
+
+| app strips | `dq` | `subshell` |
+|---|---|---|
+| `"` | inert | **executes** |
+| `$` | executes | inert (backtick form still executes) |
+
+Both substitution forms ship because they survive different filters.
+
+And the rung matters **per method**, which is the counter-intuitive part.
+`reflected`'s core is `$((a+b))`, which the shell expands inside double quotes
+anyway — so that method already confirmed on a quoted sink without this rung.
+The methods whose core has to actually *run* something are the ones that were
+blind there:
+
+| Core | Inside `"…"` | Inside `$( )` |
+|---|---|---|
+| `$((a+b))` — `reflected` | expands | expands |
+| `sleep 5` — `time` | inert | sleeps |
+| `echo TOKEN > file` — `file` | no write | writes |
+| `curl …` — `oob` | no request | fetches |
+
+Narrow the ladder once the sink's shape is known — it is the request-count
+control. `--sink-raw` is the narrowing alias for `--sink-shape raw`, and naming
+`--separators` implies the sink is separator-led, so the `raw` rung is dropped
+unless you name it explicitly. A profile with `sink_needs_separator` drops it
+too. The plan is printed before anything is sent:
+
+```
+[detect] sink shapes: auto (full ladder)
+[detect]   sep       '; ' -- mid-command concatenation
+[detect]   raw       input is the whole command (no separator)
+...
+```
+
+`eval` does not ride the ladder: its probes are template/expression syntax, not
+shell, so no separator or quote break-out applies to them.
 
 ### Machine-readable results
 

