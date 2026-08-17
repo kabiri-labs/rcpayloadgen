@@ -1,6 +1,6 @@
 # RCEKit — prove RCE, don't guess it
 
-**Version 2.32.0** · MIT · Python 3.8+ · zero third-party dependencies
+**Version 2.33.0** · MIT · Python 3.8+ · zero third-party dependencies
 
 RCEKit is an **RCE detection &amp; confirmation toolkit** for authorised penetration
 testing, red teaming, and security research. Point it at a target you are allowed
@@ -271,6 +271,7 @@ what it sends, and how to read what comes back.
 | No output *and* no egress | [No-egress targets](docs/guide.md#no-egress-targets) |
 | The request stores a file instead of running anything | [Upload and write-primitive targets](docs/guide.md#upload-and-write-primitive-targets) |
 | The payload runs later, on a different request | [When execution happens on another request](docs/guide.md#when-execution-happens-on-another-request) |
+| The injection point is SQL and the sink is the database host | [Query-language bridges](docs/reference.md#query-language-bridges) |
 | The sink is behind a login or a file upload | [Multi-step chains](docs/guide.md#multi-step-chains) |
 | I got `needs-review` / `inconclusive` / `error` | [Reading the results](docs/guide.md#reading-the-results) |
 | It says the corpus is unusable | [Troubleshooting](docs/guide.md#troubleshooting) |

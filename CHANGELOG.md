@@ -8,6 +8,63 @@ formats, or the template schema.
 
 ## [Unreleased]
 
+## [2.33.0] — 2026-08-17
+
+Query-language bridges. Several RCEs pass through a query language before
+reaching the OS — Postgres `COPY … FROM PROGRAM`, MSSQL `xp_cmdshell`, XXE
+`expect://` — and the injection point is an ordinary text value, so the oracle
+model already fitted. Only the carriers were missing.
+
+### Added
+
+- **A `bridges` section in the corpus**, declared like `eval_carriers` so
+  coverage grows without touching Python. Each bridge names the shell it
+  reaches, its safety tier, its prerequisites and, where it creates something,
+  the statement that removes it: `postgres_copy_program` (`/bin/sh`,
+  `stateful`), `mssql_xp_cmdshell` (`cmd.exe`, `intrusive`) and `xxe_expect`
+  (`/bin/sh`, `intrusive`).
+
+- **`--bridges none|auto|NAMES`** rides the command probes through them. A
+  bridge is a **carrier, not an oracle**: it wraps the command `reflected`,
+  `time` and `oob` already build, so those methods prove execution through it
+  and inherit every tier guarantee rather than re-deriving one. Off by default,
+  because a bridge payload is SQL or XML syntax and on an ordinary shell sink it
+  is a request that cannot confirm.
+
+  Three properties follow from that framing. A bridge only gets a core written
+  in its own dialect — `xp_cmdshell` hands its argument to `cmd.exe`, so pairing
+  it with a POSIX `$((a+b))` would send inert text. No separator is prepended:
+  inside `COPY … FROM PROGRAM '…'` there is no running command to break out of.
+  And the record's context still applies, so `--contexts sql` and a bridge
+  compose instead of each reinventing the other.
+
+- **The safety ordering governs bridges** exactly as it governs every corpus
+  payload: a `stateful` bridge needs `--verify-active-risk stateful`, and the
+  pre-flight names the tier each held-back bridge actually requires rather than
+  sending the operator to raise the ceiling further than the run needs.
+
+### Changed
+
+- **An aggregate method's result now carries its cleanup line.** `time` reports
+  one row for a whole probe series, so a stateful bridge on the one oracle that
+  reliably proves a query-language sink was the one that never said how to clean
+  up after itself.
+
+### Not built, deliberately
+
+- **MySQL UDF execution** is a multi-stage chain — write a shared object into the
+  plugin directory, then `CREATE FUNCTION` — not something a single probe can
+  carry. There is no stub for it.
+- **MongoDB `$where`** is a boolean-only channel (its JS sandbox cannot reach a
+  shell), so it needs a different oracle rather than this one.
+  `mongo-express/CVE-2019-10758` is a plain JS `eval` sink that `--methods eval`
+  already covers.
+
+The three shipped bridges are documented syntax but **not validated against live
+databases here** — this build environment has no container runtime. Each corpus
+entry says so in its `verified` field rather than implying a test that did not
+happen.
+
 ## [2.32.0] — 2026-08-17
 
 The second-order oracle. Execution frequently happens on a **different request**
@@ -784,7 +841,8 @@ this file and have not been restated here.
 - **[2.7.0]**
 - **[2.1.0]**
 
-[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.32.0...HEAD
+[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.33.0...HEAD
+[2.33.0]: https://github.com/kabiri-labs/rcekit/compare/v2.32.0...v2.33.0
 [2.32.0]: https://github.com/kabiri-labs/rcekit/compare/v2.31.0...v2.32.0
 [2.31.0]: https://github.com/kabiri-labs/rcekit/compare/v2.30.0...v2.31.0
 [2.30.0]: https://github.com/kabiri-labs/rcekit/compare/v2.29.0...v2.30.0

