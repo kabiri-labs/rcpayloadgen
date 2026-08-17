@@ -10,6 +10,7 @@ starting point — this page is for looking things up once you know what you wan
 - [Detection methods](#detection-methods)
 - [Sink shape](#sink-shape)
 - [The sink shell](#the-sink-shell)
+- [Query-language bridges](#query-language-bridges)
 - [Second-order execution](#second-order-execution-the-observed-channel)
 - [Safety &amp; consent](#safety--consent)
 - [Out-of-band listener](#out-of-band-listener)
@@ -53,6 +54,7 @@ starting point — this page is for looking things up once you know what you wan
 | `--web-base-url` | (`file`) web-root alias for `--file-read-url '<base>/{name}'` | None |
 | `--write-url-template` | (`write`) URL the file your request stores is served at; required for `write` | None |
 | `--write-lang` | (`write`) File types to write: `auto`, or any of `jsp`, `jspx`, `php`, `aspx`, `erb` | `auto` |
+| `--bridges` | Query-language bridges the command probes ride: `none` (default), `auto`, or corpus names | `none` |
 | `--observe-url` | Second-order: endpoint polled for the computed value after the probes | None |
 | `--observe-request` | Raw HTTP request for that endpoint instead of `--observe-url` (no marker) | None |
 | `--observe-poll` | Seconds between polls of the observed endpoint | `5` |
@@ -168,6 +170,64 @@ web-root form confirms 0 and the general form confirms 7.
 This method changes target state (one file per confirmed probe), so it stays
 gated on the operator naming both halves, and **every finding prints its own
 cleanup command**.
+
+### Query-language bridges
+
+Several RCEs pass through a query language before reaching the OS: Postgres
+`COPY … FROM PROGRAM`, MSSQL `xp_cmdshell`, XXE `expect://`. A bridge is a
+**carrier, not an oracle** — it wraps the command the methods already build, so
+`reflected`, `time` and `oob` prove execution through it and inherit every tier
+guarantee rather than re-deriving one.
+
+| Bridge | Shell it reaches | Safety | Needs |
+|---|---|---|---|
+| `postgres_copy_program` | `/bin/sh` | `stateful` | superuser, or a role in `pg_execute_server_program` |
+| `mssql_xp_cmdshell` | `cmd.exe` | `intrusive` | sysadmin, and `xp_cmdshell` enabled |
+| `xxe_expect` | `/bin/sh` | `intrusive` | PHP with the `expect` extension, external entities enabled |
+
+```bash
+python rcekit.py --acknowledge-consent \
+  --verify-url "https://target/search?name=FUZZ" --contexts sql \
+  --methods time,oob --bridges auto \
+  --verify-active-risk stateful --oob-host oob.example
+```
+
+**Off by default**, and that is design rather than caution: a bridge payload is
+SQL or XML syntax, so on an ordinary shell sink it is a request that cannot
+confirm.
+
+Three things follow from bridges being carriers:
+
+- **A bridge only ever gets a core written in its own dialect.** `xp_cmdshell`
+  hands its argument to `cmd.exe`, so it takes the cmd core; `COPY FROM PROGRAM`
+  takes the POSIX one. Pairing them the other way sends an inert `$((a+b))` into
+  `cmd.exe` — the exact failure the [sink shell](#the-sink-shell) split exists to
+  stop.
+- **No separator.** Inside `COPY … FROM PROGRAM '…'` there is no running command
+  to break out of, so the bare core is the probe. The record's *context* still
+  applies, which is what makes `--contexts sql` and a bridge compose rather than
+  each reinventing the other.
+- **The safety ordering governs them** exactly as it governs every corpus
+  payload. A `stateful` bridge creates an object and needs
+  `--verify-active-risk stateful`; the pre-flight names the tier each held-back
+  bridge actually requires, and every finding through a stateful bridge carries
+  the statement that removes what it made — including on the `time` method,
+  whose one result covers a whole probe series.
+
+**Which oracle to reach for.** `reflected` needs the program's *output* to reach
+the response, and a statement injected alongside the application's own query
+returns through a cursor the application never reads — so it ships (one request,
+and some drivers do return the last result set) but it is the weakest of the
+three. `time` and `oob` work with nothing rendered: `COPY FROM PROGRAM` and
+`xp_cmdshell` both block until the program exits, and a callback is made by the
+target itself.
+
+**Not built, deliberately.** MySQL UDF execution is a multi-stage chain — write a
+shared object into the plugin directory, then `CREATE FUNCTION` — not something a
+single probe can carry, so there is no stub for it. MongoDB `$where` is a
+boolean-only channel (its JS sandbox cannot reach a shell), so it needs a
+different oracle rather than this one; `mongo-express/CVE-2019-10758` is a plain
+JS `eval` sink that `--methods eval` already covers.
 
 ### Second-order execution: the observed channel
 

@@ -5801,5 +5801,190 @@ class ObservedChannelTestCase(unittest.TestCase):
             rcekit.build_plain_request("GET /x HTTP/1.1\r\n\r\n")
 
 
+class QueryLanguageBridgeTestCase(unittest.TestCase):
+    """Bridges: a shell command carried into the OS from inside a query language.
+
+    Several RCEs pass through a query language before reaching the OS —
+    Postgres `COPY … FROM PROGRAM`, MSSQL `xp_cmdshell`, XXE `expect://`. The
+    design point is that a bridge is a **carrier, not an oracle**: it wraps the
+    command the existing methods already build, so `reflected`, `time` and `oob`
+    prove execution through it and every tier guarantee is inherited rather than
+    re-derived."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+        self.rec = make_record(environment="unix", context="sql")
+        self.config = {"bridges": ("auto",), "max_safety": "stateful"}
+
+    _DEFAULT = object()
+
+    def _probes(self, method=ReflectedMath, config=_DEFAULT, record=None):
+        import random as _random
+        # A sentinel, not `config or self.config`: an empty dict is the "no
+        # bridges" case this class has to be able to express, and falsy-or would
+        # quietly turn it back into the bridged one.
+        if config is self._DEFAULT:
+            config = self.config
+        return method(self.gen, config).build_probes(
+            record or self.rec, _random.Random(3))
+
+    # -- the corpus section --------------------------------------------------
+
+    def test_the_corpus_declares_the_bridges(self):
+        self.assertIn("postgres_copy_program", self.gen.bridges)
+        for name, bridge in self.gen.bridges.items():
+            with self.subTest(bridge=name):
+                self.assertIn("__CMD__", bridge["template"],
+                              "a bridge carries a command; without the token it carries nothing")
+                self.assertIn(bridge.get("sink_env"), rcekit.SINK_ENVIRONMENTS)
+                self.assertIn(bridge.get("safety"), rcekit.SAFETY_ORDER)
+                self.assertTrue(bridge.get("notes"))
+
+    def test_a_bridge_that_creates_an_object_is_stateful_and_carries_cleanup(self):
+        for name, bridge in self.gen.bridges.items():
+            with self.subTest(bridge=name):
+                if bridge.get("cleanup"):
+                    self.assertEqual(bridge["safety"], "stateful", name)
+                if bridge.get("safety") == "stateful":
+                    self.assertTrue(bridge.get("cleanup"),
+                                    "a stateful bridge must say how to undo itself")
+
+    # -- selection -----------------------------------------------------------
+
+    def test_bridges_are_off_by_default(self):
+        # A bridge payload is SQL or XML syntax; on an ordinary shell sink it is
+        # a request that cannot confirm, so it is never sent unasked.
+        payloads = [p.payload for p in self._probes(config={})]
+        self.assertTrue(payloads)
+        self.assertFalse([p for p in payloads if "COPY" in p or "xp_cmdshell" in p])
+        self.assertEqual(rcekit.parse_bridges(None), ())
+        self.assertEqual(rcekit.parse_bridges("none"), ())
+        self.assertEqual(rcekit.parse_bridges("auto"), ("auto",))
+        self.assertEqual(rcekit.parse_bridges("postgres_copy_program"),
+                         ("postgres_copy_program",))
+
+    def test_a_bridge_only_gets_a_core_in_its_own_dialect(self):
+        # xp_cmdshell hands its argument to cmd.exe, so a POSIX $((a+b)) there
+        # is inert text — the same failure the dialect split exists to stop.
+        method = ReflectedMath(self.gen, self.config)
+        unix = [name for name, _ in method._selected_bridges("unix")]
+        windows = [name for name, _ in method._selected_bridges("windows")]
+        self.assertIn("postgres_copy_program", unix)
+        self.assertNotIn("mssql_xp_cmdshell", unix)
+        self.assertIn("mssql_xp_cmdshell", windows)
+
+    def test_a_stateful_bridge_is_held_to_the_safety_ordering(self):
+        # Held back by the same flag as every stateful corpus payload, rather
+        # than riding in because a detection method built it.
+        safe = ReflectedMath(self.gen, {"bridges": ("auto",), "max_safety": "safe"})
+        self.assertEqual(safe._selected_bridges("unix"), [])
+        intrusive = ReflectedMath(self.gen, {"bridges": ("auto",), "max_safety": "intrusive"})
+        names = [name for name, _ in intrusive._selected_bridges("unix")]
+        self.assertIn("xxe_expect", names)
+        self.assertNotIn("postgres_copy_program", names)
+
+    def test_an_unknown_bridge_name_is_refused(self):
+        method = ReflectedMath(self.gen, {"bridges": ("nope",), "max_safety": "stateful"})
+        with self.assertRaises(ValueError) as caught:
+            method._selected_bridges("unix")
+        # Silently selecting nothing would make a run that rode no bridge read
+        # exactly like one that rode them and came back clean.
+        self.assertIn("nope", str(caught.exception))
+
+    # -- probe shape ---------------------------------------------------------
+
+    def test_the_bridge_probe_carries_the_command_and_no_separator(self):
+        bridged = [p for p in self._probes() if p.carrier]
+        self.assertTrue(bridged)
+        for probe in bridged:
+            self.assertIsNone(probe.separator,
+                              "there is no running command inside COPY … FROM PROGRAM to break "
+                              "out of, so the bare core is the probe")
+            self.assertIn(probe.carrier, self.gen.bridges)
+
+    def test_a_stateful_bridge_probe_names_the_object_it_created(self):
+        bridged = [p for p in self._probes() if p.carrier == "postgres_copy_program"]
+        self.assertTrue(bridged)
+        for probe in bridged:
+            table = re.search(r"CREATE TABLE (rk_\w+)", probe.payload)
+            self.assertIsNotNone(table, probe.payload)
+            self.assertEqual(probe.followup["cleanup"], f"DROP TABLE IF EXISTS {table.group(1)};")
+
+    def test_the_timing_bridge_reuses_one_table_across_the_probe_pair(self):
+        """Both halves of the 0s/Ns pair must address the same table.
+
+        The screen fires the same bridge twice. A fresh table name per probe
+        would litter, and — worse — without the leading DROP IF EXISTS the
+        second CREATE fails, the statement aborts and the delay never happens,
+        so a target that is executing reads as no delay at all."""
+        probes = [p for p in self._probes(method=ParametricTime)
+                  if p.separator and p.separator.startswith(ParametricTime.BRIDGE_PREFIX)]
+        self.assertTrue(probes)
+        postgres = [p for p in probes if p.separator.endswith("postgres_copy_program")]
+        self.assertEqual(len(postgres), 2, "one probe at 0s and one at the base delay")
+        tables = {re.search(r"CREATE TABLE (rk_\w+)", p.payload).group(1) for p in postgres}
+        self.assertEqual(len(tables), 1, tables)
+        for probe in postgres:
+            self.assertIn("DROP TABLE IF EXISTS", probe.payload)
+
+    def test_the_regression_rebuilds_the_bridge_it_screened(self):
+        # The regression has to resend the exact shape the screen found, and a
+        # bridge payload is built by a different path from a separator-led one.
+        method = ParametricTime(self.gen, self.config)
+        payload = method._payload(self.rec, 4.0, "bridge:postgres_copy_program", "unix")
+        self.assertIn("COPY", payload)
+        self.assertIn("sleep 4", payload)
+
+    def test_the_oob_bridge_gives_each_bridge_its_own_token(self):
+        config = dict(self.config, oob_host="oob.example", probe_depth="quick")
+        bridged = [p for p in self._probes(method=rcekit.OobCallback, config=config) if p.carrier]
+        self.assertTrue(bridged)
+        # Sharing one token would mark every bridge confirmed as soon as any
+        # single one of them called back.
+        self.assertEqual(len({p.expected for p in bridged}), len(bridged))
+
+    # -- end to end ----------------------------------------------------------
+
+    def _pg_target(self, honour_program):
+        """A "database" whose driver returns the last result set.
+
+        `honour_program` decides whether COPY … FROM PROGRAM actually runs the
+        program; when it does not, the endpoint still echoes the injected SQL,
+        which is the reflection case a bridge must not confirm on."""
+        import subprocess as _sub
+
+        def route(method, path, params, headers, body):
+            query = "SELECT * FROM t WHERE name='%s'" % params.get("name", "")
+            program = re.search(r"COPY \w+ FROM PROGRAM '([^']*)'", query)
+            if not honour_program or not program:
+                return 200, query
+            out = _sub.run(["/bin/sh", "-c", program.group(1)],
+                           capture_output=True, text=True).stdout
+            return 200, "rows:\n" + out
+
+        return route
+
+    def test_a_bridge_confirms_execution_through_the_query_language(self):
+        with local_target(self._pg_target(True)) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/s?name=FUZZ", methods=["reflected"],
+                config={"bridges": ("postgres_copy_program",), "max_safety": "stateful"})
+        confirmed = [r for r in results if r["verdict"] == "confirmed"]
+        self.assertTrue(confirmed, results)
+        self.assertEqual(rcekit.overall_detection_verdict(results), "confirmed")
+        self.assertIn("postgres_copy_program", confirmed[0]["detail"])
+        self.assertIn("DROP TABLE IF EXISTS", confirmed[0]["cleanup"])
+
+    def test_a_target_that_only_echoes_the_sql_does_not_confirm(self):
+        # The endpoint returns the injected statement verbatim — including the
+        # bridge — and executes nothing. The computed value is the difference.
+        with local_target(self._pg_target(False)) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/s?name=FUZZ", methods=["reflected"],
+                config={"bridges": ("postgres_copy_program",), "max_safety": "stateful"})
+        self.assertTrue(results)
+        self.assertFalse([r for r in results if r["verdict"] == "confirmed"])
+
+
 if __name__ == "__main__":
     unittest.main()

