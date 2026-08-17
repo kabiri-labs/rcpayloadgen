@@ -1999,7 +1999,8 @@ class RCEKit:
         return carriers
 
     def estimate_detection_probes(self, records: List[PayloadRecord], methods: List[str],
-                                  config: Optional[Dict[str, Any]] = None) -> int:
+                                  config: Optional[Dict[str, Any]] = None,
+                                  max_payloads: Optional[int] = None) -> int:
         """How many requests a detection run would send, without sending any.
 
         The ladder and the carrier list both multiply probe count, and
@@ -2007,6 +2008,11 @@ class RCEKit:
         operator on a monitored engagement has to be able to see that number
         *before* it happens rather than infer it from the traffic, so this
         builds the probes and counts them.
+
+        ``max_payloads`` mirrors the run's own stopping point, so the figure
+        stays true exactly when the budget guard the operator reached for is in
+        play — an estimate that ignores ``--max-payloads`` is wrong precisely
+        when someone is trying to bound the run.
 
         A floor, not an exact figure: an aggregate method may answer with
         further screening waves once it has seen the first batch, and each
@@ -2028,12 +2034,16 @@ class RCEKit:
                     continue
                 if getattr(meth, "aggregate", False):
                     total += len(probes)
+                    if max_payloads and total >= max_payloads:
+                        return max_payloads
                     continue
                 for probe in probes:
                     if probe.payload in seen:
                         continue
                     seen.add(probe.payload)
                     total += 1
+                    if max_payloads and total >= max_payloads:
+                        return max_payloads
         return total
 
     def run_detection(self, records: Iterator[PayloadRecord], url: str,
@@ -3899,10 +3909,19 @@ class InjectionPoint:
     ``kind`` picks the placement rule (and therefore the encoding), ``name`` is
     the addressable identifier within that kind — a parameter name, a JSON path
     like ``user.profile.name``, a header name, a path-segment index — and
-    ``label`` is what a finding calls it."""
+    ``label`` is what a finding calls it.
+
+    For a JSON point, ``tokens`` is the authority and ``name`` is only for
+    reading. A dotted string cannot round-trip a key that itself contains a dot:
+    ``{"user.name": ..., "user": {"name": ...}}`` renders both leaves as
+    ``user.name``, so the literal key is never probed and any finding is
+    attributed to the nested one. Addressing by tokens removes the ambiguity;
+    ``name`` renders a dotted key as ``["user.name"]`` so the two stay
+    distinguishable on screen too."""
     kind: str
     name: str
     label: str
+    tokens: Tuple[Any, ...] = ()
 
 
 # Headers worth trying before the rest. Not a guess: each is a header that
@@ -3928,60 +3947,71 @@ NON_INJECTABLE_HEADERS = {
 INJECTION_POINT_KINDS = ("query", "json", "form", "cookie", "header", "path")
 
 
-def _json_path_tokens(path: str) -> List[Any]:
-    """``user.profile.name`` / ``items[0].v`` -> ``['user','profile','name']`` /
-    ``['items',0,'v']``."""
-    tokens: List[Any] = []
-    for chunk in path.split("."):
-        name, _, rest = chunk.partition("[")
-        if name:
-            tokens.append(name)
-        while rest:
-            index, _, rest = rest.partition("]")
-            if index:
-                tokens.append(int(index))
-            _, _, rest = rest.partition("[")
-    return tokens
+def _render_json_path(tokens: Tuple[Any, ...]) -> str:
+    """A readable rendering of a token address.
+
+    ``('user','profile','name')`` -> ``user.profile.name``; ``('items',0,'v')``
+    -> ``items[0].v``. A key that itself contains ``.``, ``[`` or ``]`` is
+    bracket-quoted — ``('user.name',)`` -> ``["user.name"]`` — so it can never
+    be read as the nested path of the same spelling."""
+    parts: List[str] = []
+    for token in tokens:
+        if isinstance(token, int):
+            parts.append(f"[{token}]")
+        elif any(ch in token for ch in ".[]"):
+            parts.append('["' + token.replace('"', '\\"') + '"]')
+        else:
+            parts.append(f".{token}" if parts else token)
+    rendered = "".join(parts)
+    return rendered[1:] if rendered.startswith(".") else rendered
 
 
-def _json_leaf_paths(obj: Any, limit: int = 256, max_depth: int = 64) -> List[str]:
-    """Paths to every scalar leaf of a parsed JSON body, in document order.
+def _json_leaf_tokens(obj: Any, limit: int = 256,
+                      max_depth: int = 64) -> List[Tuple[Any, ...]]:
+    """Token addresses of every scalar leaf of a parsed JSON body, in document
+    order.
 
-    Iterative and bounded for the same reason the response-channel walk is: a
-    pathological body must cost a bounded amount of work, not a RecursionError
-    that the caller reports as a delivery failure."""
-    leaves: List[str] = []
-    stack: List[Tuple[Any, str, int]] = [(obj, "", 0)]
+    Tokens rather than a joined string, because a string cannot round-trip a key
+    containing the separator. Iterative and bounded for the same reason the
+    response-channel walk is: a pathological body must cost a bounded amount of
+    work, not a RecursionError in the middle of a run."""
+    leaves: List[Tuple[Any, ...]] = []
+    stack: List[Tuple[Any, Tuple[Any, ...], int]] = [(obj, (), 0)]
     while stack and len(leaves) < limit:
         node, path, depth = stack.pop()
         if depth > max_depth:
             continue
         if isinstance(node, dict):
             for key in reversed(list(node.keys())):
-                stack.append((node[key], f"{path}.{key}" if path else str(key), depth + 1))
+                stack.append((node[key], path + (key,), depth + 1))
         elif isinstance(node, list):
             for index in range(len(node) - 1, -1, -1):
-                stack.append((node[index], f"{path}[{index}]", depth + 1))
+                stack.append((node[index], path + (index,), depth + 1))
         elif isinstance(node, str) or isinstance(node, (int, float)) and not isinstance(node, bool):
             if path:
                 leaves.append(path)
     return leaves
 
 
-def _set_json_path(obj: Any, path: str, value: str) -> bool:
-    """Set the leaf at ``path`` to ``value`` in place. False if it is not there.
+def _set_json_tokens(obj: Any, tokens: Tuple[Any, ...], value: str) -> bool:
+    """Set the leaf at ``tokens`` to ``value`` in place. False if it is not there.
 
     Replaces an existing leaf only — assigning to a dict would otherwise *create*
     a key the application never sends, which tests a field that does not exist
     and cannot say anything about the one that does."""
-    tokens = _json_path_tokens(path)
     if not tokens:
         return False
     node = obj
     for token in tokens[:-1]:
-        try:
+        if isinstance(node, dict):
+            if token not in node:
+                return False
             node = node[token]
-        except (KeyError, IndexError, TypeError):
+        elif isinstance(node, list):
+            if not isinstance(token, int) or not 0 <= token < len(node):
+                return False
+            node = node[token]
+        else:
             return False
     leaf = tokens[-1]
     if isinstance(node, dict):
@@ -4029,11 +4059,17 @@ def enumerate_injection_points(req: Dict[str, Any], kinds: Optional[Tuple[str, .
     if stripped[:1] in "{[" and "json" in selected:
         try:
             parsed = json.loads(body)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RecursionError):
+            # RecursionError belongs here for the same reason it does in the
+            # response-channel parser: json's scanner recurses in C, and a
+            # deeply nested captured body would otherwise end `-p all` with a
+            # traceback instead of an enumeration.
             parsed = None
         if parsed is not None:
-            for path in _json_leaf_paths(parsed):
-                points.append(InjectionPoint("json", path, f"JSON field '{path}'"))
+            for tokens in _json_leaf_tokens(parsed):
+                rendered = _render_json_path(tokens)
+                points.append(InjectionPoint("json", rendered,
+                                             f"JSON field '{rendered}'", tokens))
     elif "=" in (body or "") and "form" in selected:
         for pair in body.split("&"):
             key, sep, _ = pair.partition("=")
@@ -4093,9 +4129,9 @@ def place_injection_point(target: str, headers: List[List[str]], body: str,
     if point.kind == "json":
         try:
             parsed = json.loads(body)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             return None
-        if not _set_json_path(parsed, point.name, mark):
+        if not _set_json_tokens(parsed, point.tokens, mark):
             return None
         return target, headers, json.dumps(parsed)
     if point.kind == "form":
@@ -4963,14 +4999,13 @@ def main():
                 costly = [m for m in method_names if m not in CHEAP_DETECTION_METHODS]
                 waves = [w for w in (cheap, costly) if w]
                 per_point = generator.estimate_detection_probes(
-                    to_send, method_names, detection_config)
+                    to_send, method_names, detection_config, max_payloads=args.max_payloads)
                 print(f"[detect] enumerating {len(injection_runs)} injection point(s) "
                       f"x {len(method_names)} method(s)")
-                print(f"[detect] cost: {len(injection_runs)} points x ~{per_point} probes "
+                capped = f" (capped by --max-payloads {args.max_payloads})" if args.max_payloads else ""
+                print(f"[detect] cost: {len(injection_runs)} points x ~{per_point} probes{capped} "
                       f"= at least {len(injection_runs) * (per_point + len(waves))} requests "
                       f"(each point carries its own payload-free control)")
-                if args.max_payloads:
-                    print(f"[detect] --max-payloads {args.max_payloads} caps each point.")
                 results = []
                 for point, point_url, point_method, point_data, point_headers, label in injection_runs:
                     point_results: List[Dict[str, Any]] = []
