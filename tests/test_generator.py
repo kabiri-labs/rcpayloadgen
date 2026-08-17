@@ -3816,6 +3816,269 @@ class TimingScreenDepthTestCase(unittest.TestCase):
         self.assertEqual({p.separator for p in probes}, {"| "})
 
 
+RAW_CAPTURE = (
+    "POST /cgi-bin/status?view=summary&lang=en HTTP/1.1\r\n"
+    "Host: target.example\r\n"
+    "User-Agent: Mozilla/5.0\r\n"
+    "Referer: http://target.example/\r\n"
+    "X-Trace-Id: abc\r\n"
+    "Accept-Language: en-GB\r\n"
+    "Connection: keep-alive\r\n"
+    "Cookie: sid=abc123; theme=dark\r\n"
+    "Content-Type: application/json\r\n"
+    "Content-Length: 52\r\n"
+    "\r\n"
+    '{"user": {"profile": {"name": "ali"}}, "tags": ["a", 2]}'
+)
+
+
+class InjectionPointEnumerationTestCase(unittest.TestCase):
+    """Expanding one captured request into every candidate injection point.
+
+    `-p NAME` requires the tester to already know which parameter is the sink.
+    Real captures carry ten to forty candidates, and some of the highest-value
+    classes inject through a header or a JSON leaf several levels down that no
+    top-level parameter name addresses."""
+
+    def setUp(self):
+        self.req = parse_raw_request(RAW_CAPTURE)
+
+    def _points(self, **kwargs):
+        return rcekit.enumerate_injection_points(self.req, **kwargs)
+
+    def test_every_kind_is_found(self):
+        found = {(p.kind, p.name) for p in self._points()}
+        self.assertIn(("query", "view"), found)
+        self.assertIn(("query", "lang"), found)
+        self.assertIn(("json", "user.profile.name"), found)
+        self.assertIn(("cookie", "sid"), found)
+        self.assertIn(("cookie", "theme"), found)
+        self.assertIn(("header", "User-Agent"), found)
+
+    def test_json_leaves_are_addressed_by_path_including_arrays(self):
+        names = [p.name for p in self._points() if p.kind == "json"]
+        self.assertEqual(names, ["user.profile.name", "tags[0]", "tags[1]"])
+
+    def test_order_is_query_then_body_then_cookies_then_headers(self):
+        kinds = [p.kind for p in self._points()]
+        self.assertEqual(kinds, sorted(kinds, key=lambda k: rcekit.INJECTION_POINT_KINDS.index(k)))
+
+    def test_high_yield_headers_come_first_and_the_rest_need_thorough(self):
+        fast = [p.name for p in self._points() if p.kind == "header"]
+        self.assertIn("User-Agent", fast)
+        self.assertNotIn("X-Trace-Id", fast, "fast order must not sweep every header")
+        thorough = [p.name for p in self._points(thorough=True) if p.kind == "header"]
+        self.assertIn("X-Trace-Id", thorough)
+        self.assertLess(thorough.index("User-Agent"), thorough.index("X-Trace-Id"))
+
+    def test_connection_level_headers_are_never_candidates(self):
+        # Injecting into these changes the request's plumbing rather than
+        # testing the application, and the delivery layer rebuilds two of them.
+        names = {p.name.lower() for p in self._points(thorough=True) if p.kind == "header"}
+        for excluded in ("host", "content-length", "connection", "cookie"):
+            self.assertNotIn(excluded, names)
+
+    def test_path_segments_are_opt_in(self):
+        self.assertFalse([p for p in self._points() if p.kind == "path"])
+        segments = [p for p in self._points(include_path_segments=True) if p.kind == "path"]
+        self.assertTrue(segments)
+
+    def test_kinds_can_be_narrowed(self):
+        self.assertEqual({p.kind for p in self._points(kinds=("header",))}, {"header"})
+
+    def test_a_form_body_yields_form_points_not_json(self):
+        raw = RAW_CAPTURE.split("\r\n\r\n")[0].replace(
+            "Content-Type: application/json", "Content-Type: application/x-www-form-urlencoded")
+        req = parse_raw_request(raw + "\r\n\r\nuser=ali&role=admin")
+        points = rcekit.enumerate_injection_points(req)
+        self.assertEqual([p.name for p in points if p.kind == "form"], ["user", "role"])
+        self.assertFalse([p for p in points if p.kind == "json"])
+
+
+class InjectionPointPlacementTestCase(unittest.TestCase):
+    """Each kind is rewritten in its own serialization, so the value is escaped
+    by the layer that owns it rather than blanket-encoded for all of them."""
+
+    def setUp(self):
+        self.req = parse_raw_request(RAW_CAPTURE)
+
+    def _place(self, kind, name):
+        point = rcekit.InjectionPoint(kind, name, f"{kind} '{name}'")
+        return rcekit.place_injection_point(
+            self.req["target"], self.req["headers"], self.req["body"], point, "FUZZ")
+
+    def test_query_value_is_replaced_in_place(self):
+        target, _, _ = self._place("query", "view")
+        self.assertEqual(target, "/cgi-bin/status?view=FUZZ&lang=en")
+
+    def test_a_nested_json_leaf_is_replaced_and_the_body_stays_valid_json(self):
+        _, _, body = self._place("json", "user.profile.name")
+        self.assertEqual(json.loads(body)["user"]["profile"]["name"], "FUZZ")
+        self.assertEqual(json.loads(body)["tags"], ["a", 2])
+
+    def test_a_json_array_element_is_replaced_by_index(self):
+        _, _, body = self._place("json", "tags[1]")
+        self.assertEqual(json.loads(body)["tags"], ["a", "FUZZ"])
+
+    def test_one_cookie_crumb_is_replaced_and_the_others_survive(self):
+        _, headers, _ = self._place("cookie", "theme")
+        cookie = next(v for n, v in headers if n.lower() == "cookie")
+        self.assertIn("sid=abc123", cookie)
+        self.assertIn("theme=FUZZ", cookie)
+
+    def test_a_header_value_is_replaced_whole(self):
+        _, headers, _ = self._place("header", "User-Agent")
+        self.assertEqual(dict((n, v) for n, v in headers)["User-Agent"], "FUZZ")
+
+    def test_a_path_segment_is_replaced_and_the_query_survives(self):
+        target, _, _ = self._place("path", "1")
+        self.assertEqual(target, "/FUZZ/status?view=summary&lang=en")
+
+    def test_a_point_that_is_no_longer_there_returns_none(self):
+        self.assertIsNone(self._place("query", "nosuchparam"))
+        self.assertIsNone(self._place("json", "user.missing"))
+        self.assertIsNone(self._place("header", "X-Absent"))
+
+    def test_build_request_inputs_accepts_a_point(self):
+        point = rcekit.InjectionPoint("header", "User-Agent", "header 'User-Agent'")
+        url, method, data, headers, injection = build_request_inputs(
+            RAW_CAPTURE, scheme="https", point=point)
+        self.assertEqual(url, "https://target.example/cgi-bin/status?view=summary&lang=en")
+        self.assertEqual(method, "POST")
+        self.assertEqual(injection, "header 'User-Agent'")
+        self.assertIn("User-Agent: FUZZ", headers)
+        # Host and Content-Length are rebuilt by the delivery layer.
+        self.assertFalse([h for h in headers if h.lower().startswith(("host:", "content-length:"))])
+
+    def test_a_point_wins_over_a_leftover_inline_marker(self):
+        # Otherwise enumeration would test the same place for every candidate.
+        raw = RAW_CAPTURE.replace("lang=en", "lang=FUZZ")
+        point = rcekit.InjectionPoint("query", "view", "query param 'view'")
+        url, _, _, _, injection = build_request_inputs(raw, scheme="https", point=point)
+        self.assertIn("view=FUZZ", url)
+        self.assertEqual(injection, "query param 'view'")
+
+
+class EnumerationEndToEndTestCase(unittest.TestCase):
+    """The acceptance case: a sink reachable only through a header, found with
+    `-p all` and no manual header selection."""
+
+    def _run(self, *args):
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), *args],
+            cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=300)
+
+    def test_a_header_only_sink_is_found_without_naming_the_header(self):
+        import os
+        import tempfile
+
+        def route(method, path, params, headers, body):
+            pipe = os.popen("echo CGI " + headers.get("User-Agent", "") + " 2>&1")
+            out = pipe.read()
+            pipe.close()
+            return 200, out
+
+        with local_target(route) as base, tempfile.TemporaryDirectory() as tmp:
+            host = base.split("//", 1)[1]
+            capture = Path(tmp) / "request.txt"
+            capture.write_text(
+                "POST /cgi-bin/status?view=summary HTTP/1.1\n"
+                f"Host: {host}\n"
+                "User-Agent: Mozilla/5.0\n"
+                "Cookie: sid=abc123\n"
+                "Content-Type: application/json\n"
+                "\n"
+                '{"user": {"name": "ali"}}\n')
+            result = self._run("--acknowledge-consent", "-r", str(capture), "-p", "all",
+                               "--methods", "reflected", "--environments", "unix",
+                               "--max-payloads", "12")
+
+        self.assertEqual(result.returncode, 0, result.stdout[-2000:])
+        # It enumerated rather than needing the sink named...
+        self.assertIn("query param 'view'", result.stdout)
+        self.assertIn("JSON field 'user.name'", result.stdout)
+        self.assertIn("cookie 'sid'", result.stdout)
+        # ...it said what the run would cost before sending it...
+        self.assertRegex(result.stdout, r"\[detect\] cost: \d+ points x ~\d+ probes")
+        # ...and the finding names the point that worked.
+        self.assertIn("CONFIRMED execution", result.stdout)
+        self.assertIn("at header 'User-Agent'", result.stdout)
+
+    def test_enumeration_without_methods_is_refused(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            capture = Path(tmp) / "request.txt"
+            capture.write_text("GET /?a=1 HTTP/1.1\nHost: t.example\n\n")
+            result = self._run("--acknowledge-consent", "-r", str(capture), "-p", "all")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("needs --methods", result.stdout)
+
+    def test_an_unknown_auto_params_kind_is_refused(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            capture = Path(tmp) / "request.txt"
+            capture.write_text("GET /?a=1 HTTP/1.1\nHost: t.example\n\n")
+            result = self._run("--acknowledge-consent", "-r", str(capture),
+                               "--auto-params", "query,bogus", "--methods", "reflected")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("bogus", result.stdout)
+
+
+class JsonPathTestCase(unittest.TestCase):
+    def test_tokens_split_names_and_indices(self):
+        self.assertEqual(rcekit._json_path_tokens("user.profile.name"),
+                         ["user", "profile", "name"])
+        self.assertEqual(rcekit._json_path_tokens("items[0].v"), ["items", 0, "v"])
+        self.assertEqual(rcekit._json_path_tokens("a[1][2]"), ["a", 1, 2])
+
+    def test_leaf_paths_skip_containers_booleans_and_nulls(self):
+        obj = {"a": {"b": 1}, "ok": True, "none": None, "list": [{"c": "x"}]}
+        self.assertEqual(rcekit._json_leaf_paths(obj), ["a.b", "list[0].c"])
+
+    def test_setting_a_missing_path_fails_rather_than_creating_it(self):
+        obj = {"a": {"b": 1}}
+        self.assertFalse(rcekit._set_json_path(obj, "a.zzz.q", "X"))
+        self.assertFalse(rcekit._set_json_path(obj, "list[3]", "X"))
+        self.assertTrue(rcekit._set_json_path(obj, "a.b", "X"))
+        self.assertEqual(obj["a"]["b"], "X")
+
+    def test_a_deeply_nested_body_is_bounded_not_fatal(self):
+        deep = json.loads("[" * 400 + '"x"' + "]" * 400)
+        self.assertEqual(rcekit._json_leaf_paths(deep, max_depth=8), [])
+
+
+class DetectionCostEstimateTestCase(unittest.TestCase):
+    """The ladder, the carriers and the candidate count each multiply request
+    volume, so the number is printed before the traffic rather than inferred
+    from it afterwards."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+        self.records = [make_record(environment="unix", context="raw")]
+
+    def test_the_estimate_matches_what_a_run_actually_sends(self):
+        estimate = self.gen.estimate_detection_probes(self.records, ["reflected"])
+        with local_target(lambda *a: (200, "static")) as base:
+            results = self.gen.run_detection(
+                self.records, url=f"{base}/?x=FUZZ", methods=["reflected"])
+        self.assertEqual(estimate, len(results))
+
+    def test_the_estimate_sends_nothing(self):
+        # It must be safe to call before the consent-gated traffic starts.
+        estimate = self.gen.estimate_detection_probes(
+            self.records, ["reflected", "eval"], {"sink_shapes": ("sep",)})
+        self.assertGreater(estimate, 0)
+
+    def test_narrowing_the_ladder_lowers_the_estimate(self):
+        wide = self.gen.estimate_detection_probes(self.records, ["reflected"])
+        narrow = self.gen.estimate_detection_probes(
+            self.records, ["reflected"], {"sink_shapes": ("sep",)})
+        self.assertLess(narrow, wide)
+
+    def test_an_unknown_method_is_ignored_rather_than_fatal(self):
+        self.assertEqual(self.gen.estimate_detection_probes(self.records, ["nosuchmethod"]), 0)
+
+
 class EvalCarrierTestCase(unittest.TestCase):
     """Engine carriers for the `eval` probe.
 

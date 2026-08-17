@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.27.0"
+__version__ = "2.28.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -77,6 +77,11 @@ SINK_SHAPE_CONTEXTS = {
     "subshell": ("shell_subshell", "shell_backtick"),
 }
 
+
+# Methods that cost one response per probe. The rest sleep (time) or wait for a
+# callback (oob) or need a second fetch (file), which is what makes them worth
+# skipping on a candidate that has already proven execution.
+CHEAP_DETECTION_METHODS = {"reflected", "eval"}
 
 # Methods whose probes are shell commands, and so ride the sink-shape ladder.
 # `eval` is deliberately absent: its probes are template/expression syntax, not
@@ -1975,6 +1980,62 @@ class RCEKit:
                 extra.append(dataclass_replace(record, context=context))
         return extra
 
+    def _detection_carriers(self, records: Iterator[PayloadRecord],
+                            config: Dict[str, Any]) -> List[PayloadRecord]:
+        """Reduce the selected records to distinct ``(environment, context)``
+        carriers, plus the extra quoted/substitution carriers.
+
+        Shared by the run and by the cost estimate, so the number printed before
+        firing is derived from the same reduction that decides what is fired."""
+        carriers: List[PayloadRecord] = []
+        carrier_seen: Set[Tuple[str, str]] = set()
+        for record in records:
+            key = (record.environment, record.context)
+            if key in carrier_seen:
+                continue
+            carrier_seen.add(key)
+            carriers.append(record)
+        carriers.extend(self._quoted_shell_carriers(carriers, carrier_seen, config))
+        return carriers
+
+    def estimate_detection_probes(self, records: List[PayloadRecord], methods: List[str],
+                                  config: Optional[Dict[str, Any]] = None) -> int:
+        """How many requests a detection run would send, without sending any.
+
+        The ladder and the carrier list both multiply probe count, and
+        enumeration multiplies it again by the number of candidate points. An
+        operator on a monitored engagement has to be able to see that number
+        *before* it happens rather than infer it from the traffic, so this
+        builds the probes and counts them.
+
+        A floor, not an exact figure: an aggregate method may answer with
+        further screening waves once it has seen the first batch, and each
+        payload-free control adds one request per run."""
+        rng = random.Random(0)
+        carriers = self._detection_carriers(records, config or {})
+        total = 0
+        seen: Set[str] = set()
+        for name in methods:
+            if name not in DETECTION_METHODS:
+                continue
+            meth = DETECTION_METHODS[name](self, config)
+            for record in carriers:
+                if not meth.applicable(record):
+                    continue
+                try:
+                    probes = meth.build_probes(record, rng)
+                except Exception:  # a cost estimate must never break the run
+                    continue
+                if getattr(meth, "aggregate", False):
+                    total += len(probes)
+                    continue
+                for probe in probes:
+                    if probe.payload in seen:
+                        continue
+                    seen.add(probe.payload)
+                    total += 1
+        return total
+
     def run_detection(self, records: Iterator[PayloadRecord], url: str,
                       methods: List[str], method: str = "GET",
                       data: Optional[str] = None, headers: Optional[List[str]] = None,
@@ -2011,15 +2072,7 @@ class RCEKit:
 
         # Reduce records to distinct (environment, context) carriers so the same
         # probe shape is not refired for every payload sharing that carrier.
-        carriers: List[PayloadRecord] = []
-        carrier_seen: Set[Tuple[str, str]] = set()
-        for record in records:
-            key = (record.environment, record.context)
-            if key in carrier_seen:
-                continue
-            carrier_seen.add(key)
-            carriers.append(record)
-        carriers.extend(self._quoted_shell_carriers(carriers, carrier_seen, config or {}))
+        carriers = self._detection_carriers(records, config or {})
 
         results: List[Dict[str, Any]] = []
         seen: Set[str] = set()
@@ -3839,6 +3892,247 @@ def parse_raw_request(text: str) -> Dict[str, Any]:
             "headers": headers, "body": body, "host": host}
 
 
+@dataclass(frozen=True)
+class InjectionPoint:
+    """One place in a captured request where a payload could be injected.
+
+    ``kind`` picks the placement rule (and therefore the encoding), ``name`` is
+    the addressable identifier within that kind — a parameter name, a JSON path
+    like ``user.profile.name``, a header name, a path-segment index — and
+    ``label`` is what a finding calls it."""
+    kind: str
+    name: str
+    label: str
+
+
+# Headers worth trying before the rest. Not a guess: each is a header that
+# real, published RCEs inject through -- Shellshock rides User-Agent and
+# Referer, Struts2 S2-045 rides Content-Type, Spring Cloud Function rides a
+# routing-expression header, and X-Forwarded-For lands in log pipelines and
+# admin views that later render it.
+HIGH_YIELD_HEADERS = ("User-Agent", "Referer", "X-Forwarded-For", "Content-Type",
+                      "Accept-Language", "X-Api-Version", "X-Forwarded-Host",
+                      "spring.cloud.function.routing-expression")
+
+# Headers a probe must not touch. Hop-by-hop headers belong to the connection
+# rather than the application, and Host/Content-Length are rebuilt by the
+# delivery layer -- injecting into them changes the request's plumbing instead
+# of testing the app. Cookie is excluded because its crumbs are enumerated
+# individually, which is the addressable unit an application actually reads.
+NON_INJECTABLE_HEADERS = {
+    "host", "content-length", "connection", "keep-alive", "proxy-authenticate",
+    "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade", "cookie",
+}
+
+# The candidate kinds, in the order they are tried.
+INJECTION_POINT_KINDS = ("query", "json", "form", "cookie", "header", "path")
+
+
+def _json_path_tokens(path: str) -> List[Any]:
+    """``user.profile.name`` / ``items[0].v`` -> ``['user','profile','name']`` /
+    ``['items',0,'v']``."""
+    tokens: List[Any] = []
+    for chunk in path.split("."):
+        name, _, rest = chunk.partition("[")
+        if name:
+            tokens.append(name)
+        while rest:
+            index, _, rest = rest.partition("]")
+            if index:
+                tokens.append(int(index))
+            _, _, rest = rest.partition("[")
+    return tokens
+
+
+def _json_leaf_paths(obj: Any, limit: int = 256, max_depth: int = 64) -> List[str]:
+    """Paths to every scalar leaf of a parsed JSON body, in document order.
+
+    Iterative and bounded for the same reason the response-channel walk is: a
+    pathological body must cost a bounded amount of work, not a RecursionError
+    that the caller reports as a delivery failure."""
+    leaves: List[str] = []
+    stack: List[Tuple[Any, str, int]] = [(obj, "", 0)]
+    while stack and len(leaves) < limit:
+        node, path, depth = stack.pop()
+        if depth > max_depth:
+            continue
+        if isinstance(node, dict):
+            for key in reversed(list(node.keys())):
+                stack.append((node[key], f"{path}.{key}" if path else str(key), depth + 1))
+        elif isinstance(node, list):
+            for index in range(len(node) - 1, -1, -1):
+                stack.append((node[index], f"{path}[{index}]", depth + 1))
+        elif isinstance(node, str) or isinstance(node, (int, float)) and not isinstance(node, bool):
+            if path:
+                leaves.append(path)
+    return leaves
+
+
+def _set_json_path(obj: Any, path: str, value: str) -> bool:
+    """Set the leaf at ``path`` to ``value`` in place. False if it is not there.
+
+    Replaces an existing leaf only — assigning to a dict would otherwise *create*
+    a key the application never sends, which tests a field that does not exist
+    and cannot say anything about the one that does."""
+    tokens = _json_path_tokens(path)
+    if not tokens:
+        return False
+    node = obj
+    for token in tokens[:-1]:
+        try:
+            node = node[token]
+        except (KeyError, IndexError, TypeError):
+            return False
+    leaf = tokens[-1]
+    if isinstance(node, dict):
+        if leaf not in node:
+            return False
+    elif isinstance(node, list):
+        if not isinstance(leaf, int) or not 0 <= leaf < len(node):
+            return False
+    else:
+        return False
+    node[leaf] = value
+    return True
+
+
+def enumerate_injection_points(req: Dict[str, Any], kinds: Optional[Tuple[str, ...]] = None,
+                               include_path_segments: bool = False,
+                               thorough: bool = False) -> List[InjectionPoint]:
+    """Every candidate injection point in a captured request, cheapest first.
+
+    ``-p NAME`` requires the tester to already know which parameter is the sink.
+    Real captures carry ten to forty candidates, and some of the highest-value
+    classes inject through a *header* -- Shellshock through ``User-Agent``,
+    Struts2 S2-045 through ``Content-Type`` -- or through a JSON leaf several
+    levels down, which no top-level parameter name addresses.
+
+    Order is by expected yield per request: query, then body (JSON leaves by
+    path, or form fields), then cookies, then headers. Path segments are last
+    and opt-in: rewriting a path segment often just produces a 404, which costs
+    a request and tells you nothing.
+
+    ``thorough`` adds the remaining non-hop-by-hop headers after the curated
+    ones; without it only the high-yield list is tried."""
+    selected = set(kinds or INJECTION_POINT_KINDS)
+    points: List[InjectionPoint] = []
+    target, headers, body = req["target"], req["headers"], req.get("body", "")
+
+    if "query" in selected:
+        _, _, query = target.partition("?")
+        for pair in query.split("&") if query else []:
+            key, sep, _ = pair.partition("=")
+            if sep and key:
+                points.append(InjectionPoint("query", key, f"query param '{key}'"))
+
+    stripped = (body or "").strip()
+    if stripped[:1] in "{[" and "json" in selected:
+        try:
+            parsed = json.loads(body)
+        except (ValueError, TypeError):
+            parsed = None
+        if parsed is not None:
+            for path in _json_leaf_paths(parsed):
+                points.append(InjectionPoint("json", path, f"JSON field '{path}'"))
+    elif "=" in (body or "") and "form" in selected:
+        for pair in body.split("&"):
+            key, sep, _ = pair.partition("=")
+            if sep and key:
+                points.append(InjectionPoint("form", key, f"body param '{key}'"))
+
+    if "cookie" in selected:
+        for name, value in headers:
+            if name.lower() != "cookie":
+                continue
+            for crumb in value.split(";"):
+                key, sep, _ = crumb.strip().partition("=")
+                if sep and key.strip():
+                    points.append(InjectionPoint("cookie", key.strip(),
+                                                 f"cookie '{key.strip()}'"))
+
+    if "header" in selected:
+        present = [name for name, _ in headers if name.lower() not in NON_INJECTABLE_HEADERS]
+        high_yield = [n for n in HIGH_YIELD_HEADERS
+                      if any(n.lower() == p.lower() for p in present)]
+        ordered = list(high_yield)
+        if thorough:
+            ordered += [p for p in present
+                        if not any(p.lower() == h.lower() for h in high_yield)]
+        seen_headers: Set[str] = set()
+        for name in ordered:
+            actual = next((p for p in present if p.lower() == name.lower()), name)
+            if actual.lower() in seen_headers:
+                continue
+            seen_headers.add(actual.lower())
+            points.append(InjectionPoint("header", actual, f"header '{actual}'"))
+
+    if include_path_segments and "path" in selected:
+        path_part, _, _ = target.partition("?")
+        for index, segment in enumerate(path_part.split("/")):
+            if segment:
+                points.append(InjectionPoint("path", str(index),
+                                             f"path segment {index} ('{segment}')"))
+    return points
+
+
+def place_injection_point(target: str, headers: List[List[str]], body: str,
+                          point: InjectionPoint, mark: str
+                          ) -> Optional[Tuple[str, List[List[str]], str]]:
+    """Put ``mark`` at ``point``. ``None`` when the point is no longer there.
+
+    Each kind is rewritten in its own serialization -- a JSON leaf through the
+    JSON encoder, a form field in the ``a=1&b=2`` blob, a header as a single
+    line -- so the value is escaped by the layer that owns it rather than
+    blanket-encoded for all of them."""
+    if point.kind == "query":
+        path, sep, query = target.partition("?")
+        if not sep:
+            return None
+        marked = _mark_urlencoded_param(query, point.name, mark)
+        return (f"{path}?{marked}", headers, body) if marked is not None else None
+    if point.kind == "json":
+        try:
+            parsed = json.loads(body)
+        except (ValueError, TypeError):
+            return None
+        if not _set_json_path(parsed, point.name, mark):
+            return None
+        return target, headers, json.dumps(parsed)
+    if point.kind == "form":
+        marked = _mark_urlencoded_param(body, point.name, mark)
+        return (target, headers, marked) if marked is not None else None
+    if point.kind == "cookie":
+        for index, (name, value) in enumerate(headers):
+            if name.lower() != "cookie":
+                continue
+            marked = _mark_cookie(value, point.name, mark)
+            if marked is not None:
+                new_headers = [list(h) for h in headers]
+                new_headers[index][1] = marked
+                return target, new_headers, body
+        return None
+    if point.kind == "header":
+        for index, (name, _value) in enumerate(headers):
+            if name.lower() == point.name.lower():
+                new_headers = [list(h) for h in headers]
+                new_headers[index][1] = mark
+                return target, new_headers, body
+        return None
+    if point.kind == "path":
+        path, sep, query = target.partition("?")
+        segments = path.split("/")
+        try:
+            index = int(point.name)
+        except ValueError:
+            return None
+        if not 0 <= index < len(segments):
+            return None
+        segments[index] = mark
+        rebuilt = "/".join(segments)
+        return (f"{rebuilt}?{query}" if sep else rebuilt), headers, body
+    return None
+
+
 def _mark_urlencoded_param(blob: str, param: str, mark: str) -> Optional[str]:
     """Replace ``param``'s value with ``mark`` in a ``a=1&b=2`` blob (query or
     form body). Returns the rewritten blob, or None if ``param`` is absent."""
@@ -3938,11 +4232,33 @@ def _infer_request_scheme(host: str) -> str:
 
 
 def build_request_inputs(text: str, param: Optional[str] = None,
-                         scheme: Optional[str] = None, mark: str = "FUZZ"
+                         scheme: Optional[str] = None, mark: str = "FUZZ",
+                         point: Optional[InjectionPoint] = None
                          ) -> Tuple[str, str, Optional[str], List[str], str]:
     """Build ``(url, method, data, headers, injection)`` from a raw HTTP request,
-    with ``mark`` placed at the injection point. Precedence: an inline ``FUZZ``
-    already in the request, then an inline ``*`` marker, then ``-p NAME``."""
+    with ``mark`` placed at the injection point. Precedence: an explicit
+    ``point`` (enumeration), then an inline ``FUZZ`` already in the request, then
+    an inline ``*`` marker, then ``-p NAME``.
+
+    ``point`` wins over an inline marker because enumeration is asking about a
+    specific candidate; honouring a leftover marker instead would silently test
+    the same place for every candidate."""
+    if point is not None:
+        req = parse_raw_request(text)
+        placed = place_injection_point(req["target"], req["headers"], req.get("body", ""),
+                                       point, mark)
+        if placed is None:
+            raise ValueError(f"injection point not found: {point.label}")
+        target, headers, body = placed
+        host = req["host"]
+        if not host:
+            raise ValueError("raw request has no Host header; cannot build an absolute URL")
+        if scheme is None:
+            scheme = _infer_request_scheme(host)
+        out_headers = [f"{name}: {value}" for name, value in headers
+                       if name.lower() not in {"host", "content-length"}]
+        return (f"{scheme}://{host}{target}", req["method"], body or None,
+                out_headers, point.label)
     inline = False
     if mark in text:
         inline = True
@@ -4064,8 +4380,24 @@ def main():
                              "cookies are reused, each encoded for the context it lands in.")
     parser.add_argument("-p", "--param", action="append", default=None,
                         help="Parameter/field/header/cookie to inject into for -r (precedence: query > body "
-                             "> header > cookie). One injection point per run in this release; --all-params "
-                             "enumeration is planned.")
+                             "> header > cookie). Pass 'all' to enumerate every candidate in the capture "
+                             "instead of naming one.")
+    parser.add_argument("--auto-params", default=None, metavar="KINDS",
+                        help="(-r with --methods) Enumerate injection points instead of naming one. "
+                             f"Comma-separated kinds from {', '.join(INJECTION_POINT_KINDS)}, or 'all'. "
+                             "Query values, JSON leaves addressed by path, form fields, cookie values and "
+                             "headers each get their own encoding. Implied by '-p all'.")
+    parser.add_argument("--point-order", choices=["fast", "thorough"], default="fast",
+                        help="(enumeration) 'fast' (default) tries query, body, cookies and a curated "
+                             "high-yield header list; 'thorough' also tries every remaining "
+                             "non-hop-by-hop header.")
+    parser.add_argument("--max-points", type=int, default=40, metavar="N",
+                        help="(enumeration) Stop after N candidates. A budget guard, not a filter: the "
+                             "run says how many it dropped.")
+    parser.add_argument("--include-path-segments", action="store_true", default=False,
+                        help="(enumeration) Also inject into URL path segments. Off by default: rewriting "
+                             "a path segment usually just produces a 404, which costs a request and "
+                             "proves nothing.")
     parser.add_argument("--request-scheme", choices=["http", "https"], default=None,
                         help="Scheme for the URL built from -r (default: https when the Host is on :443, "
                              "otherwise http — a portless capture cannot record which, and http keeps "
@@ -4397,6 +4729,9 @@ def main():
                   "--acknowledge-consent to confirm you are authorised to test it.")
             return 1
         # Source the request from a raw capture (-r) or the --verify-* flags.
+        # `injection_runs` is non-empty only when enumerating: one entry per
+        # candidate point, each a fully built request in its own encoding.
+        injection_runs: List[Tuple[Any, str, str, Optional[str], List[str], str]] = []
         if args.request_file:
             try:
                 with open(args.request_file, "r", encoding="utf-8") as request_fh:
@@ -4405,19 +4740,71 @@ def main():
                 print(f"[!] Unable to read --request-file {args.request_file}: {exc}")
                 return 1
             params = args.param or []
-            if len(params) > 1:
-                print("[!] -r supports a single injection point in this release; pass one -p "
-                      "(or a FUZZ/* marker). --all-params enumeration is not yet available.")
+            auto_kinds = args.auto_params
+            if not auto_kinds and any(p.lower() == "all" for p in params):
+                auto_kinds = "all"
+                params = [p for p in params if p.lower() != "all"]
+            if auto_kinds and not args.methods:
+                print("[!] Enumerating injection points needs --methods: the classic per-payload "
+                      "oracle fires a whole corpus per point, which is not a budget anyone wants "
+                      "multiplied by every candidate in the capture.")
                 return 1
-            try:
-                verify_url, method, verify_data, verify_headers, injection = build_request_inputs(
-                    raw_request, param=(params[0] if params else None), scheme=args.request_scheme)
-            except ValueError as exc:
-                print(f"[!] Could not build a request from {args.request_file}: {exc}")
+            if not auto_kinds and len(params) > 1:
+                print("[!] -r takes a single -p, or '-p all' / --auto-params to enumerate.")
                 return 1
+            if auto_kinds:
+                kinds = (None if auto_kinds.strip() == "all"
+                         else tuple(k.strip() for k in auto_kinds.split(",") if k.strip()))
+                unknown = [k for k in (kinds or ()) if k not in INJECTION_POINT_KINDS]
+                if unknown:
+                    print(f"[!] Unknown --auto-params kind(s): {', '.join(unknown)}. "
+                          f"Choose from {', '.join(INJECTION_POINT_KINDS)}, or 'all'.")
+                    return 1
+                try:
+                    parsed_request = parse_raw_request(raw_request)
+                except ValueError as exc:
+                    print(f"[!] Could not parse {args.request_file}: {exc}")
+                    return 1
+                points = enumerate_injection_points(
+                    parsed_request, kinds=kinds,
+                    include_path_segments=args.include_path_segments,
+                    thorough=args.point_order == "thorough")
+                if not points:
+                    print("[!] No injection points found in the capture — nothing was tested. "
+                          "Widen --auto-params, or add --include-path-segments.")
+                    return 1
+                dropped = max(0, len(points) - args.max_points)
+                points = points[:args.max_points]
+                for point in points:
+                    try:
+                        built = build_request_inputs(raw_request, scheme=args.request_scheme,
+                                                     point=point)
+                    except ValueError:
+                        continue
+                    injection_runs.append((point, ) + built)
+                if not injection_runs:
+                    print("[!] Every enumerated point failed to build a request — nothing was tested.")
+                    return 1
+                verify_url, method, verify_data, verify_headers, injection = injection_runs[0][1:]
+                print(f"[verify] loaded request from {args.request_file}: enumerating "
+                      f"{len(injection_runs)} injection point(s)"
+                      + (f", {dropped} dropped by --max-points {args.max_points}"
+                         if dropped else ""))
+            else:
+                try:
+                    verify_url, method, verify_data, verify_headers, injection = build_request_inputs(
+                        raw_request, param=(params[0] if params else None),
+                        scheme=args.request_scheme)
+                except ValueError as exc:
+                    print(f"[!] Could not build a request from {args.request_file}: {exc}")
+                    return 1
             method = args.verify_method or method
-            print(f"[verify] loaded request from {args.request_file}: {method} {verify_url} "
-                  f"(injecting at {injection})")
+            if injection_runs:
+                for point, url, _m, _d, _h, label in injection_runs:
+                    print(f"[verify]   {label}")
+            else:
+                print(f"[verify] loaded request from {args.request_file}: {method} {verify_url} "
+                      f"(injecting at {injection})")
             if args.request_scheme is None:
                 resolved_scheme = verify_url.split("://", 1)[0]
                 print(f"[verify] the capture records no scheme; inferred {resolved_scheme} "
@@ -4560,13 +4947,61 @@ def main():
                 if separators:
                     print("[detect]   (separators pinned by --separators: "
                           f"{', '.join(repr(s) for s in separators)})")
-            results = generator.run_detection(
-                to_send, url=verify_url, methods=method_names, method=method,
-                data=verify_data, headers=verify_headers, delay=args.verify_delay,
-                timeout=args.verify_timeout, max_payloads=args.max_payloads,
-                url_location=args.verify_url_location, body_location=args.verify_body_location,
-                config=detection_config,
-            )
+            if injection_runs:
+                # Enumeration. Each candidate is its own request shape, so each
+                # gets its own payload-free control -- differencing a header
+                # probe against a query probe's control would compare two
+                # different responses and prove nothing.
+                #
+                # Cheap methods first, per candidate. reflected and eval cost one
+                # response each; time sleeps and oob waits for a callback. Once a
+                # candidate has proven execution, paying for the slow methods on
+                # it buys a second name for a finding already made, so that
+                # candidate stops there. Candidates that stay clean still get
+                # every method.
+                cheap = [m for m in method_names if m in CHEAP_DETECTION_METHODS]
+                costly = [m for m in method_names if m not in CHEAP_DETECTION_METHODS]
+                waves = [w for w in (cheap, costly) if w]
+                per_point = generator.estimate_detection_probes(
+                    to_send, method_names, detection_config)
+                print(f"[detect] enumerating {len(injection_runs)} injection point(s) "
+                      f"x {len(method_names)} method(s)")
+                print(f"[detect] cost: {len(injection_runs)} points x ~{per_point} probes "
+                      f"= at least {len(injection_runs) * (per_point + len(waves))} requests "
+                      f"(each point carries its own payload-free control)")
+                if args.max_payloads:
+                    print(f"[detect] --max-payloads {args.max_payloads} caps each point.")
+                results = []
+                for point, point_url, point_method, point_data, point_headers, label in injection_runs:
+                    point_results: List[Dict[str, Any]] = []
+                    for wave in waves:
+                        wave_results = generator.run_detection(
+                            to_send, url=point_url, methods=wave,
+                            method=args.verify_method or point_method,
+                            data=point_data, headers=point_headers, delay=args.verify_delay,
+                            timeout=args.verify_timeout, max_payloads=args.max_payloads,
+                            url_location=args.verify_url_location,
+                            body_location=args.verify_body_location,
+                            config=detection_config,
+                        )
+                        point_results.extend(wave_results)
+                        if any(r["verdict"] == "confirmed" for r in wave_results):
+                            break
+                    for result in point_results:
+                        result["point"] = label
+                    verdict = overall_detection_verdict(point_results)
+                    marker = "  <-- CONFIRMED" if verdict == "confirmed" else ""
+                    print(f"[detect]   {label}: {verdict} "
+                          f"({len(point_results)} probes){marker}")
+                    results.extend(point_results)
+            else:
+                results = generator.run_detection(
+                    to_send, url=verify_url, methods=method_names, method=method,
+                    data=verify_data, headers=verify_headers, delay=args.verify_delay,
+                    timeout=args.verify_timeout, max_payloads=args.max_payloads,
+                    url_location=args.verify_url_location, body_location=args.verify_body_location,
+                    config=detection_config,
+                )
             if args.detect_json:
                 # Written before the text report and regardless of outcome, so a
                 # caller always gets a file to read -- including the
@@ -4611,7 +5046,8 @@ def main():
             if confirmed:
                 print(f"\n[detect] CONFIRMED execution ({len(confirmed)}):")
                 for result in confirmed:
-                    print(f"  [{result['method']}/{result['environment']}/{result['context']}] "
+                    at = f" at {result['point']}" if result.get("point") else ""
+                    print(f"  [{result['method']}/{result['environment']}/{result['context']}]{at} "
                           f"{result['payload']}   ({result['detail']})")
                     if result.get("cleanup"):
                         print(f"      cleanup: {result['cleanup']}")
@@ -4620,7 +5056,8 @@ def main():
                 print(f"\n[detect] {len(needs_review)} NEEDS-REVIEW candidates "
                       "(not proof of execution — review manually):")
                 for result in needs_review:
-                    print(f"  [{result['method']}/{result['environment']}/{result['context']}] "
+                    at = f" at {result['point']}" if result.get("point") else ""
+                    print(f"  [{result['method']}/{result['environment']}/{result['context']}]{at} "
                           f"{result['payload']}   ({result['detail']})")
             if not confirmed:
                 errored = [r for r in results if r["verdict"] == "error"]
