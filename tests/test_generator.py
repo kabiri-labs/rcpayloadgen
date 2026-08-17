@@ -3986,6 +3986,82 @@ class FileReadBackTestCase(unittest.TestCase):
                 config={"webroot": writedir, "web_base_url": f"{base}/files"}, timeout=15)
         self.assertTrue([r for r in results if r["verdict"] == "confirmed"])
 
+    # -- authentication on the read-back fetch -------------------------------
+
+    def test_same_origin_read_back_carries_the_runs_headers(self):
+        # The write executes with the run's headers; the fetch used to go bare.
+        # A generalised read-back channel is an application endpoint, and those
+        # are usually behind a session.
+        kept = self.gen._followup_headers(
+            "http://t/a", "http://t/download",
+            ["Authorization: Bearer x", "Cookie: sid=y", "Accept: */*"])
+        self.assertEqual(kept, ["Authorization: Bearer x", "Cookie: sid=y", "Accept: */*"])
+
+    def test_cross_origin_read_back_never_carries_credentials(self):
+        # Replaying the target's session to another host would leak it.
+        kept = self.gen._followup_headers(
+            "http://t/a", "http://elsewhere/download",
+            ["Authorization: Bearer x", "Cookie: sid=y", "Accept: */*"])
+        self.assertEqual(kept, ["Accept: */*"])
+
+    def test_body_headers_are_not_carried_on_the_get(self):
+        kept = self.gen._followup_headers(
+            "http://t/a", "http://t/b",
+            ["Content-Type: application/json", "Content-Length: 12", "Accept: */*"])
+        self.assertEqual(kept, ["Accept: */*"])
+
+    def test_no_headers_stays_none(self):
+        self.assertIsNone(self.gen._followup_headers("http://t/a", "http://t/b", None))
+        self.assertIsNone(self.gen._followup_headers("http://t/a", "http://t/b", []))
+        self.assertIsNone(self.gen._followup_headers(
+            "http://t/a", "http://x/b", ["Authorization: only-this"]))
+
+    def test_same_origin_compares_scheme_host_and_effective_port(self):
+        same = RCEKit.same_origin
+        self.assertTrue(same("https://t/a", "https://t:443/b"))
+        self.assertTrue(same("http://T/a", "http://t:80/b"))
+        self.assertFalse(same("http://t/a", "https://t/b"))
+        self.assertFalse(same("http://t/a", "http://t:8080/b"))
+        self.assertFalse(same("http://t/a", "http://other/b"))
+        self.assertFalse(same("http://t/a", "http://t:notaport/b"))
+
+    def test_an_authenticated_read_back_handler_confirms(self):
+        # End to end: the write lands, the protected fetch authenticates, and the
+        # token comes back. Without the headers this returned `negative` on a
+        # target that had executed every probe.
+        import os
+        import tempfile
+        writedir = tempfile.mkdtemp()
+
+        def route(method, path, params, headers, body):
+            if path == "/download":
+                if headers.get("Authorization") != "Bearer s3cr3t":
+                    return 401, "unauthorized"
+                served = params.get("f", "")
+                if served and os.path.exists(served):
+                    with open(served) as handle:
+                        return 200, handle.read()
+                return 200, "missing"
+            pipe = os.popen("echo LOOKUP " + params.get("host", "") + " 2>&1")
+            out = pipe.read()
+            pipe.close()
+            return 200, out
+
+        with local_target(route) as base:
+            config = {"file_write_path": writedir,
+                      "file_read_url": base + "/download?f={path_enc}"}
+            authed = self.gen.run_detection(
+                [self.rec], url=f"{base}/?host=FUZZ", methods=["file"],
+                headers=["Authorization: Bearer s3cr3t"], config=config, timeout=15)
+            bare = self.gen.run_detection(
+                [self.rec], url=f"{base}/?host=FUZZ", methods=["file"],
+                config=config, timeout=15)
+
+        self.assertTrue([r for r in authed if r["verdict"] == "confirmed"],
+                        "the read-back fetch must authenticate like the write did")
+        self.assertFalse([r for r in bare if r["verdict"] == "confirmed"],
+                         "precondition: without the credential the handler refuses")
+
     def test_a_clean_target_stays_negative_through_the_new_channel(self):
         import tempfile
         writedir = tempfile.mkdtemp()
