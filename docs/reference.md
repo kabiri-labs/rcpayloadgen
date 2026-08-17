@@ -10,6 +10,7 @@ starting point — this page is for looking things up once you know what you wan
 - [Detection methods](#detection-methods)
 - [Sink shape](#sink-shape)
 - [The sink shell](#the-sink-shell)
+- [Deserialization sinks](#deserialization-sinks-and-the-verdict-that-is-not-rce)
 - [Query-language bridges](#query-language-bridges)
 - [Second-order execution](#second-order-execution-the-observed-channel)
 - [Safety &amp; consent](#safety--consent)
@@ -47,13 +48,14 @@ starting point — this page is for looking things up once you know what you wan
 
 | Option | Description | Default |
 |---|---|---|
-| `--methods` | Comma-separated: `reflected`, `eval`, `file`, `write`, `oob`, `time` | None |
+| `--methods` | Comma-separated: `reflected`, `eval`, `file`, `write`, `oob`, `time`, `deser` | None |
 | `--file-write-path` | (`file`) server-side directory the target can write to, e.g. `/tmp` | None |
 | `--file-read-url` | (`file`) URL template that reads it back: `{name}`, `{path}`, `{path_enc}` | None |
 | `--webroot` | (`file`) web-root alias for `--file-write-path` | None |
 | `--web-base-url` | (`file`) web-root alias for `--file-read-url '<base>/{name}'` | None |
 | `--write-url-template` | (`write`) URL the file your request stores is served at; required for `write` | None |
 | `--write-lang` | (`write`) File types to write: `auto`, or any of `jsp`, `jspx`, `php`, `aspx`, `erb` | `auto` |
+| `--deser-formats` | (`deser`) Serialization ecosystems to probe: `auto`, or corpus names | `auto` |
 | `--bridges` | Query-language bridges the command probes ride: `none` (default), `auto`, or corpus names | `none` |
 | `--observe-url` | Second-order: endpoint polled for the computed value after the probes | None |
 | `--observe-request` | Raw HTTP request for that endpoint instead of `--observe-url` (no marker) | None |
@@ -81,6 +83,7 @@ starting point — this page is for looking things up once you know what you wan
 | `write` | A write primitive proven to be RCE, by executing the written file | `confirmed`, or `needs-review` for a write that is served but not interpreted |
 | `oob` | Blind execution, via a DNS/HTTP callback carrying a per-probe token | `confirmed` |
 | `time` | Blind execution, via a `0/N/2N` regression | `needs-review` only |
+| `deser` | That the endpoint **deserializes** attacker data — never RCE | `deserialization-sink`, or `needs-review` for the shape fingerprint |
 
 ### Probe depth
 
@@ -170,6 +173,67 @@ web-root form confirms 0 and the general form confirms 7.
 This method changes target state (one file per confirmed probe), so it stays
 gated on the operator naming both halves, and **every finding prints its own
 cleanup command**.
+
+### Deserialization sinks, and the verdict that is not RCE
+
+Deserialization RCE (fastjson, shiro, weblogic, jenkins) cannot be confirmed by
+the value-oracle model: the payload is a serialized object graph and gadget
+selection is classpath-specific, so whether execution is reachable depends on
+jars RCEKit cannot see. That stays out of scope. What is *in* scope is the
+honest middle step — showing the endpoint parses the data at all, which is a
+real finding and the prerequisite for every gadget chain.
+
+`--methods deser` therefore **never emits `confirmed`**. Its strongest outcome
+is its own verdict:
+
+```
+[detect] 1 DESERIALIZATION SINK(S) — NOT proof of RCE:
+  [deser/raw] rO0ABXNyABFqYXZhLnV0aWwuSGFzaE1hcA...   (java: the target resolved
+      rk7f2a91c3b8.oob.example, so it reconstructed an attacker-supplied object graph …)
+  → the endpoint reconstructs attacker-supplied object graphs. Reaching RCE from
+    here depends on gadgets in the target's classpath, which is outside what
+    RCEKit confirms.
+```
+
+`deserialization-sink` sits below both RCE tiers in the collapsed verdict: it is
+*proven*, but a suspected RCE (`needs-review`) outranks a proven non-RCE in
+triage, and `confirmed` stays reserved for execution.
+
+Two oracles, of deliberately different strength:
+
+| Oracle | Needs | Reaches |
+|---|---|---|
+| **shape** | nothing | `needs-review` |
+| **dns** | `--oob-host` and a listener | `deserialization-sink` |
+
+**shape** sends three payloads per ecosystem — a well-formed object stream, the
+same stream truncated, and the format's magic bytes followed by random noise of
+the same length — and asks whether the endpoint answers the well-formed one
+differently from *both* others. A parser does; a parameter that is merely stored
+treats all three as opaque text. Response signatures drop long digit and hex
+runs, so request ids and timestamps on an otherwise identical error page do not
+make every endpoint look like a parser. It is a fingerprint, not proof, and it
+never gets promoted.
+
+**dns** sends a gadget whose only side effect is a name lookup. For Java that is
+URLDNS — a `HashMap` holding one `java.net.URL`, where `HashMap.readObject`
+hashes the key, `URL.hashCode` asks for the host address and the JVM resolves the
+name. It references no class outside `java.util`/`java.net`, so there is nothing
+in it that can run. For polymorphic JSON it is a `java.net.Inet4Address`
+autotype. A callback proves the object graph was reconstructed — and only that.
+
+The Java stream is built in Python rather than declared in the corpus because
+the URL host is length-prefixed *inside* the stream and changes per probe, so
+there is no static string to declare. Its constant parts are the exact bytes
+OpenJDK's own `ObjectOutputStream` produces for that graph, and the generated
+stream was verified against OpenJDK 21: it deserializes to
+`HashMap{http://<host>/=rk}` and issues a DNS query for `<host>`, with no code
+execution.
+
+Ecosystems ship in the corpus (`deser_probes`): `java`, `php`, `dotnet`,
+`python_pickle`, `fastjson`. Only `java` and `fastjson` have a non-executing DNS
+gadget — PHP and .NET chains all run through magic methods or type confusion, so
+there is no honest DNS-only probe for them and the shape oracle is all they get.
 
 ### Query-language bridges
 

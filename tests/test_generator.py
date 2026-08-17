@@ -8,9 +8,12 @@ removed obfuscation transforms must stay removed, and the safety filters and
 detection mode must behave as documented.
 """
 
+import base64
+import inspect
 import json
 import os
 import re
+import struct
 import subprocess
 import sys
 import tempfile
@@ -5984,6 +5987,183 @@ class QueryLanguageBridgeTestCase(unittest.TestCase):
                 config={"bridges": ("postgres_copy_program",), "max_safety": "stateful"})
         self.assertTrue(results)
         self.assertFalse([r for r in results if r["verdict"] == "confirmed"])
+
+
+class DeserializationSinkTestCase(unittest.TestCase):
+    """`--methods deser`: proves an endpoint deserializes, and stops there.
+
+    The verdict boundary is the whole deliverable. Deserialization RCE depends
+    on gadgets in the target's classpath, which RCEKit cannot see, so this
+    method must never say `confirmed` — that word is reserved for execution and
+    has to stay that way to mean anything. Its strongest outcome is its own
+    verdict, `deserialization-sink`, which is a real proven finding about a
+    different property."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+        self.rec = make_record(environment="java", context="raw")
+
+    def _probes(self, config=None):
+        import random as _random
+        return rcekit.DeserSink(self.gen, config or {}).build_probes(
+            self.rec, _random.Random(5))
+
+    # -- the verdict boundary ------------------------------------------------
+
+    def test_the_method_can_never_report_confirmed(self):
+        self.assertEqual(rcekit.DeserSink.tier, "deserialization-sink")
+        source = inspect.getsource(rcekit.DeserSink)
+        self.assertNotIn('Verdict("confirmed"', source,
+                         "reaching RCE from a deserialization sink depends on classpath "
+                         "gadgets RCEKit cannot see; `confirmed` means executed")
+
+    def test_the_new_tier_sits_below_both_rce_tiers(self):
+        # A proven non-RCE finding must not outrank a suspected RCE in triage,
+        # and must not be lost behind a plain negative either.
+        self.assertEqual(rcekit.overall_detection_verdict(
+            [{"verdict": "deserialization-sink"}, {"verdict": "confirmed"}]), "confirmed")
+        self.assertEqual(rcekit.overall_detection_verdict(
+            [{"verdict": "deserialization-sink"}, {"verdict": "needs-review"}]), "needs-review")
+        self.assertEqual(rcekit.overall_detection_verdict(
+            [{"verdict": "deserialization-sink"}, {"verdict": "negative"}]),
+            "deserialization-sink")
+
+    def test_a_dns_hit_reports_a_sink_and_says_it_is_not_rce(self):
+        class FakeListener:
+            hits = [{"token": "rkaaaaaaaaaa", "proto": "dns"}]
+            tokens = {}
+
+        method = rcekit.DeserSink(self.gen, {"oob_listener": FakeListener(), "oob_wait": 0})
+        probe = Probe(payload="x", expected="rkaaaaaaaaaa", carrier="java", phase="dns")
+        (_probe, verdict), = method._dns_verdicts([(probe, Observation(status=200, body=""))])
+        self.assertEqual(verdict.status, "deserialization-sink")
+        self.assertIn("NOT proof of RCE", verdict.evidence)
+
+    # -- the Java gadget -----------------------------------------------------
+
+    def test_the_java_gadget_is_a_valid_stream_carrying_the_callback_host(self):
+        raw = rcekit.DeserSink.java_urldns("rktoken1.oob.example")
+        self.assertTrue(raw.startswith(b"\xac\xed\x00\x05"), "java serialization magic")
+        self.assertIn(b"java.util.HashMap", raw)
+        self.assertIn(b"java.net.URL", raw)
+        # Length-prefixed, which is why this is built in Python rather than
+        # declared in the corpus as a static string.
+        host = b"rktoken1.oob.example"
+        self.assertIn(b"\x74" + struct.pack(">H", len(host)) + host, raw)
+
+    def test_the_gadget_references_no_class_that_could_run(self):
+        # Non-executing by construction: the callback proves the object graph
+        # was reconstructed and nothing more. A gadget class in here would make
+        # the method's own claim untrue.
+        raw = rcekit.DeserSink.java_urldns("rk.oob.example")
+        classes = re.findall(rb"(?:java|javax|org|com|sun)[\w.]+", raw)
+        self.assertEqual(sorted({c.decode() for c in classes}),
+                         ["java.net.URL", "java.util.HashMap"])
+
+    def test_the_hash_code_is_written_uncomputed(self):
+        # A cached hashCode means HashMap.readObject never asks the URL for one,
+        # so the name is never resolved and the probe is inert.
+        raw = rcekit.DeserSink.java_urldns("rk.oob.example")
+        marker = raw.index(b"\x78\x70", raw.index(b"java.net.URL"))
+        self.assertEqual(raw[marker + 2:marker + 6], b"\xff\xff\xff\xff")
+
+    # -- probe construction --------------------------------------------------
+
+    def test_each_ecosystem_gets_all_three_shape_forms(self):
+        probes = self._probes()
+        for name in self.gen.deser_probes:
+            forms = {p.phase for p in probes if p.carrier == name and p.phase.startswith("shape/")}
+            with self.subTest(ecosystem=name):
+                self.assertEqual(forms, {"shape/wellformed", "shape/truncated", "shape/noise"})
+
+    def test_the_noise_form_keeps_the_magic_and_matches_the_length(self):
+        # Same magic, same length, random tail: an endpoint that merely stores
+        # the value cannot tell it from the real thing, while a parser rejects
+        # it where it rejects the truncated form.
+        probes = {p.phase: p.payload for p in self._probes() if p.carrier == "php"}
+        spec = self.gen.deser_probes["php"]
+        self.assertTrue(probes["shape/noise"].startswith(spec["magic"]))
+        self.assertEqual(len(probes["shape/noise"]), len(spec["wellformed"]))
+        self.assertNotEqual(probes["shape/noise"], probes["shape/wellformed"])
+
+    def test_the_dns_probe_is_only_built_when_a_callback_host_is_known(self):
+        self.assertFalse([p for p in self._probes() if p.phase == "dns"])
+        with_host = self._probes({"oob_host": "oob.example"})
+        dns = [p for p in with_host if p.phase == "dns"]
+        self.assertTrue(dns)
+        # A token per ecosystem: sharing one would mark every format confirmed
+        # as soon as any single one called back.
+        self.assertEqual(len({p.expected for p in dns}), len(dns))
+        for probe in dns:
+            self.assertIn(probe.expected, probe.payload if probe.carrier != "java"
+                          else base64.b64decode(probe.payload).decode("latin-1"))
+
+    def test_it_declines_the_break_out_contexts(self):
+        # The payload is a serialized object graph, so there is no surrounding
+        # command or query to break out of.
+        method = rcekit.DeserSink(self.gen, {})
+        for context in ("sql", "javascript", "shell_single_quoted"):
+            with self.subTest(context=context):
+                self.assertFalse(method.applicable(make_record(context=context)))
+        for context in ("raw", "json", "xml"):
+            with self.subTest(context=context):
+                self.assertTrue(method.applicable(make_record(context=context)))
+
+    def test_an_unknown_format_name_is_refused(self):
+        method = rcekit.DeserSink(self.gen, {"deser_formats": ("kotlin",)})
+        with self.assertRaises(ValueError) as caught:
+            method._ecosystems()
+        self.assertIn("kotlin", str(caught.exception))
+
+    # -- the shape differential ----------------------------------------------
+
+    def _shape_target(self, parses):
+        """An endpoint that either parses Java object streams or stores the value."""
+        def route(method, path, params, headers, body):
+            value = params.get("o", "")
+            if not parses:
+                return 200, "saved"
+            try:
+                raw = base64.b64decode(value, validate=True)
+            except Exception:
+                return 400, "bad base64"
+            if not raw.startswith(b"\xac\xed\x00\x05"):
+                return 400, "not a serialization stream"
+            if len(raw) < 8 or raw[4:5] not in (b"t", b"s"):
+                return 500, "StreamCorruptedException"
+            return 200, "object accepted"
+        return route
+
+    def test_a_parsing_endpoint_fingerprints_as_needs_review_only(self):
+        with local_target(self._shape_target(True)) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/api?o=FUZZ", methods=["deser"])
+        java = [r for r in results if "java:" in r["detail"]]
+        self.assertEqual([r["verdict"] for r in java], ["needs-review"])
+        self.assertIn("NOT proof", java[0]["detail"])
+        # A fingerprint is never promoted, however suggestive.
+        self.assertFalse([r for r in results if r["verdict"] == "confirmed"])
+
+    def test_an_endpoint_that_only_stores_the_value_is_negative(self):
+        with local_target(self._shape_target(False)) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/api?o=FUZZ", methods=["deser"])
+        self.assertTrue(results)
+        self.assertEqual({r["verdict"] for r in results}, {"negative"})
+
+    def test_a_volatile_page_does_not_look_like_a_parser(self):
+        # Request ids and timestamps differ between two identical error pages;
+        # comparing raw bodies would make every endpoint fingerprint as one.
+        counter = {"n": 0}
+
+        def route(method, path, params, headers, body):
+            counter["n"] += 1
+            return 200, f"<p>request 8f3a91c4e5b7d206 at 1755{counter['n']:06d}</p>"
+
+        with local_target(route) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/api?o=FUZZ", methods=["deser"])
+        self.assertEqual({r["verdict"] for r in results}, {"negative"})
 
 
 if __name__ == "__main__":

