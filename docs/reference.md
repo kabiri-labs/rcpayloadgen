@@ -45,11 +45,13 @@ starting point — this page is for looking things up once you know what you wan
 
 | Option | Description | Default |
 |---|---|---|
-| `--methods` | Comma-separated: `reflected`, `eval`, `file`, `oob`, `time` | None |
+| `--methods` | Comma-separated: `reflected`, `eval`, `file`, `write`, `oob`, `time` | None |
 | `--file-write-path` | (`file`) server-side directory the target can write to, e.g. `/tmp` | None |
 | `--file-read-url` | (`file`) URL template that reads it back: `{name}`, `{path}`, `{path_enc}` | None |
 | `--webroot` | (`file`) web-root alias for `--file-write-path` | None |
 | `--web-base-url` | (`file`) web-root alias for `--file-read-url '<base>/{name}'` | None |
+| `--write-url-template` | (`write`) URL the file your request stores is served at; required for `write` | None |
+| `--write-lang` | (`write`) File types to write: `auto`, or any of `jsp`, `jspx`, `php`, `aspx`, `erb` | `auto` |
 | `--oob-host` | (`oob`) host the **target** calls back to; required for `oob` | None |
 | `--time-base` | (`time`) base delay `N`; the regression fires `0/N/2N` | `2.0` |
 | `--separators` | Break-out separators for shell probes; `\n` = newline | `; `, `\| `, `\|\| `, `&& `, newline |
@@ -69,6 +71,7 @@ starting point — this page is for looking things up once you know what you wan
 | `reflected` | OS command injection, via computed arithmetic | `confirmed` |
 | `eval` | SSTI / SpEL / OGNL / Groovy / raw `eval()`, via a computed product | `confirmed` |
 | `file` | Execution + a write primitive, via write-and-fetch | `confirmed` |
+| `write` | A write primitive proven to be RCE, by executing the written file | `confirmed`, or `needs-review` for a write that is served but not interpreted |
 | `oob` | Blind execution, via a DNS/HTTP callback carrying a per-probe token | `confirmed` |
 | `time` | Blind execution, via a `0/N/2N` regression | `needs-review` only |
 
@@ -160,6 +163,57 @@ web-root form confirms 0 and the general form confirms 7.
 This method changes target state (one file per confirmed probe), so it stays
 gated on the operator naming both halves, and **every finding prints its own
 cleanup command**.
+
+### Write-then-execute: proving a write primitive is RCE
+
+`--methods write` is the **inverse** of `file`, and it covers a class the others
+are structurally blind to. `file` assumes execution exists and uses a write as
+proof of it. `write` assumes a **write primitive** exists — the vulnerable
+request *stores* a file rather than evaluating anything — and uses execution of
+the written file as proof of RCE. `tomcat/CVE-2017-12615` (PUT a JSP),
+`activemq/CVE-2016-3088` and `weblogic/CVE-2018-2894` are all in this family.
+Nothing in the vulnerable response is computed, so `reflected` and `eval`
+correctly return `negative` on a target that is fully exploitable.
+
+The probe is the file's *content*: a one-liner that computes a product on random
+operands, delivered through the ordinary injection point. RCEKit then fetches the
+file and reads the answer in three tiers:
+
+| The fetched file contains | Verdict | Means |
+|---|---|---|
+| the product | `confirmed` | the file was written **and** executed |
+| the one-liner, verbatim | `needs-review` | arbitrary file write; the directory is served but not interpreted |
+| neither | `negative` | no write, or the file is not served at that URL |
+
+The middle row is the reason the method exists, and it is never merged into
+either neighbour: an upload directory that is served but not interpreted is a
+real finding and is not remote code execution.
+
+```bash
+# Your own request writes the file; --write-url-template says where it lands
+python rcekit.py --acknowledge-consent \
+  -r put-jsp.txt --methods write \
+  --write-url-template "https://target/uploads/rcekit-probe.jsp"
+```
+
+**The filename is yours, not RCEKit's.** Delivery substitutes one injection
+point, and every target in this class needs two locations — the name in the
+request line or a form field, the content in the body — so RCEKit writes the
+content into whatever file your own request already names. That also means one
+artifact per run rather than one per probe, which is the right trade for a
+method that changes target state.
+
+`--write-lang` picks the file types; `auto` reads the extension off the read-back
+URL. `jsp`, `aspx` and `erb` share the `<%= %>` delimiters, so their probes are
+byte-identical and cost one request between them; `php` is `<?= ?>`; `jspx` is
+XML (`<jsp:expression>`) because a `.jspx` container parses the file as a
+document and never sees scriptlet delimiters. With no extension to read, `auto`
+writes all five — three requests.
+
+Like `file`, this method changes target state, so it stays gated on the read-back
+URL being named, prints what it is about to do first, and attaches a cleanup line
+to **both** the `confirmed` and the `needs-review` tiers — a `needs-review` here
+means the file is on the target, just not interpreted.
 
 ### Enumerating injection points
 

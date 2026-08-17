@@ -21,6 +21,7 @@ only ever run it against systems you are authorised to test.
 - [Working around a WAF](#working-around-a-waf)
 - [Blind targets](#blind-targets)
 - [No-egress targets](#no-egress-targets)
+- [Upload and write-primitive targets](#upload-and-write-primitive-targets)
 - [Out-of-band callbacks](#out-of-band-callbacks)
 - [Multi-step chains](#multi-step-chains)
 - [Reading the results](#reading-the-results)
@@ -413,6 +414,47 @@ paste it into the report so the client can verify the target was left clean.
 
 A stale file can't produce a false positive: both the filename and the token are
 freshly random each run.
+
+---
+
+## Upload and write-primitive targets
+
+Some vulnerable requests do not evaluate anything — they **store a file**. A PUT
+that lands a `.jsp` in the web root, an upload endpoint that does not check the
+extension, an export handler that writes where you point it. Nothing in the
+response is computed, so `reflected` and `eval` correctly return `negative` on a
+target you can fully own.
+
+`--methods write` inverts the question. It writes a one-liner that *computes* a
+product, then fetches the file back and reads which of three things happened:
+
+| The fetched file contains | Verdict | What you have |
+|---|---|---|
+| the product | `confirmed` | remote code execution |
+| the one-liner, verbatim | `needs-review` | arbitrary file write — served, not interpreted |
+| neither | `negative` | no write, or the file is not served there |
+
+That middle row is the one to know about. An upload directory that is served but
+not interpreted is a real finding and it is **not** RCE, so RCEKit reports it in
+its own tier rather than rounding it up or down.
+
+```bash
+# put-jsp.txt is your own captured request; FUZZ marks the body
+python rcekit.py --acknowledge-consent \
+  -r put-jsp.txt --methods write \
+  --write-url-template "https://target.example/uploads/rcekit-probe.jsp"
+```
+
+**You choose the filename, RCEKit chooses the content.** Delivery substitutes one
+injection point, and this class of target needs two — the name in the request
+line, the content in the body — so put the name in your request and point
+`--write-url-template` at exactly that file. One artifact per run, and every
+finding (both tiers) prints a cleanup line naming it.
+
+`--write-lang` narrows the file types. `auto` reads the extension off the
+read-back URL, so a `.jsp` costs one request; with no extension to read it
+writes all five languages, which is three requests because `jsp`, `aspx` and
+`erb` share the `<%= %>` delimiters.
 
 ---
 

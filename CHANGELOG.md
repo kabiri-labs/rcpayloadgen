@@ -8,6 +8,63 @@ formats, or the template schema.
 
 ## [Unreleased]
 
+## [2.31.0] — 2026-08-17
+
+The `write` method: a write primitive proven to be RCE by executing what it
+wrote. A whole family of targets was invisible — `tomcat/CVE-2017-12615` (PUT a
+JSP), `activemq/CVE-2016-3088`, `weblogic/CVE-2018-2894` — because the vulnerable
+request *stores a file* rather than evaluating anything. Nothing is computed in
+its response, so `reflected` and `eval` correctly returned `negative` on targets
+that are fully exploitable.
+
+### Added
+
+- **`--methods write`** — the inverse of `file`. `file` assumes execution exists
+  and uses a write as proof of it; `write` assumes a write primitive exists and
+  uses execution of the written file as proof of RCE. The probe is the file's
+  *content*: a one-liner computing a product on random operands, delivered
+  through the ordinary injection point.
+
+  The fetched file is read in three tiers, and the middle one is the reason the
+  method exists:
+
+  | fetched file contains | verdict | means |
+  |---|---|---|
+  | the product | `confirmed` | written **and** executed |
+  | the one-liner, verbatim | `needs-review` | arbitrary file write, not interpreted |
+  | neither | `negative` | no write, or not served there |
+
+  An upload directory that is served but not interpreted is a real finding and
+  is not remote code execution, so the tiers are never merged.
+
+- **`--write-url-template URL`** names where the stored file is served — the
+  channel the proof comes back on, and the flag the method is gated on.
+
+- **`--write-lang`** picks the file types: `auto` (default) reads the extension
+  off the read-back URL, or name any of `jsp`, `jspx`, `php`, `aspx`, `erb`.
+  `jsp`/`aspx`/`erb` share the `<%= %>` delimiters, so their probes are
+  byte-identical and cost one request between them; with no extension to read,
+  `auto` writes all five in three requests.
+
+### Changed
+
+- **A `needs-review` finding now prints its cleanup line too.** It used to
+  appear only under `confirmed`, which was already thin and is wrong for this
+  method: a `write` reaching `needs-review` means the file *is* on the target,
+  just not interpreted, so the artifact would have been left there unmentioned.
+
+- The write method's operands are drawn once per run rather than once per
+  carrier, so the file is written once instead of once for each of the ~13
+  `(environment, context)` carriers. For a state-changing method that is not a
+  request-count saving, it is a blast radius. Still fresh per run, which is what
+  makes the product unforgeable.
+
+- The write method declines the break-out contexts (`sql`, `javascript`,
+  `shell_*`, …) and keeps the transport ones. Its payload is a whole file body:
+  there is nothing to break out of, and wrapping it in `'; … -- ` would write a
+  broken file. A run narrowed past `raw` and the transport contexts is told so
+  rather than reporting a clean negative.
+
 ## [2.30.0] — 2026-08-17
 
 Per-dialect shell probes. `$((a+b))`, `sleep` and `$(echo TAG)` are POSIX
@@ -670,7 +727,8 @@ this file and have not been restated here.
 - **[2.7.0]**
 - **[2.1.0]**
 
-[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.30.0...HEAD
+[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.31.0...HEAD
+[2.31.0]: https://github.com/kabiri-labs/rcekit/compare/v2.30.0...v2.31.0
 [2.30.0]: https://github.com/kabiri-labs/rcekit/compare/v2.29.0...v2.30.0
 [2.29.0]: https://github.com/kabiri-labs/rcekit/compare/v2.28.0...v2.29.0
 [2.28.0]: https://github.com/kabiri-labs/rcekit/compare/v2.27.0...v2.28.0

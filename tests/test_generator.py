@@ -5373,5 +5373,211 @@ class SinkEnvDialectTestCase(unittest.TestCase):
         self.assertEqual(rcekit.overall_detection_verdict(results), "nothing-tested")
 
 
+class WriteThenExecuteTestCase(unittest.TestCase):
+    """The `write` method: a write primitive proven to be RCE by executing it.
+
+    The inverse of `file`. Nothing in the vulnerable response is computed — the
+    request stores a file — so `reflected` and `eval` correctly report
+    `negative` on a target that is fully exploitable. The three tiers this
+    method separates are the whole point, and merging any two of them would be
+    a lie in one direction or the other."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+        self.rec = make_record(environment="unix", context="raw")
+        self.read_url = "/uploads/rcekit-probe.jsp"
+
+    def _method(self, **config):
+        config.setdefault("write_read_url", "https://target.example/uploads/probe.jsp")
+        return rcekit.WriteThenExecute(self.gen, config)
+
+    def _probes(self, method=None, record=None, seed=4):
+        import random as _random
+        return (method or self._method()).build_probes(
+            record or self.rec, _random.Random(seed))
+
+    def _store_target(self, mode):
+        """A target with a write primitive, in one of three postures.
+
+        `exec` interprets the stored file, `verbatim` serves it as text, and
+        `nowrite` stores nothing at all — the three outcomes the method has to
+        tell apart."""
+        store = {}
+
+        def route(method, path, params, headers, body):
+            if path == self.read_url:
+                content = store.get("file")
+                if content is None:
+                    return 404, "Not Found"
+                if mode == "exec":
+                    return 200, re.sub(r"<%=\s*(\d+)\*(\d+)\s*%>",
+                                       lambda m: str(int(m.group(1)) * int(m.group(2))),
+                                       content)
+                return 200, content
+            if mode != "nowrite":
+                store["file"] = params.get("content", "")
+            return 200, "stored"
+
+        return route
+
+    # -- probe shape ---------------------------------------------------------
+
+    def test_the_probe_is_a_file_body_not_a_shell_command(self):
+        for probe in self._probes():
+            self.assertNotIn(";", probe.payload.split("<")[0])
+            self.assertFalse(probe.payload.startswith(("; ", "| ", "&& ")))
+
+    def test_the_product_is_computed_locally_from_random_operands(self):
+        for probe in self._probes():
+            operands = re.search(r"(\d{5})\*(\d{5})", probe.payload)
+            self.assertIsNotNone(operands, probe.payload)
+            product = int(operands.group(1)) * int(operands.group(2))
+            self.assertIn(str(product), probe.expected)
+            # Reflection returns the one-liner, never the product.
+            self.assertNotIn(str(product), probe.payload)
+
+    def test_operands_are_drawn_once_per_run_not_once_per_carrier(self):
+        """One write, not one per carrier.
+
+        Carriers reduce to (environment, context) pairs and there are a dozen
+        of them with the raw context alone. Fresh operands per carrier would be
+        random in the same sense and would also write the file a dozen times —
+        for a state-changing method that is not a cost, it is a blast radius."""
+        method = self._method()
+        first = [p.payload for p in self._probes(method)]
+        second = [p.payload for p in self._probes(
+            method, make_record(environment="php", context="raw"))]
+        self.assertEqual(first, second)
+        # A fresh run does draw new operands: the instance is what pins them,
+        # not the method.
+        self.assertNotEqual(
+            first, [p.payload for p in self._probes(self._method(), seed=9)])
+
+    def test_languages_sharing_a_template_share_a_probe(self):
+        method = self._method(write_read_url="https://target.example/download?id=7")
+        carriers = [p.carrier for p in self._probes(method)]
+        # Which interpreter ran identical bytes is not something the response
+        # can distinguish, so the finding names all of them rather than guessing.
+        self.assertIn("jsp/aspx/erb", carriers)
+        self.assertEqual(len(carriers), 3, carriers)
+
+    def test_auto_infers_the_language_from_the_read_back_url(self):
+        cases = [("https://t/x/probe.jsp", ["jsp"]), ("https://t/a.phtml", ["php"]),
+                 ("https://t/a.jspx", ["jspx"]), ("https://t/a.aspx", ["aspx"])]
+        for url, expected in cases:
+            with self.subTest(url=url):
+                self.assertEqual(self._method(write_read_url=url)._selected_languages(),
+                                 expected)
+
+    def test_an_extension_it_cannot_read_writes_every_language(self):
+        # Guessing would be worse than paying for three requests.
+        method = self._method(write_read_url="https://t/download?file=probe.jsp")
+        self.assertEqual(len(method._selected_languages()), len(method.LANGUAGES))
+
+    def test_parse_write_langs_refuses_a_typo(self):
+        self.assertIsNone(rcekit.parse_write_langs(None))
+        self.assertIsNone(rcekit.parse_write_langs("auto"))
+        self.assertEqual(rcekit.parse_write_langs("jsp, php"), ("jsp", "php"))
+        with self.assertRaises(ValueError) as caught:
+            rcekit.parse_write_langs("jsp,jsp2")
+        self.assertIn("jsp2", str(caught.exception))
+
+    # -- applicability -------------------------------------------------------
+
+    def test_it_needs_the_read_back_url(self):
+        self.assertFalse(rcekit.WriteThenExecute(self.gen, {}).applicable(self.rec))
+        self.assertEqual(
+            self._probes(rcekit.WriteThenExecute(self.gen, {})), [])
+
+    def test_it_declines_the_break_out_contexts_and_keeps_the_transport_ones(self):
+        # The payload is the whole file, so there is no surrounding command or
+        # query to break out of; wrapping it in "'; ... -- " writes a broken
+        # file. A transport context is the opposite case — the payload has to
+        # survive that serialization to land intact.
+        method = self._method()
+        for context in ("sql", "javascript", "php", "shell_single_quoted", "attribute"):
+            with self.subTest(context=context):
+                self.assertFalse(method.applicable(make_record(context=context)))
+        for context in ("raw", "json", "xml", "yaml"):
+            with self.subTest(context=context):
+                self.assertTrue(method.applicable(make_record(context=context)))
+
+    def test_a_json_body_still_lands_intact(self):
+        method = self._method(write_read_url="https://t/a.jspx")
+        probe = self._probes(method, make_record(context="json"))[0]
+        self.assertIn(chr(92) + '"', probe.payload)
+        # The fetched file carries the decoded content, so that is what the
+        # verbatim check must look for.
+        self.assertNotIn(chr(92) + '"', probe.forbidden)
+
+    # -- the three tiers -----------------------------------------------------
+
+    def test_an_interpreted_upload_directory_is_confirmed(self):
+        with local_target(self._store_target("exec")) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/upload?content=FUZZ", methods=["write"],
+                config={"write_read_url": base + self.read_url})
+        self.assertEqual(rcekit.overall_detection_verdict(results), "confirmed")
+        confirmed = [r for r in results if r["verdict"] == "confirmed"]
+        self.assertTrue(confirmed)
+        self.assertIn("EXECUTED", confirmed[0]["detail"])
+        self.assertIn("remove the file", confirmed[0]["cleanup"])
+
+    def test_a_served_but_uninterpreted_directory_is_needs_review(self):
+        """The distinction the method exists for.
+
+        An upload directory that is served but not interpreted is a real
+        finding and is not remote code execution. Calling it `confirmed` would
+        break the guarantee the whole tool rests on; calling it `negative`
+        would throw away an arbitrary file write."""
+        with local_target(self._store_target("verbatim")) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/upload?content=FUZZ", methods=["write"],
+                config={"write_read_url": base + self.read_url})
+        self.assertEqual(rcekit.overall_detection_verdict(results), "needs-review")
+        self.assertFalse([r for r in results if r["verdict"] == "confirmed"])
+        review = [r for r in results if r["verdict"] == "needs-review"]
+        self.assertTrue(review)
+        self.assertIn("ARBITRARY FILE WRITE", review[0]["detail"])
+        # The artifact is on the target either way, so the cleanup line rides
+        # with this tier too.
+        self.assertIn("remove the file", review[0]["cleanup"])
+
+    def test_a_target_that_stores_nothing_is_negative(self):
+        with local_target(self._store_target("nowrite")) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/upload?content=FUZZ", methods=["write"],
+                config={"write_read_url": base + self.read_url})
+        self.assertEqual(rcekit.overall_detection_verdict(results), "negative")
+        self.assertTrue(results)
+
+    def test_a_read_back_url_that_never_answers_is_an_error_not_a_negative(self):
+        # A delivery failure on the confirmation channel says nothing about the
+        # target, and reporting it as `negative` would be the same defect this
+        # project keeps finding under a new name.
+        with local_target(self._store_target("exec")) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/upload?content=FUZZ", methods=["write"],
+                config={"write_read_url": "http://127.0.0.1:1/nothing-here.jsp"})
+        self.assertEqual(rcekit.overall_detection_verdict(results), "error")
+        self.assertTrue(all(r["verdict"] == "error" for r in results), results)
+
+    def test_a_control_that_already_carries_the_value_is_inconclusive(self):
+        # The differential still governs: a computed value present without the
+        # payload is not attributable to execution.
+        method = self._method()
+        probe = self._probes(method)[0]
+        obs = Observation(status=200, body="", control_body=probe.expected,
+                          followup_body=probe.expected)
+        self.assertEqual(method.confirm(obs, probe).status, "inconclusive")
+
+    def test_the_write_method_does_not_ride_the_sink_shape_ladder(self):
+        # Its probes are file content, not shell, so no separator or quote
+        # break-out applies — the same reason `eval` is absent.
+        self.assertNotIn("write", rcekit.SHELL_PROBE_METHODS)
+        self.assertNotIn("write", rcekit.CHEAP_DETECTION_METHODS)
+        self.assertIn("write", rcekit.STATE_CHANGING_METHODS)
+
+
 if __name__ == "__main__":
     unittest.main()
