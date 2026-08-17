@@ -1,6 +1,6 @@
 # RCEKit — prove RCE, don't guess it
 
-**Version 2.30.0** · MIT · Python 3.8+ · zero third-party dependencies
+**Version 2.31.0** · MIT · Python 3.8+ · zero third-party dependencies
 
 RCEKit is an **RCE detection &amp; confirmation toolkit** for authorised penetration
 testing, red teaming, and security research. Point it at a target you are allowed
@@ -235,6 +235,7 @@ One CLI, one `--methods` flag, covering the main paths to RCE:
 | **Code / expression injection** — SSTI, SpEL, OGNL, Groovy, `eval()` (CWE-94) | `eval` | Injects `a*b` in every common template syntax (`${…}` `{{…}}` `#{…}` `%{…}` `<%=…%>` `@(…)`, bare); confirms the **product** appears while the literal `a*b` does not. |
 | **Blind command injection** (no output) | `time` | Fires a controlled `0/N/2N` delay series and confirms the response time tracks the delay **linearly**; reported `needs-review` (jitter can't fake it, but timing isn't a computed value). |
 | **Internal / no-egress** targets | `file` | Writes a random token to a web-reachable file and fetches it back — proving execution **plus** a write primitive, with no external listener. |
+| **Upload / write primitive** — PUT-a-JSP, unchecked upload (CWE-434) | `write` | Writes a one-liner that *computes* a product through your own upload request, then fetches the file: the product is `confirmed` RCE, the source coming back verbatim is `needs-review` (arbitrary file write, not execution). |
 | **Blind / out-of-band** — Log4Shell/JNDI, exfil, async | *(OOB listener)* | Built-in HTTP/DNS listener receives callbacks and correlates each to the exact payload. |
 
 Mix them freely: `--methods reflected,eval,time` runs all three and reports each
@@ -268,6 +269,7 @@ what it sends, and how to read what comes back.
 | There's a WAF | [Working around a WAF](docs/guide.md#working-around-a-waf) |
 | No output comes back at all | [Blind targets](docs/guide.md#blind-targets) |
 | No output *and* no egress | [No-egress targets](docs/guide.md#no-egress-targets) |
+| The request stores a file instead of running anything | [Upload and write-primitive targets](docs/guide.md#upload-and-write-primitive-targets) |
 | The sink is behind a login or a file upload | [Multi-step chains](docs/guide.md#multi-step-chains) |
 | I got `needs-review` / `inconclusive` / `error` | [Reading the results](docs/guide.md#reading-the-results) |
 | It says the corpus is unusable | [Troubleshooting](docs/guide.md#troubleshooting) |

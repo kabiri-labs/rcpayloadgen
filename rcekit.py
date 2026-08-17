@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.30.0"
+__version__ = "2.31.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -140,9 +140,17 @@ SINK_SHAPE_CONTEXTS = SINK_SHAPE_CONTEXTS_BY_ENV["unix"]
 CHEAP_DETECTION_METHODS = {"reflected", "eval"}
 
 # Methods whose probes are shell commands, and so ride the sink-shape ladder.
-# `eval` is deliberately absent: its probes are template/expression syntax, not
-# shell, so no separator or quote break-out applies to them.
+# `eval` and `write` are deliberately absent: their probes are template /
+# expression syntax and file content, not shell, so no separator or quote
+# break-out applies to them.
 SHELL_PROBE_METHODS = {"reflected", "file", "time", "oob"}
+
+# Methods that leave something behind on the target. Both need the operator to
+# name a write path and a read-back URL, both print what they are about to do
+# before doing it, and every finding they report carries a cleanup line -- so
+# the list exists to keep those three obligations from drifting apart as
+# methods are added.
+STATE_CHANGING_METHODS = {"file", "write"}
 
 
 def parse_sink_env(value: Optional[str]) -> Optional[str]:
@@ -161,6 +169,23 @@ def parse_sink_env(value: Optional[str]) -> Optional[str]:
         raise ValueError(f"unknown sink environment: {value}; "
                          f"choose from auto, {', '.join(SINK_ENVIRONMENTS)}")
     return value
+
+
+def parse_write_langs(value: Optional[str]) -> Optional[Tuple[str, ...]]:
+    """``--write-lang`` -> the file types to write, or ``None`` for ``auto``.
+
+    Raises ``ValueError`` naming the offending value. A typo here would narrow
+    the run to nothing and report a clean negative from a run that wrote no
+    file at all."""
+    if not value or value.strip().lower() == "auto":
+        return None
+    names = tuple(part.strip().lower() for part in value.split(",") if part.strip())
+    known = set(WriteThenExecute.LANGUAGES)
+    unknown = [name for name in names if name not in known]
+    if unknown:
+        raise ValueError(f"unknown write language(s): {', '.join(unknown)}; "
+                         f"choose from auto, {', '.join(sorted(known))}")
+    return names or None
 
 
 def sink_env_for(record: "PayloadRecord", config: Dict[str, Any]) -> str:
@@ -3473,6 +3498,190 @@ class FileBased(DetectionMethod):
                        f"target wrote and served token {probe.expected!r} (execution + write primitive)")
 
 
+class WriteThenExecute(DetectionMethod):
+    """The inverse of :class:`FileBased`, for the class where nothing computes.
+
+    ``file`` assumes execution exists and uses a write as proof of it. This
+    method assumes a **write primitive** exists — the vulnerable request stores
+    a file rather than evaluating anything — and uses *execution of the written
+    file* as proof of RCE. A whole family of targets is invisible without it:
+    ``tomcat/CVE-2017-12615`` (PUT a JSP), ``activemq/CVE-2016-3088``,
+    ``weblogic/CVE-2018-2894``. Nothing in the vulnerable response is computed,
+    so ``reflected`` and ``eval`` correctly report ``negative`` and the target is
+    exploitable anyway.
+
+    The probe is the file's *content*: a language one-liner that computes a
+    product on random operands, delivered through the ordinary injection point.
+    RCEKit then fetches the file back and reads the answer in three tiers, which
+    is the whole value of the method:
+
+    ==============================  ===============  ==================================
+    fetched file contains           verdict          means
+    ==============================  ===============  ==================================
+    the product                     ``confirmed``    the file was written AND executed
+    the one-liner, verbatim         ``needs-review`` arbitrary file write, no execution
+    neither                         ``negative``     no write, or it is not served here
+    ==============================  ===============  ==================================
+
+    Collapsing the middle row into either neighbour would be a lie in one
+    direction or the other: an upload directory that is served but not
+    interpreted is a real finding and not remote code execution.
+
+    The filename is the operator's, not RCEKit's. Delivery substitutes one
+    injection point, and every target in this class needs two locations (the
+    name in the request line or a form field, the content in the body) — so
+    RCEKit writes the content the operator's own request already names, and
+    ``--write-url-template`` says where that lands. One artifact per run rather
+    than one per probe is also the right trade for a state-changing method."""
+    name = "write"
+    tier = "confirmed"
+
+    # One entry per file type whose interpreter is reachable by writing a file.
+    # `exts` drives `--write-lang auto`; `template` takes {t1}/{t2} (boundary
+    # tags) and {expr} (the arithmetic).
+    #
+    # JSP, ASPX and ERB share the `<%= %>` delimiters, so their probes are
+    # byte-identical and the engine's per-payload de-duplication fires them as
+    # one request. They stay separate names because `auto` narrows by extension,
+    # and because a contributor adding a fourth `<%= %>` dialect should not have
+    # to discover that by reading the payloads.
+    LANGUAGES = {
+        "jsp": {"exts": ("jsp",), "template": "{t1}<%= {expr} %>{t2}"},
+        "aspx": {"exts": ("aspx", "asp", "ashx"), "template": "{t1}<%= {expr} %>{t2}"},
+        "erb": {"exts": ("erb", "rhtml"), "template": "{t1}<%= {expr} %>{t2}"},
+        "php": {"exts": ("php", "php3", "php4", "php5", "php7", "phtml", "phar"),
+                "template": "{t1}<?= {expr} ?>{t2}"},
+        # .jspx is XML, so the scriptlet delimiters are not available at all --
+        # the container parses the file as a document and `<%=` is character
+        # data. It is the one shape here that is not a delimiter swap.
+        "jspx": {"exts": ("jspx",),
+                 "template": ('<jsp:root xmlns:jsp="http://java.sun.com/JSP/Page" '
+                              'version="2.0"><jsp:expression>'
+                              '"{t1}"+({expr})+"{t2}"</jsp:expression></jsp:root>')},
+    }
+
+    # Contexts whose wrapping makes sense for a file *body*. A break-out context
+    # exists to escape a surrounding command or query; there is no surrounding
+    # anything here -- the payload is the whole file -- so wrapping it in
+    # `'; ... -- ` would write a broken file and prove nothing. The transport
+    # contexts are the opposite case and are kept: a payload delivered in a JSON
+    # or XML body has to survive that serialization to land intact.
+    PLAIN_CONTEXT = "raw"
+
+    def __init__(self, gen: "RCEKit", config: Optional[Dict[str, Any]] = None):
+        super().__init__(gen, config)
+        # Operands are drawn once per method instance rather than per carrier.
+        # Every carrier then yields byte-identical content and the engine's
+        # de-duplication collapses them to one write. Per-carrier operands would
+        # be `random` in the same sense and would also write the file ~13 times
+        # -- for a state-changing method that is not a cost, it is a blast
+        # radius. Still fresh per run, which is what makes the product
+        # unforgeable.
+        self._operands: Optional[Tuple[int, int, str, str]] = None
+
+    def _channel(self) -> Optional[str]:
+        """The URL the written file is served at, or ``None`` when unset."""
+        template = self.config.get("write_read_url")
+        return str(template) if template else None
+
+    def applicable(self, record: "PayloadRecord") -> bool:
+        if self._channel() is None:
+            return False
+        return (record.context == self.PLAIN_CONTEXT
+                or record.context in self.gen.transport_contexts)
+
+    def _selected_languages(self) -> List[str]:
+        """Which file types to write, honouring ``--write-lang``.
+
+        ``auto`` reads the extension off the read-back URL: the operator already
+        said where the file is served, and that URL carries the one fact that
+        decides which interpreter is on the other side. When it carries no
+        extension RCEKit cannot know, so it writes all of them rather than
+        guessing -- which costs three requests, not five, because three of the
+        five templates are the same bytes."""
+        wanted = self.config.get("write_langs")
+        if wanted:
+            return [name for name in self.LANGUAGES if name in wanted]
+        url = self._channel() or ""
+        # Only the path, so a `?file=x.jsp` query does not fool it into matching
+        # a fragment or another parameter's value.
+        path = urllib.parse.urlsplit(url).path
+        _, _, extension = path.rpartition(".")
+        extension = extension.strip("/").lower()
+        if extension:
+            inferred = [name for name, spec in self.LANGUAGES.items()
+                        if extension in spec["exts"]]
+            if inferred:
+                return inferred
+        return list(self.LANGUAGES)
+
+    def build_probes(self, record: "PayloadRecord", rng: "random.Random") -> List[Probe]:
+        read_url = self._channel()
+        if read_url is None:
+            return []
+        if self._operands is None:
+            self._operands = (rng.randint(10000, 99999), rng.randint(10000, 99999),
+                              self._tag(rng), self._tag(rng))
+        a, b, t1, t2 = self._operands
+        expr = f"{a}*{b}"
+        product = a * b
+        followup = {
+            "url": read_url,
+            # Not a shell command: RCEKit knows the URL the operator named, not
+            # the server-side path, and printing a plausible-looking `rm -f`
+            # built from a guess would be worse than saying what is true.
+            "cleanup": f"remove the file the target serves at {read_url}",
+        }
+        # Languages that share a template share a probe. Naming them together
+        # keeps the finding honest: those bytes are one request, and which
+        # interpreter ran them is not something the response can distinguish --
+        # reporting `jsp` for a confirmation an ASP.NET host produced would be a
+        # guess dressed as evidence.
+        by_body: "Dict[str, List[str]]" = {}
+        for name in self._selected_languages():
+            body = self.LANGUAGES[name]["template"].format(t1=t1, t2=t2, expr=expr)
+            by_body.setdefault(body, []).append(name)
+        probes: List[Probe] = []
+        for body, names in by_body.items():
+            probes.append(Probe(payload=self._wrap_context(record, body),
+                                expected=f"{t1}{product}{t2}",
+                                # The source form. Its presence in the fetched
+                                # file is what separates "written but served as
+                                # text" from "not written at all".
+                                forbidden=body,
+                                carrier="/".join(names), followup=followup))
+        return probes
+
+    def confirm(self, obs: "Observation", probe: "Probe") -> Verdict:
+        if obs.status is None:
+            return Verdict("error", f"write request never reached the target ({obs.body[:120]})")
+        if obs.followup_body is None:
+            return Verdict("error", "could not fetch the written file back "
+                                    "(the read-back URL never answered)")
+        if self._search(probe.expected, obs.followup_body):
+            # Same differential as every other computed-value method: a product
+            # on random operands that is already present without the payload is
+            # not attributable to execution, wherever it turned up.
+            if self._search_channels(probe.expected,
+                                     self._channels_of(obs.control_body, obs.control_channels)):
+                return Verdict("inconclusive",
+                               "the computed value is also present without the payload")
+            return Verdict("confirmed",
+                           f"target wrote and then EXECUTED a {probe.carrier} file: it computed "
+                           f"{probe.expected!r} from random operands the file itself carried")
+        if probe.forbidden and self._search(probe.forbidden, obs.followup_body):
+            # Deliberately not merged into either neighbour. The write landed
+            # and is served, which is a real finding; the interpreter did not
+            # run it, which means this is not remote code execution.
+            return Verdict("needs-review",
+                           "ARBITRARY FILE WRITE confirmed -- the written file is served back "
+                           f"verbatim ({probe.carrier} source, not executed), so the upload "
+                           "directory is reachable but not interpreted")
+        return Verdict("negative",
+                       "neither the computed value nor the written source came back from the "
+                       "read-back URL (no write, or the file is not served there)")
+
+
 class ParametricTime(DetectionMethod):
     """Hardened blind timing. Instead of a single margin over one slow response,
     fire a controlled series of delays (``d ∈ {0, N, 2N}``, each repeated) and
@@ -3982,6 +4191,7 @@ class OobCallback(DetectionMethod):
 DETECTION_METHODS = {
     ReflectedMath.name: ReflectedMath,
     FileBased.name: FileBased,
+    WriteThenExecute.name: WriteThenExecute,
     ParametricTime.name: ParametricTime,
     EvalExpr.name: EvalExpr,
     OobCallback.name: OobCallback,
@@ -4886,6 +5096,20 @@ def main():
                              "command; sq/dq break out of a surrounding quote; subshell reaches a "
                              "quoted value through $(...) and backticks without closing the quote. "
                              "Narrow it to cut request count once the sink's shape is known.")
+    parser.add_argument("--write-url-template", default=None, metavar="URL",
+                        help="(--methods write) URL the file written through the injection point "
+                             "is served at, e.g. https://target/uploads/rcekit-probe.jsp. Required "
+                             "for the write method: it is the channel the proof comes back on. "
+                             "The filename is yours — it is whatever your own request writes — so "
+                             "point this at exactly that file.")
+    parser.add_argument("--write-lang", default=None, metavar="LANGS",
+                        help="(--methods write) File types to write, comma-separated: auto "
+                             "(default, inferred from the --write-url-template extension) or any "
+                             f"of {', '.join(sorted(WriteThenExecute.LANGUAGES))}. jsp/aspx/erb "
+                             # argparse %-expands help text, so the delimiters
+                             # are doubled here and appear singly in --help.
+                             "share the <%%= %%> delimiters, so naming all three still costs one "
+                             "request.")
     parser.add_argument("--sink-env", default=None, metavar="ENV",
                         help="(--methods) Which shell runs the injected command: "
                              f"auto (default) or one of {', '.join(SINK_ENVIRONMENTS)}. "
@@ -4960,6 +5184,7 @@ def main():
     try:
         sink_shapes = parse_sink_shapes(from_profile(args.sink_shape, "sink_shape"))
         sink_env = parse_sink_env(from_profile(args.sink_env, "sink_env"))
+        write_langs = parse_write_langs(from_profile(args.write_lang, "write_lang"))
     except ValueError as exc:
         print(f"[!] {exc}")
         return 1
@@ -5267,6 +5492,8 @@ def main():
                                 "time_base": args.time_base, "evade": args.evade,
                                 "sink_raw": sink_raw, "separators": separators,
                                 "sink_shapes": sink_shapes, "sink_env": sink_env,
+                                "write_read_url": args.write_url_template,
+                                "write_langs": write_langs,
                                 "eval_engines": eval_engines,
                                 "probe_depth": args.probe_depth,
                                 "contexts_explicit": bool(selected_contexts),
@@ -5329,6 +5556,30 @@ def main():
                           f"{', '.join(sorted(set(sensitive)))} will NOT be sent with it — "
                           "replaying a credential to another host would leak it. If that read-back "
                           "endpoint needs authentication, point it at the target's own origin.")
+            if WriteThenExecute.name in method_names:
+                writer = WriteThenExecute(generator, detection_config)
+                if writer._channel() is None:
+                    print("[!] --methods write stores a file on the target through your own "
+                          "request and then fetches it back, so it needs --write-url-template "
+                          "URL: the address that file is served at. RCEKit does not choose the "
+                          "filename -- your request does -- so point it at exactly that file.")
+                    return 1
+                languages = writer._selected_languages()
+                print(f"[detect] write method STORES a file on the target (written by your own "
+                      f"request) and reads it back from {writer._channel()}; "
+                      f"language(s): {', '.join(languages)}. Every finding lists a cleanup line.")
+                print("[detect]   a computed value in the fetched file is CONFIRMED execution; "
+                      "the source coming back verbatim is NEEDS-REVIEW (arbitrary file write, "
+                      "not proven RCE) -- the two are never merged.")
+                if injection_runs:
+                    # Enumeration multiplies a read-only probe by the candidate
+                    # count; multiplying a *write* by it is a different kind of
+                    # cost, and one the operator should have said yes to rather
+                    # than discovered in the target's upload directory.
+                    print(f"[!] --methods write is combined with injection-point enumeration, so "
+                          f"the write is attempted at each of {len(injection_runs)} candidate "
+                          "point(s). Narrow with -p/--max-points if that is more target state "
+                          "than you intend to change.")
             if set(method_names) & SHELL_PROBE_METHODS:
                 # The ladder multiplies request count, so say which shapes are
                 # about to be tried before trying them. An operator on a
@@ -5445,6 +5696,16 @@ def main():
                             and FileBased(generator, detection_config)._channel() is None):
                         print("[!] --methods file also needs --file-write-path and --file-read-url "
                               "(or --webroot and --web-base-url).")
+                    if WriteThenExecute.name in method_names:
+                        # Its probes are a file body, so the break-out contexts
+                        # are the ones it deliberately declines: wrapping a whole
+                        # file in `'; ... -- ` writes a broken file. Narrowing
+                        # --contexts past raw/transport leaves it nothing to
+                        # carry, and that must not read as a clean negative.
+                        print("[!] --methods write carries a file body, so it applies only to the "
+                              "raw context and the transport contexts "
+                              f"({', '.join(sorted(generator.transport_contexts))}); a --contexts "
+                              "narrowed past those leaves it nothing to write.")
                 return 1
             confirmed = [r for r in results if r["verdict"] == "confirmed"]
             if confirmed:
@@ -5463,6 +5724,12 @@ def main():
                     at = f" at {result['point']}" if result.get("point") else ""
                     print(f"  [{result['method']}/{result['environment']}/{result['context']}]{at} "
                           f"{result['payload']}   ({result['detail']})")
+                    # A needs-review from a state-changing method still left the
+                    # artifact behind: `write` reaching this tier means the file
+                    # IS on the target, just not interpreted. Printing cleanup
+                    # only under CONFIRMED would leave it there unmentioned.
+                    if result.get("cleanup"):
+                        print(f"      cleanup: {result['cleanup']}")
             if not confirmed:
                 errored = [r for r in results if r["verdict"] == "error"]
                 if errored:
