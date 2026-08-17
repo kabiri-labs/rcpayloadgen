@@ -84,6 +84,31 @@ SINK_SHAPE_CONTEXTS = {
 SHELL_PROBE_METHODS = {"reflected", "file", "time", "oob"}
 
 
+def effective_sink_shapes(config: Dict[str, Any]) -> Tuple[str, ...]:
+    """The rungs a run will *actually* try, after every narrowing in play.
+
+    ``--sink-shape`` is the operator's stated choice, but three other flags
+    narrow it, and the pre-flight plan is presented as an audit of the traffic
+    about to be sent -- so it has to be computed from the effective state rather
+    than from the raw flag, or it describes a run that will not happen.
+
+    Single source of truth: the engine asks this too (see
+    ``DetectionMethod._raw_rung_selected``), so what is printed and what is sent
+    cannot drift."""
+    if config.get("sink_raw"):
+        return ("raw",)
+    shapes = config.get("sink_shapes")
+    selected = set(shapes if shapes is not None else SINK_SHAPE_RUNGS)
+    if shapes is None and config.get("separators"):
+        # Naming the separators is a statement that the sink is separator-led.
+        selected.discard("raw")
+    if config.get("contexts_explicit"):
+        # An explicit --contexts suppresses the added quote/substitution
+        # carriers, so those rungs never get a carrier to ride on.
+        selected -= set(SINK_SHAPE_CONTEXTS)
+    return tuple(rung for rung in SINK_SHAPE_RUNGS if rung in selected)
+
+
 def sink_shape_plan(shapes: Optional[Tuple[str, ...]]) -> List[str]:
     """One line per rung the run will try, for the pre-flight execution plan.
 
@@ -2024,6 +2049,16 @@ class RCEKit:
                             if delay:
                                 time.sleep(delay)
                         batch = meth.next_probes(series)
+                    if not series:
+                        # The method built no probes for this carrier, so there
+                        # is nothing to judge. Falling through would ask an
+                        # aggregate method to decide from zero samples, and its
+                        # honest answer to that ("no delay was observed", "no
+                        # callback arrived") reads as `negative` -- a run that
+                        # tested nothing reported as "not vulnerable". Emitting
+                        # no row is what makes the engine's own nothing-tested
+                        # path fire instead.
+                        continue
                     per_probe = meth.confirm_each(series)
                     if per_probe is not None:
                         for probe, verdict in per_probe:
@@ -2749,16 +2784,26 @@ class DetectionMethod:
         sink is found without the operator having guessed its shape first."""
         if self.config.get("sink_raw"):
             return False  # already the only body; see _needs_separator
-        shapes = self.config.get("sink_shapes")
-        if shapes is not None:
-            return "raw" in shapes
-        if self.config.get("separators"):
-            # Naming the separators is a statement that the sink is
-            # separator-led: the operator has said which break-outs it accepts,
-            # so a bare command is not one of the shapes they asked for.
-            # --sink-shape raw,... overrides this, being the more specific say.
-            return False
-        return True
+        return "raw" in effective_sink_shapes(self.config)
+
+    def _separator_candidates(self, record: "PayloadRecord",
+                              windows: bool) -> Tuple[Optional[str], ...]:
+        """The separators to build one probe each for; ``None`` means "none".
+
+        Every method that builds a probe per separator goes through here, which
+        is the point. The raw rung used to live only in ``_wrap_variants``, so
+        it reached ``reflected`` and nothing else: ``file``, ``time`` and ``oob``
+        read the separator list directly and so never sent a bare command to a
+        whole-command sink. Worse, narrowing those methods to ``--sink-shape
+        raw`` left them with an empty separator list and *zero probes*, and an
+        aggregate method with no samples reported ``negative`` -- a run that
+        tested nothing reading as "not vulnerable"."""
+        if not self._needs_separator(record):
+            return (None,)
+        candidates: List[Optional[str]] = list(self._separators(windows))
+        if self._raw_rung_selected():
+            candidates.append(None)
+        return tuple(candidates)
 
     def _wrap_variants(self, record: "PayloadRecord", core: str, windows: bool = False,
                        evade: bool = True, terminate: bool = False) -> List[str]:
@@ -2788,18 +2833,14 @@ class DetectionMethod:
             if windows or ctx.get("suffix"):
                 return []
             core = f"{core} #"
-        if self._needs_separator(record):
-            bodies = [f"{separator}{core}" for separator in self._separators(windows)]
-            if self._raw_rung_selected():
-                # The `raw` rung: the sink runs the injected value as the whole
-                # command, so the bare core is the probe. It used to need
-                # --sink-raw, which meant a qx/$input/-style sink reported clean
-                # unless the operator already suspected its shape -- a false
-                # negative that took prior knowledge to avoid. One extra probe
-                # per carrier buys it.
-                bodies.append(core)
-        else:
-            bodies = [core]
+        # One body per candidate, where a `None` candidate is the `raw` rung:
+        # the sink runs the injected value as the whole command, so the bare
+        # core is the probe. It used to need --sink-raw, which meant a
+        # qx/$input/-style sink reported clean unless the operator already
+        # suspected its shape -- a false negative that took prior knowledge to
+        # avoid.
+        bodies = [core if separator is None else f"{separator}{core}"
+                  for separator in self._separator_candidates(record, windows)]
         payloads: List[str] = []
         for body in bodies:
             if evade and not windows and self.config.get("evade") == "low":
@@ -2827,18 +2868,17 @@ class DetectionMethod:
         are trimmed here — no shell needs the space after ``;`` or ``&&``. The
         newline separator is kept as-is: it is not a space, and a sink that
         strips spaces still passes it through."""
-        if not self._needs_separator(record):
-            return [(None, core)]
         pairs: List[Tuple[Optional[str], str]] = []
-        for separator in self._separators(windows=False):
+        for separator in self._separator_candidates(record, windows=False):
+            if separator is None:
+                # The raw rung. A space-filtering sink can also be a
+                # whole-command sink; the two filters are unrelated.
+                pairs.append((None, core))
+                continue
             trimmed = separator if separator == "\n" else separator.strip()
             if " " in trimmed:
                 continue
             pairs.append((separator, f"{trimmed}{core}"))
-        if self._raw_rung_selected():
-            # A space-filtering sink can also be a whole-command sink; the two
-            # filters are unrelated, so the raw rung applies here as well.
-            pairs.append((None, core))
         return pairs
 
     def _context_swallows(self, record: "PayloadRecord", body: str) -> bool:
@@ -3022,7 +3062,7 @@ class FileBased(DetectionMethod):
         # probe's followup succeed as soon as any one separator wrote the file,
         # so a confirmation could not say which break-out actually worked -- and
         # its cleanup command would name a file another probe wrote.
-        for separator in (self._separators(windows) if self._needs_separator(record) else (None,)):
+        for separator in self._separator_candidates(record, windows):
             name = "rcekit-" + "".join(rng.choice(string.ascii_lowercase + string.digits)
                                        for _ in range(12)) + ".txt"
             token = self._tag(rng) + "".join(rng.choice(string.ascii_uppercase + string.digits)
@@ -3125,7 +3165,7 @@ class ParametricTime(DetectionMethod):
         # and only for the operator who chose 'quick' to be gentle on a
         # rate-limited target. --probe-depth trades probe *shapes* for requests;
         # it does not trade away a break-out this method cannot detect without.
-        separators = (self._separators(windows) if self._needs_separator(record) else (None,))
+        separators = self._separator_candidates(record, windows)
         # Screen in two waves. Each delayed screen probe costs a real sleep, so
         # screening all five separators up front spent `5 x base` seconds on
         # every carrier -- including the carriers that can never break out at
@@ -3380,7 +3420,7 @@ class OobCallback(DetectionMethod):
 
         listener = self.config.get("oob_listener")
 
-        separators = (self._separators(windows) if self._needs_separator(record) else (None,))
+        separators = self._separator_candidates(record, windows)
 
         def add(core_for_token, label: str):
             # A token per *separator*, not per shape. Sharing one token across
@@ -4438,15 +4478,26 @@ def main():
                     return 1
                 print(f"[detect] file-based method WRITES to {args.webroot} on the target and fetches via "
                       f"{args.web_base_url}; each confirmed finding lists a cleanup command.")
-            if not sink_raw and set(method_names) & SHELL_PROBE_METHODS:
+            if set(method_names) & SHELL_PROBE_METHODS:
                 # The ladder multiplies request count, so say which shapes are
                 # about to be tried before trying them. An operator on a
                 # monitored engagement needs to see the cost first, not infer it
                 # from the traffic afterwards.
-                label = "auto (full ladder)" if sink_shapes is None else ", ".join(sink_shapes)
+                #
+                # Computed from the effective state, not from --sink-shape:
+                # --separators, --contexts and --sink-raw each narrow the ladder,
+                # so printing the raw flag would describe a run that is not the
+                # one about to happen. This output is an audit or it is noise.
+                effective = effective_sink_shapes(detection_config)
+                narrowed = (sink_shapes is not None or sink_raw or separators
+                            or bool(selected_contexts))
+                label = ", ".join(effective) if narrowed else "auto (full ladder)"
                 print(f"[detect] sink shapes: {label}")
-                for line in sink_shape_plan(sink_shapes):
+                for line in sink_shape_plan(effective):
                     print(line)
+                if separators:
+                    print("[detect]   (separators pinned by --separators: "
+                          f"{', '.join(repr(s) for s in separators)})")
             results = generator.run_detection(
                 to_send, url=verify_url, methods=method_names, method=method,
                 data=verify_data, headers=verify_headers, delay=args.verify_delay,
