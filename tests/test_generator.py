@@ -3816,6 +3816,119 @@ class TimingScreenDepthTestCase(unittest.TestCase):
         self.assertEqual({p.separator for p in probes}, {"| "})
 
 
+class EvalCarrierTestCase(unittest.TestCase):
+    """Engine carriers for the `eval` probe.
+
+    A carrier exists for exactly one reason: an engine that evaluates the
+    expression perfectly but does not put the bare product in the response, so
+    RCEKit's oracle cannot see it and a vulnerable target reads as `negative`.
+    Three engines were measured to do that. Every other engine tested —
+    including OGNL with member access denied outright, SpEL's restricted
+    context, and Jinja2's SandboxedEnvironment — returns the bare product from
+    the bare probe, so a sandbox is not what carriers are for."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+        self.rec = make_record(environment="java", context="raw")
+
+    def _probes(self, config=None):
+        import random as _random
+        return EvalExpr(self.gen, config or {}).build_probes(self.rec, _random.Random(42))
+
+    def test_the_corpus_declares_the_carriers(self):
+        # Invariant: new payload material is declarative, so coverage can be
+        # extended without touching Python.
+        self.assertTrue(self.gen.eval_carriers)
+        for name, carrier in self.gen.eval_carriers.items():
+            self.assertIn("template", carrier, name)
+            self.assertIn(EvalExpr.CARRIER_TOKEN, carrier["template"], name)
+            self.assertTrue(carrier.get("notes"), f"{name} must say why it exists")
+            self.assertTrue(carrier.get("verified"),
+                            f"{name} must record what it was measured against")
+
+    def test_bare_forms_come_first(self):
+        # Fewest requests and the cleanest evidence line, and they already cover
+        # every engine that returns a bare product.
+        probes = self._probes()
+        carriers = [i for i, p in enumerate(probes) if p.carrier]
+        bare = [i for i, p in enumerate(probes) if not p.carrier]
+        self.assertTrue(bare and carriers)
+        self.assertLess(max(bare), min(carriers))
+
+    def test_carriers_do_not_change_the_oracle(self):
+        # The carrier varies the wrapper, never the proof: the expected value is
+        # still a product of random operands that the payload never spells out.
+        for probe in self._probes():
+            self.assertNotIn(probe.expected, probe.payload)
+            self.assertIn(probe.forbidden, probe.payload)
+
+    def test_every_probe_shares_one_expected_value(self):
+        self.assertEqual(len({p.expected for p in self._probes()}), 1)
+
+    def test_the_shipped_carriers_render_exactly_what_was_verified(self):
+        # Pinned deliberately. Each of these strings was run through the real
+        # engine and confirmed to yield the bare product where the bare ${a*b}
+        # does not; changing one silently would undo that without any test
+        # noticing.
+        rendered = {p.carrier: p.payload for p in self._probes() if p.carrier}
+        expr = next(p.forbidden for p in self._probes() if p.carrier)
+        self.assertEqual(rendered["freemarker"], f"${{({expr})?c}}")
+        self.assertEqual(rendered["velocity"], f"#set($rk={expr})$rk")
+        self.assertEqual(rendered["thymeleaf"], f"[[${{{expr}}}]]")
+
+    def test_eval_engines_narrows_the_carriers(self):
+        probes = self._probes({"eval_engines": ("velocity",)})
+        self.assertEqual({p.carrier for p in probes if p.carrier}, {"velocity"})
+        self.assertTrue([p for p in probes if not p.carrier], "bare forms always stay")
+
+    def test_an_unknown_engine_name_selects_no_carrier_but_keeps_the_bare_probes(self):
+        probes = self._probes({"eval_engines": ("nosuchengine",)})
+        self.assertEqual([p for p in probes if p.carrier], [])
+        self.assertEqual(len(probes), len(EvalExpr._FORMS))
+
+    def test_the_evidence_names_the_carrier(self):
+        # So a finding says which engine quirk it had to work around, rather
+        # than leaving the tester to rediscover it.
+        probe = next(p for p in self._probes() if p.carrier == "freemarker")
+        verdict = EvalExpr(self.gen).confirm(
+            Observation(200, f"out {probe.expected} end", control_body="idle"), probe)
+        self.assertEqual(verdict.status, "confirmed")
+        self.assertIn("freemarker carrier", verdict.evidence)
+
+    def test_a_bare_confirmation_evidence_is_unchanged(self):
+        probe = next(p for p in self._probes() if not p.carrier)
+        verdict = EvalExpr(self.gen).confirm(
+            Observation(200, f"out {probe.expected} end", control_body="idle"), probe)
+        self.assertEqual(verdict.status, "confirmed")
+        self.assertNotIn("carrier", verdict.evidence)
+
+    def test_a_digit_grouping_engine_confirms_only_through_its_carrier(self):
+        # Freemarker's actual behaviour, without needing Freemarker: it renders
+        # a bare ${a*b} with the locale's grouping separators, so the product
+        # RCEKit searches for is absent from a target that evaluated it
+        # perfectly. Measured: '${a*b}' -> '2,070,761,401'.
+        def route(method, path, params, headers, body):
+            value = params.get("t", "")
+            if value.startswith("${(") and value.endswith(")?c}"):
+                return 200, str(eval(value[3:-4]))          # ?c: bare digits
+            if value.startswith("${") and value.endswith("}"):
+                return 200, "{:,}".format(eval(value[2:-1]))  # grouped digits
+            return 200, value
+
+        with local_target(route) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/?t=FUZZ", methods=["eval"])
+        confirmed = [r for r in results if r["verdict"] == "confirmed"]
+        self.assertTrue(confirmed, "the carrier must reach a digit-grouping engine")
+        self.assertTrue(all("freemarker carrier" in r["detail"] for r in confirmed))
+
+    def test_a_clean_target_stays_negative_with_carriers_enabled(self):
+        with local_target(lambda *a: (200, "<html>static 3979016000</html>")) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/?t=FUZZ", methods=["eval"])
+        self.assertFalse([r for r in results if r["verdict"] == "confirmed"])
+
+
 class SinkShapeLadderTestCase(unittest.TestCase):
     """The sink-shape ladder: the shapes an injected value can land in.
 

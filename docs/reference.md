@@ -54,6 +54,7 @@ starting point — this page is for looking things up once you know what you wan
 | `--probe-depth` | `full` (also the substitution-free and comment-terminated shapes) or `quick` | `full` |
 | `--detect-json` | Also write the run to this path as JSON: overall verdict, counts, every probe | None |
 | `--sink-shape` | Sink shapes the shell probes try: `auto`, or any of `sep`, `raw`, `chain`, `newline`, `dq`, `sq`, `subshell` | `auto` |
+| `--eval-engines` | (`eval`) Engine carriers to add to the bare expression probes: `auto`, or names from `eval_carriers` | `auto` |
 
 | `--methods` value | Confirms | Tier it can reach |
 |---|---|---|
@@ -102,6 +103,46 @@ depth and `--probe-depth` changes nothing for it.
 sweep, and it does not narrow the separator screen `--methods time` runs: both
 depths try every candidate break-out, because dropping one is not a saving in
 requests but a blind spot. Use `--separators` to narrow that deliberately.
+
+### Expression-engine carriers
+
+The `eval` method injects a product of two random operands in each common
+template syntax and confirms that the **product** comes back. Most engines need
+nothing more than that. Three do, and `--eval-engines` controls the extra probes
+for them.
+
+A carrier exists for exactly one reason: **the engine evaluates the expression
+perfectly but does not put the bare product in the response**, so the oracle
+cannot see it and a vulnerable target reads as `negative`.
+
+| Engine | Bare `${a*b}` returns | Carrier | Carrier returns |
+|---|---|---|---|
+| Freemarker | `2,070,761,401` — grouped by locale | `${(a*b)?c}` | `2070761401` |
+| Velocity | `${a*b}` verbatim — it is a *reference*, not an expression | `#set($rk=a*b)$rk` | `2070761401` |
+| Thymeleaf | `${a*b}` verbatim — needs its inlining brackets | `[[${a*b}]]` | `2070761401` |
+
+Measured against freemarker 2.3.32, velocity-engine-core 2.3 and thymeleaf
+3.1.2; each corpus entry records what it was verified against.
+
+**A sandbox is not what carriers are for.** A member-access sandbox restricts
+method and field access; arithmetic and string concatenation need neither, so
+the bare probe survives one. Measured:
+
+| Engine | Bare `a*b` | `Runtime`-class member access |
+|---|---|---|
+| OGNL, member access denied for *everything* | evaluates | blocked |
+| SpEL `SimpleEvaluationContext` (restricted) | evaluates | blocked |
+| Jinja2 `SandboxedEnvironment` | evaluates | blocked |
+| Groovy, ERB, JS `eval`, Python `eval` | evaluates | — |
+
+So the bare probes already cover the sandboxed engines, and narrowing
+`--eval-engines` saves little — there are only three carriers, and they are the
+cheap part of the run.
+
+Carriers live in `eval_carriers` in `templates/payloads.json`, so a new one is a
+JSON entry, not a code change. Each records `notes` (why it exists) and
+`verified` (what it was measured against); a carrier without measured evidence
+that the bare probe fails is a probe that can only waste a request.
 
 ### The sink-shape ladder
 
