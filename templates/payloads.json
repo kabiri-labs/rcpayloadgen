@@ -709,5 +709,52 @@
       "notes": "The expect:// stream wrapper executes its URI through a shell and yields the output as the entity's value, so a document that renders the entity returns the command output directly. The extension is rarely installed, which is exactly why this is opt-in rather than part of a default run.",
       "verified": "not validated here; documented behaviour of the PHP expect stream wrapper"
     }
+  },
+  "deser_probes": {
+    "java": {
+      "label": "Java ObjectInputStream",
+      "wellformed": "rO0ABXQABHJjZWs=",
+      "truncated": "rO0ABXQABA==",
+      "magic": "rO0AB",
+      "dns": "java_urldns",
+      "notes": "A base64 java.io serialization stream carrying a single String -- no class outside java.lang, so nothing in it can run. The truncated form is the same stream cut short, which a real ObjectInputStream rejects with a stream-corruption error while a parameter that is merely stored treats both as opaque text. The DNS shape is built in Python rather than declared here because the URL host is length-prefixed inside the stream and changes per probe.",
+      "verified": "OpenJDK 21: the generated URLDNS stream deserializes to HashMap{http://<host>/=rk} and issues a DNS query for <host>, with no code execution"
+    },
+    "php": {
+      "label": "PHP unserialize()",
+      "wellformed": "O:8:\"stdClass\":0:{}",
+      "truncated": "O:8:\"stdClass\":0:",
+      "magic": "O:8:\"stdClass\":",
+      "dns": null,
+      "notes": "stdClass has no magic methods, so unserialize() on this builds an empty object and runs nothing. PHP has no non-executing DNS gadget of the URLDNS kind -- every known chain goes through __wakeup/__destruct -- so only the error-shape oracle applies here.",
+      "verified": "documented PHP serialization format; not exercised against a live PHP endpoint in this environment"
+    },
+    "dotnet": {
+      "label": ".NET BinaryFormatter",
+      "wellformed": "AAEAAAD/////AQAAAAAAAAAGAQAAAAJyawtd",
+      "truncated": "AAEAAAD/////AQAAAAAAAAAG",
+      "magic": "AAEAAAD/////",
+      "dns": null,
+      "notes": "The BinaryFormatter header plus a single string record. Only the error-shape oracle applies: .NET's non-executing gadgets are type-confusion chains rather than a DNS side effect.",
+      "verified": "documented BinaryFormatter record layout; not exercised against a live .NET endpoint in this environment"
+    },
+    "python_pickle": {
+      "label": "Python pickle",
+      "wellformed": "gASVBgAAAAAAAACMAnJrlC4=",
+      "truncated": "gASVBgAAAAAAAACM",
+      "magic": "gASV",
+      "dns": null,
+      "notes": "A protocol-4 pickle of the string 'rk'. It contains no GLOBAL or REDUCE opcode, so loading it constructs a string and calls nothing. Only the error-shape oracle applies.",
+      "verified": "round-trips through pickle.loads in this environment"
+    },
+    "fastjson": {
+      "label": "fastjson / Jackson polymorphic JSON",
+      "wellformed": "{\"@type\":\"java.lang.String\",\"val\":\"rk\"}",
+      "truncated": "{\"@type\":\"java.lang.String\",\"val\":",
+      "magic": "{\"@type\":",
+      "dns": "{\"rk\":{\"@type\":\"java.net.Inet4Address\",\"val\":\"{host}\"}}",
+      "notes": "Polymorphic deserialization by type name. java.net.Inet4Address resolves its val on construction, which is a DNS side effect and not code execution -- the same honest signal URLDNS gives for the binary format, expressible as plain text because JSON is not length-prefixed.",
+      "verified": "documented fastjson autotype behaviour; not exercised against a live fastjson endpoint in this environment"
+    }
   }
 }

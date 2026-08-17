@@ -8,6 +8,64 @@ formats, or the template schema.
 
 ## [Unreleased]
 
+## [2.34.0] — 2026-08-17
+
+Deserialization **sink** detection, and a verdict that is deliberately not RCE.
+
+Deserialization RCE (fastjson, shiro, weblogic, jenkins) cannot be confirmed by
+the value-oracle model: the payload is a serialized object graph and gadget
+selection is classpath-specific, so whether execution is reachable depends on
+jars RCEKit cannot see. That stays out of scope. The honest middle step is
+showing the endpoint parses the data at all — a real finding, and the
+prerequisite for every gadget chain.
+
+### Added
+
+- **`--methods deser`**, which **never emits `confirmed`**. Its strongest
+  outcome is a new verdict, `deserialization-sink`, reported in its own section
+  that states outright that reaching RCE from there depends on classpath
+  gadgets. Collapsing it into `confirmed` would break the one guarantee the tool
+  rests on; collapsing it into `needs-review` would throw away a proven finding.
+
+  `deserialization-sink` sits below both RCE tiers in the collapsed verdict: it
+  is proven, but a *suspected* RCE outranks a proven non-RCE in triage.
+
+- **Two oracles of deliberately different strength.** `shape` (no listener
+  needed) sends a well-formed object stream, the same stream truncated, and the
+  format's magic bytes plus random noise of the same length, and asks whether
+  the endpoint answers the well-formed one differently from both — a
+  fingerprint, so `needs-review` only, never promoted. `dns` (needs
+  `--oob-host`) sends a gadget whose only side effect is a name lookup.
+
+- **A URLDNS builder for Java serialization.** A `HashMap` holding one
+  `java.net.URL`: `HashMap.readObject` hashes the key, `URL.hashCode` asks for
+  the host address, the JVM resolves the name. It references no class outside
+  `java.util`/`java.net`, so there is nothing in it that can run — the callback
+  proves the object graph was reconstructed and no more.
+
+  Built in Python rather than declared in the corpus because the URL host is
+  length-prefixed *inside* the stream and changes per probe. Its constant parts
+  are the exact bytes OpenJDK's own `ObjectOutputStream` emits for that graph,
+  and the result was **verified against OpenJDK 21**: it deserializes to
+  `HashMap{http://<host>/=rk}` and issues a DNS query for `<host>`, with no code
+  execution.
+
+- **A `deser_probes` corpus section** with `java`, `php`, `dotnet`,
+  `python_pickle` and `fastjson`, plus `--deser-formats` to narrow it. Only
+  `java` and `fastjson` carry a DNS gadget: PHP and .NET chains all run through
+  magic methods or type confusion, so there is no honest DNS-only probe for them
+  and they get the shape oracle alone.
+
+- Response signatures for the shape differential drop long digit and hex runs,
+  so request ids and timestamps on an otherwise identical error page do not make
+  every endpoint fingerprint as a parser.
+
+### Changed
+
+- The README's scope note now says precisely what changed and what did not:
+  deserialization **gadget chains** remain out of scope, while the **sink** is
+  now reported in its own tier.
+
 ## [2.33.0] — 2026-08-17
 
 Query-language bridges. Several RCEs pass through a query language before
@@ -841,7 +899,8 @@ this file and have not been restated here.
 - **[2.7.0]**
 - **[2.1.0]**
 
-[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.33.0...HEAD
+[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.34.0...HEAD
+[2.34.0]: https://github.com/kabiri-labs/rcekit/compare/v2.33.0...v2.34.0
 [2.33.0]: https://github.com/kabiri-labs/rcekit/compare/v2.32.0...v2.33.0
 [2.32.0]: https://github.com/kabiri-labs/rcekit/compare/v2.31.0...v2.32.0
 [2.31.0]: https://github.com/kabiri-labs/rcekit/compare/v2.30.0...v2.31.0
