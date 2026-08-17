@@ -3160,9 +3160,17 @@ class QuotedShellCarrierTestCase(unittest.TestCase):
         seen = {("unix", "raw")}
         return [r.context for r in RCEKit._quoted_shell_carriers(base, seen, config)]
 
-    def test_quoted_contexts_are_added_by_default(self):
+    def test_quoted_and_substitution_contexts_are_added_by_default(self):
+        # The substitution contexts joined the quoted ones here: they are the
+        # shapes that reach a value sitting inside double quotes *without*
+        # closing the quote, which is what a filter on the quote defeats.
         self.assertEqual(sorted(self._carriers({})),
-                         ["shell_double_quoted", "shell_single_quoted"])
+                         ["shell_backtick", "shell_double_quoted", "shell_single_quoted",
+                          "shell_subshell"])
+
+    def test_naming_rungs_narrows_which_contexts_are_added(self):
+        self.assertEqual(sorted(self._carriers({"sink_shapes": ("dq", "subshell")})),
+                         ["shell_backtick", "shell_double_quoted", "shell_subshell"])
 
     def test_an_explicit_contexts_selection_is_respected(self):
         # Narrowing the run is a deliberate choice about what to send; widening
@@ -3177,7 +3185,7 @@ class QuotedShellCarrierTestCase(unittest.TestCase):
         base = [make_record(environment="unix", context="shell_single_quoted")]
         seen = {("unix", "shell_single_quoted")}
         self.assertEqual([r.context for r in RCEKit._quoted_shell_carriers(base, seen, {})],
-                         ["shell_double_quoted"])
+                         ["shell_double_quoted", "shell_subshell", "shell_backtick"])
 
     def test_a_single_quoted_sink_is_confirmed_without_naming_the_context(self):
         import os
@@ -3800,6 +3808,220 @@ class TimingScreenDepthTestCase(unittest.TestCase):
             self.gen, {"time_base": 1.0, "separators": ["| "]}).build_probes(
             self.rec, _random.Random(1))
         self.assertEqual({p.separator for p in probes}, {"| "})
+
+
+class SinkShapeLadderTestCase(unittest.TestCase):
+    """The sink-shape ladder: the shapes an injected value can land in.
+
+    The rung that carries the weight is `subshell`. Its value is *not* where it
+    first looks: `reflected`'s arithmetic core `$((a+b))` is expanded by the
+    shell inside double quotes anyway, so that method already confirmed on a
+    quoted sink without any new rung. The methods whose core has to actually
+    *run* something — file (a redirect), time (a sleep), oob (a fetch) — are
+    completely inert inside those quotes, and a command substitution is the only
+    shape that reaches them there. These lock that distinction in, because it is
+    the reason the rung exists."""
+
+    def setUp(self):
+        self.gen = RCEKit()
+        self.rec = make_record(environment="unix", context="raw")
+
+    def _payloads(self, context, config=None, method=ReflectedMath):
+        import random as _random
+        rec = make_record(environment="unix", context=context)
+        return [p.payload for p in method(self.gen, config or {}).build_probes(
+            rec, _random.Random(5))]
+
+    # -- shape parsing -------------------------------------------------------
+
+    def test_auto_and_empty_mean_the_whole_ladder(self):
+        for value in (None, "", "auto"):
+            self.assertIsNone(rcekit.parse_sink_shapes(value), value)
+
+    def test_named_rungs_are_parsed_in_order(self):
+        self.assertEqual(rcekit.parse_sink_shapes("sq,subshell"), ("sq", "subshell"))
+        self.assertEqual(rcekit.parse_sink_shapes(" raw , sep "), ("raw", "sep"))
+
+    def test_an_unknown_rung_is_refused_by_name(self):
+        # Silently narrowing a run to nothing because of a typo would report a
+        # clean negative from a run that tested almost nothing.
+        with self.assertRaises(ValueError) as ctx:
+            rcekit.parse_sink_shapes("sq,bogus")
+        self.assertIn("bogus", str(ctx.exception))
+
+    def test_every_rung_has_a_plan_line(self):
+        lines = rcekit.sink_shape_plan(None)
+        self.assertEqual(len(lines), len(rcekit.SINK_SHAPE_RUNGS))
+        for rung in rcekit.SINK_SHAPE_RUNGS:
+            self.assertTrue(any(f" {rung} " in line for line in lines), rung)
+
+    def test_the_plan_lists_only_the_selected_rungs(self):
+        lines = rcekit.sink_shape_plan(("sq", "subshell"))
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(any(" sq " in line for line in lines))
+        self.assertFalse(any(" chain " in line for line in lines))
+
+    # -- substitution contexts ----------------------------------------------
+
+    def test_substitution_contexts_get_no_separator(self):
+        # $(...) does not break out of a running command, it is an expression
+        # evaluated where it sits. A leading ';' would be a syntax error inside
+        # the substitution.
+        for context, opener in (("shell_subshell", "$("), ("shell_backtick", "`")):
+            for payload in self._payloads(context):
+                self.assertTrue(payload.startswith(opener), payload)
+                self.assertFalse(payload.startswith(("; ", "| ", "&& ")), payload)
+
+    def test_substitution_probes_still_carry_an_unforgeable_expected_value(self):
+        import random as _random
+        rec = make_record(environment="unix", context="shell_subshell")
+        for probe in ReflectedMath(self.gen).build_probes(rec, _random.Random(5)):
+            self.assertNotIn(probe.expected, probe.payload)
+
+    def test_the_backtick_context_drops_shapes_that_carry_a_backtick(self):
+        # Backticks do not nest: a body carrying its own would close the outer
+        # substitution early, so the probe could only ever come back negative.
+        for payload in self._payloads("shell_backtick"):
+            self.assertEqual(payload.count("`"), 2, payload)
+
+    def test_the_subshell_context_keeps_them_because_it_nests(self):
+        # $( ) does nest, so it carries every shape including the backtick one —
+        # dropping it there would be a lost probe for no reason.
+        self.assertTrue(any("`expr " in p for p in self._payloads("shell_subshell")))
+
+    def test_substitution_carriers_are_added_under_auto(self):
+        carriers = self.gen._quoted_shell_carriers([self.rec], {("unix", "raw")}, {})
+        contexts = {c.context for c in carriers}
+        self.assertIn("shell_subshell", contexts)
+        self.assertIn("shell_backtick", contexts)
+        self.assertIn("shell_single_quoted", contexts)
+
+    def test_naming_rungs_narrows_which_carriers_are_added(self):
+        carriers = self.gen._quoted_shell_carriers(
+            [self.rec], {("unix", "raw")}, {"sink_shapes": ("sq",)})
+        self.assertEqual({c.context for c in carriers}, {"shell_single_quoted"})
+
+    def test_explicit_contexts_still_suppress_the_extra_carriers(self):
+        self.assertEqual(
+            self.gen._quoted_shell_carriers([self.rec], {("unix", "raw")},
+                                            {"contexts_explicit": True}), [])
+
+    # -- the raw rung --------------------------------------------------------
+
+    def test_the_ladder_sends_the_bare_command_alongside_the_separators(self):
+        # A qx/$input/ sink used to need --sink-raw, so it reported clean unless
+        # the operator already suspected its shape. The ladder tries it.
+        payloads = self._payloads("raw")
+        self.assertTrue(any(p.startswith("; ") for p in payloads))
+        self.assertTrue(any(p.startswith("echo ") for p in payloads),
+                        "the raw rung must send a bare command too")
+
+    def test_sink_raw_still_narrows_to_the_bare_command_only(self):
+        payloads = self._payloads("raw", {"sink_raw": True})
+        self.assertTrue(payloads)
+        for payload in payloads:
+            self.assertFalse(payload.lstrip().startswith((";", "|", "&")), payload)
+
+    def test_dropping_the_raw_rung_drops_the_bare_command(self):
+        # Every payload stays separator-led. The space-free shape trims the
+        # separator's trailing space (a space-stripping sink would remove it
+        # anyway), so the check is on the separator character, not the spelling.
+        payloads = self._payloads("raw", {"sink_shapes": ("sep", "chain")})
+        self.assertTrue(payloads)
+        for payload in payloads:
+            self.assertTrue(payload.startswith((";", "|", "&")), payload)
+
+    # -- separator rungs -----------------------------------------------------
+
+    def test_naming_separators_suppresses_the_raw_rung(self):
+        # Naming the separators is a statement that the sink is separator-led,
+        # so a bare command is not one of the shapes the operator asked for.
+        payloads = self._payloads("raw", {"separators": ["| "]})
+        self.assertTrue(payloads)
+        for payload in payloads:
+            self.assertTrue(payload.startswith("|"), payload)
+
+    def test_naming_the_raw_rung_overrides_that(self):
+        # --sink-shape is the more specific say, so it wins over the inference.
+        payloads = self._payloads("raw", {"separators": ["| "],
+                                          "sink_shapes": ("sep", "raw")})
+        self.assertTrue(any(p.startswith("echo ") for p in payloads), payloads)
+
+    def test_separator_rungs_select_their_own_separators(self):
+        method = ReflectedMath(self.gen, {"sink_shapes": ("chain",)})
+        self.assertEqual(method._separators(windows=False), ("| ", "|| ", "&& "))
+        method = ReflectedMath(self.gen, {"sink_shapes": ("sep", "newline")})
+        self.assertEqual(method._separators(windows=False), ("; ", "\n"))
+
+    def test_selecting_no_separator_rung_empties_the_sweep(self):
+        # With only sq/subshell selected, a separator-led probe is a request
+        # that cannot confirm.
+        method = ReflectedMath(self.gen, {"sink_shapes": ("sq", "subshell")})
+        self.assertEqual(method._separators(windows=False), ())
+
+    def test_explicit_separators_still_win_outright(self):
+        method = ReflectedMath(self.gen, {"sink_shapes": ("chain",), "separators": ["; "]})
+        self.assertEqual(method._separators(windows=False), ("; ",))
+
+    def test_windows_rungs_map_to_cmd_vocabulary(self):
+        # ';' is not a cmd.exe separator, so a rung name must resolve against
+        # the environment's own table rather than a global one.
+        method = ReflectedMath(self.gen, {"sink_shapes": ("sep",)})
+        self.assertEqual(method._separators(windows=True), (" & ",))
+        method = ReflectedMath(self.gen, {"sink_shapes": ("newline",)})
+        self.assertEqual(method._separators(windows=True), ())
+
+    def test_auto_is_unchanged_for_the_separator_sweep(self):
+        self.assertEqual(ReflectedMath(self.gen)._separators(windows=False),
+                         ReflectedMath.DEFAULT_SEPARATORS["unix"])
+
+    # -- end to end ----------------------------------------------------------
+
+    def test_a_quote_filtered_double_quoted_sink_needs_the_substitution_rung(self):
+        # The acceptance case. The sink puts the value inside double quotes and
+        # strips the quote character, so the dq break-out cannot close it. The
+        # file method's core is a redirect, which is inert inside those quotes —
+        # a command substitution is the only shape that reaches it.
+        import os
+        import tempfile
+
+        webroot = tempfile.mkdtemp()
+
+        def route(method, path, params, headers, body):
+            if path.startswith("/files/"):
+                served = os.path.join(webroot, os.path.basename(path))
+                if os.path.exists(served):
+                    with open(served) as handle:
+                        return 200, handle.read()
+                return 404, "not found"
+            raw = params.get("host", "").replace('"', "")
+            pipe = os.popen('echo PING "%s" 2>&1' % raw)
+            out = pipe.read()
+            pipe.close()
+            return 200, out
+
+        with local_target(route) as base:
+            config = {"webroot": webroot, "web_base_url": f"{base}/files"}
+            without = self.gen.run_detection(
+                [self.rec], url=f"{base}/?host=FUZZ", methods=["file"],
+                config=dict(config, sink_shapes=("sep", "chain", "newline", "sq", "dq", "raw")),
+                timeout=15)
+            with_ladder = self.gen.run_detection(
+                [self.rec], url=f"{base}/?host=FUZZ", methods=["file"],
+                config=config, timeout=15)
+
+        self.assertFalse([r for r in without if r["verdict"] == "confirmed"],
+                         "precondition: without the substitution rung this sink reads clean")
+        confirmed = [r for r in with_ladder if r["verdict"] == "confirmed"]
+        self.assertTrue(confirmed, "the substitution rung must reach a quote-filtered sink")
+        self.assertTrue({r["context"] for r in confirmed} <= rcekit.SUBSTITUTION_CONTEXTS)
+
+    def test_a_clean_target_stays_negative_through_every_rung(self):
+        # Widening the ladder must not widen what gets confirmed.
+        with local_target(lambda *a: (200, "<html>static 12345678</html>")) as base:
+            results = self.gen.run_detection(
+                [self.rec], url=f"{base}/?host=FUZZ", methods=["reflected"])
+        self.assertFalse([r for r in results if r["verdict"] == "confirmed"])
 
 
 class ResponseChannelTestCase(unittest.TestCase):

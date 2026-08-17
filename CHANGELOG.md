@@ -8,6 +8,51 @@ formats, or the template schema.
 
 ## [Unreleased]
 
+## [2.26.0] — 2026-08-16
+
+The sink-shape ladder. An injected value lands in a *shape* — mid-command,
+inside quotes, as the whole command — and the shape decides what can reach it.
+Two shapes had no probe that fitted, so a genuinely exploitable target reported
+clean.
+
+### Added
+
+- **`--sink-shape auto|sep|raw|chain|newline|dq|sq|subshell`** (comma-separated)
+  names which shapes the shell probes try. `auto` is the whole ladder and the
+  default. Underneath it selects the existing separator sweep and break-out
+  contexts, so naming a rung narrows a supported run rather than switching on a
+  parallel path. The plan is printed before anything is sent, because the ladder
+  multiplies request count and an operator on a monitored engagement needs to
+  see the cost first.
+- **The `subshell` rung — `$(...)` and backticks.** Reaches a value sitting
+  inside double quotes *without closing the quote*, which is the one case a
+  quoted break-out loses to a filter on the quote character itself. Measured
+  against `system("echo PING \"$input\"")`: with `"` stripped, `dq` is inert and
+  both substitution forms execute; with `$` stripped, `dq` executes and the
+  backtick form still does. Both ship because they survive different filters.
+
+  **Which method it helps is the counter-intuitive part.** `reflected`'s core is
+  `$((a+b))`, which the shell expands inside double quotes anyway, so that
+  method already confirmed there. The methods whose core must actually *run* —
+  `time` (a sleep), `file` (a redirect), `oob` (a fetch) — are completely inert
+  inside those quotes. On a quote-filtering sink, `--methods file` went from **0
+  confirmations to 2**: it had been reporting an exploitable target as clean.
+- **The `raw` rung is now part of `auto`.** A `qx/$input/`-style sink, where the
+  input is the whole command, previously needed `--sink-raw` — so it reported
+  clean unless the operator already suspected the shape. One extra probe per
+  carrier buys it. `--sink-raw` keeps its meaning as the narrowing alias for
+  `--sink-shape raw`, and no existing command line changes behaviour.
+
+### Changed
+
+- **The backtick context drops probe shapes that carry their own backtick.**
+  Backticks do not nest, so such a probe closes the outer substitution early and
+  could only ever come back negative. `$( )` does nest and keeps every shape.
+- **Naming `--separators` now implies the sink is separator-led**, so the `raw`
+  rung is dropped unless `--sink-shape` names it explicitly. A profile with
+  `sink_needs_separator` drops it for the same reason. Both keep an explicitly
+  narrowed run from being widened behind the operator's back.
+
 ## [2.25.0] — 2026-08-16
 
 A coverage benchmark, so a claim about what RCEKit confirms can be checked
@@ -394,7 +439,8 @@ this file and have not been restated here.
 - **[2.7.0]**
 - **[2.1.0]**
 
-[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.25.0...HEAD
+[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.26.0...HEAD
+[2.26.0]: https://github.com/kabiri-labs/rcekit/compare/v2.25.0...v2.26.0
 [2.25.0]: https://github.com/kabiri-labs/rcekit/compare/v2.24.0...v2.25.0
 [2.24.0]: https://github.com/kabiri-labs/rcekit/compare/v2.23.3...v2.24.0
 [2.23.3]: https://github.com/kabiri-labs/rcekit/compare/v2.23.2...v2.23.3
