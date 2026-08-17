@@ -1980,6 +1980,54 @@ class RCEKit:
                 extra.append(dataclass_replace(record, context=context))
         return extra
 
+    @staticmethod
+    def same_origin(first: str, second: str) -> bool:
+        """Whether two URLs share scheme, host and effective port."""
+        default_ports = {"http": 80, "https": 443}
+
+        def origin(url: str):
+            parts = urllib.parse.urlsplit(url)
+            scheme = (parts.scheme or "").lower()
+            try:
+                port = parts.port
+            except ValueError:  # malformed port -- treat as its own origin
+                return None
+            return scheme, (parts.hostname or "").lower(), port or default_ports.get(scheme)
+
+        left, right = origin(first), origin(second)
+        return left is not None and left == right
+
+    def _followup_headers(self, request_url: str, followup_url: str,
+                          headers: Optional[List[str]]) -> Optional[List[str]]:
+        """Headers to carry on a read-back fetch.
+
+        The write executes with the run's headers; the fetch used to go out bare.
+        With a web root that rarely mattered -- static file serving is usually
+        unauthenticated. A generalised read-back channel is an *application*
+        endpoint (a download, export or attachment handler, an LFI parameter),
+        and those are usually behind a session. The write would succeed, the
+        fetch would get a 401, and the verdict would be ``negative`` on an
+        exploitable target.
+
+        Credentials are carried only to the **same origin** as the request under
+        test. A read-back URL on another host is someone else's server, and
+        replaying the target's session cookie or bearer token to it would leak
+        the credential -- so those headers are dropped there and the rest still
+        go. Content-Type and Content-Length describe a body this GET does not
+        have."""
+        if not headers:
+            return None
+        same = self.same_origin(request_url, followup_url)
+        kept: List[str] = []
+        for header in headers:
+            name = header.partition(":")[0].strip().lower()
+            if name in {"content-type", "content-length"}:
+                continue
+            if not same and name in self.SENSITIVE_HEADERS:
+                continue
+            kept.append(header)
+        return kept or None
+
     def _detection_carriers(self, records: Iterator[PayloadRecord],
                             config: Dict[str, Any]) -> List[PayloadRecord]:
         """Reduce the selected records to distinct ``(environment, context)``
@@ -2165,7 +2213,9 @@ class RCEKit:
                     followup_body: Optional[str] = None
                     if probe.followup and probe.followup.get("url"):
                         f_status, f_body, _ = self._fire(
-                            "", probe.followup["url"], "GET", None, None, "raw", "raw", timeout)
+                            "", probe.followup["url"], "GET", None,
+                            self._followup_headers(url, probe.followup["url"], headers),
+                            "raw", "raw", timeout)
                         followup_body = f_body if f_status is not None else None
                     obs = Observation(status=status, body=body, control_body=control_body,
                                       elapsed=elapsed, followup_body=followup_body,
@@ -5026,6 +5076,19 @@ def main():
                 print(f"[detect] file-based method WRITES to {file_channel[0]} on the target and "
                       f"reads it back via {file_channel[1]}; each confirmed finding lists a "
                       "cleanup command.")
+                # The read-back fetch carries the run's headers so an
+                # authenticated download/export/LFI handler can be reached --
+                # but only to the same origin. Say so when that costs the
+                # credentials, because the symptom otherwise is a `negative` on
+                # a target that executed the write perfectly.
+                sensitive = [name for name in
+                             (h.partition(":")[0].strip() for h in (verify_headers or []))
+                             if name.lower() in RCEKit.SENSITIVE_HEADERS]
+                if sensitive and not RCEKit.same_origin(verify_url, file_channel[1]):
+                    print(f"[!] The read-back URL is a different origin from the target, so "
+                          f"{', '.join(sorted(set(sensitive)))} will NOT be sent with it — "
+                          "replaying a credential to another host would leak it. If that read-back "
+                          "endpoint needs authentication, point it at the target's own origin.")
             if set(method_names) & SHELL_PROBE_METHODS:
                 # The ladder multiplies request count, so say which shapes are
                 # about to be tried before trying them. An operator on a

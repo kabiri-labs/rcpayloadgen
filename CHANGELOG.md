@@ -27,6 +27,24 @@ file back — on exactly the internal, no-egress targets the method exists for.
   write directory: the web-root form confirms **0** — reporting an exploitable
   target clean — and the general form confirms **7**.
 
+### Fixed
+
+- **The read-back fetch now carries the run's headers**, so an authenticated
+  download, export, attachment or LFI handler can actually be read. It went out
+  bare, which barely mattered while the channel had to be a web root — static
+  file serving is rarely authenticated — and became the likely case the moment
+  the channel could be an application endpoint. Measured against a handler
+  behind a bearer token: the write executed on every probe and the verdict was
+  `negative`, "token absent from the fetched file". Now 7 confirmations on the
+  same target.
+- **Credentials are carried only to the same origin.** A read-back URL on
+  another host is someone else's server, and replaying the target's session
+  cookie or bearer token to it would leak the credential, so those headers are
+  dropped there while the rest still go — and the run says so, because the
+  symptom would otherwise look like a clean target. `Content-Type` and
+  `Content-Length` are dropped from the fetch too: they describe a body the GET
+  does not have.
+
 ### Changed
 
 - **`--webroot` / `--web-base-url` are now the web-root alias** for the general
