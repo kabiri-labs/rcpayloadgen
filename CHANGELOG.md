@@ -8,6 +8,45 @@ formats, or the template schema.
 
 ## [Unreleased]
 
+## [2.34.1] — 2026-08-17
+
+Documentation only; no behaviour change.
+
+### Changed
+
+- **New tagline: "`confirmed` means the target executed the input. `negative`
+  means the probes reached it."** The old one — "prove RCE, don't guess it" —
+  claimed the tool always proves. It does not, and does not need to: the value
+  is that each verdict has a mechanical meaning, in both directions. A promise
+  can be broken; a definition cannot.
+
+  Both halves name their actor and object on purpose. "Executed" alone reads as
+  though *RCEKit* executed something; the claim is about the target. And
+  `confirmed`/`negative` are the verdict values as the code spells them, not
+  looser words like "clean".
+
+- **The README caught up with the engine.** It still described "two verdict
+  tiers" when there are seven, and the comparison table predated the last five
+  releases. Rewritten around what a verdict asserts, with the tier table as the
+  centrepiece and a section on the half no other tool has: `error` and
+  `nothing-tested` exist so a run that tested nothing is never reported as
+  clean.
+
+  The comparison table gains the classes added since it was written — Windows
+  `cmd.exe`/PowerShell sinks, upload → write-then-execute, second-order
+  execution, query-language bridges and deserialization sinks — and the "reach
+  for something else" note now says plainly that sqlmap owns the database and
+  RCEKit's bridges only prove the OS is reachable from a text parameter.
+
+### Fixed
+
+- Two claims in the engagement-controls table were wrong and are now accurate:
+  the observed-channel fetch sends **no** credentials unless given a request with
+  `--observe-request` (only the `file` read-back inherits them, same-origin), and
+  an unanswered `--observe-url` is a warning about a partly blinded run rather
+  than a `nothing-tested` verdict.
+- The "mechanisms that produce `inconclusive`" list said four and listed five.
+
 ## [2.34.0] — 2026-08-17
 
 Deserialization **sink** detection, and a verdict that is deliberately not RCE.
@@ -899,7 +938,8 @@ this file and have not been restated here.
 - **[2.7.0]**
 - **[2.1.0]**
 
-[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.34.0...HEAD
+[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.34.1...HEAD
+[2.34.1]: https://github.com/kabiri-labs/rcekit/compare/v2.34.0...v2.34.1
 [2.34.0]: https://github.com/kabiri-labs/rcekit/compare/v2.33.0...v2.34.0
 [2.33.0]: https://github.com/kabiri-labs/rcekit/compare/v2.32.0...v2.33.0
 [2.32.0]: https://github.com/kabiri-labs/rcekit/compare/v2.31.0...v2.32.0
