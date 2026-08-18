@@ -167,6 +167,7 @@ class ComparisonSectionTestCase(unittest.TestCase):
         "tplmap": "github.com/epinna/tplmap",
         "Nuclei": "github.com/projectdiscovery/nuclei",
         "interactsh": "github.com/projectdiscovery/interactsh",
+        "sqlmap": "github.com/sqlmapproject/sqlmap",
     }
 
     @classmethod
@@ -192,7 +193,7 @@ class ComparisonSectionTestCase(unittest.TestCase):
 
     def test_no_unvetted_project_is_named(self):
         """Adding a rival to the table means adding it here — and linking it."""
-        for rival in ("sqlmap", "metasploit", "burp suite", "acunetix", "tplmap2"):
+        for rival in ("metasploit", "burp suite", "acunetix", "tplmap2"):
             self.assertNotIn(
                 rival, self.section.lower(),
                 f"'{rival}' appears in the comparison but is not in PROJECTS",
