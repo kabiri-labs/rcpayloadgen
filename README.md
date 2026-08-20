@@ -71,25 +71,39 @@ differenced against a payload-free control:
 
 ## Quick start
 
+RCEKit has **two supported shapes**, and neither is a fallback for the other.
+
+**Install it** — `pipx` keeps the CLI in its own environment, which is what you
+want for a tool rather than a library:
+
 ```bash
-git clone https://github.com/kabiri-labs/rcekit.git
-cd rcekit                    # Python 3.8+, standard library only — nothing to install
+pipx install rcekit          # or: pip install rcekit
+rcekit --doctor              # confirms the corpus it will run with
 ```
 
-Or take **just the one file** — the payload corpus is built in, so `rcekit.py`
-runs on its own with nothing beside it. On a client jump box, an air-gapped host,
-or anywhere `pip install` is not an option:
+**Or take just the one file.** The payload corpus is built into the module, so
+`rcekit.py` runs on its own with nothing beside it — no install step, no
+site-packages, nothing to leave behind. On a client jump box, an air-gapped
+host, or anywhere `pip install` is not an option:
 
 ```bash
 curl -O https://raw.githubusercontent.com/kabiri-labs/rcekit/main/rcekit.py
-python rcekit.py --doctor    # confirms the corpus it will run with
+python rcekit.py --doctor    # same corpus, same check, zero installation
+```
+
+Both run the same code and report the same verdicts. Working from a checkout is
+the third way, and needs no install either:
+
+```bash
+git clone https://github.com/kabiri-labs/rcekit.git
+cd rcekit                    # Python 3.8+, standard library only
 ```
 
 Put a `FUZZ` marker where your input lands (or select a parameter with `-p` when
 using a captured request), and ask RCEKit to prove RCE:
 
 ```bash
-python rcekit.py --acknowledge-consent \
+rcekit --acknowledge-consent \
   --verify-url "https://target.example/lookup?host=FUZZ" \
   --methods reflected,eval
 ```

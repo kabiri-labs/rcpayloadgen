@@ -8,6 +8,43 @@ formats, or the template schema.
 
 ## [Unreleased]
 
+### Added
+
+- **RCEKit is installable from PyPI**: `pipx install rcekit` (or
+  `pip install rcekit`) puts an `rcekit` command on PATH. Published through PyPI
+  Trusted Publishing from a GitHub release — no API token, no repository secret.
+
+  It ships as a **single-module distribution**, not a package tree. `rcekit.py`
+  stays one file at the repo root and still runs alone from a `curl` on a jump
+  box or an air-gapped host; installing is a second supported shape, not a
+  replacement for the first.
+
+### Changed
+
+- **`import rcekit` no longer has side effects.** Logging was configured at
+  module scope, and `logging.FileHandler` opens its file when it is constructed,
+  so merely importing the module wrote `rcekit.log` into whatever directory the
+  interpreter happened to be in. Handler setup moved into `configure_logging()`,
+  called from `main()`. Running the CLI still writes `rcekit.log` exactly as
+  before.
+
+- **`main()` takes an optional `argv`** and returns an explicit `int`, so the
+  console-script entry point is a plain zero-argument call and tests can drive
+  the CLI in-process. Every exit code is unchanged.
+
+- **The built-in corpus is no longer reported as a missing file.** With nothing
+  but `rcekit.py` — an installed wheel, or the single-file copy — there is no
+  `templates/` directory, the embedded corpus *is* the corpus, and the run is
+  now silent about it; `--doctor` names it `built-in (embedded in rcekit.py)`
+  and reports OK. A `templates/` directory that exists *without* its
+  `payloads.json` still prints the notice, because that one is a real finding.
+  A corpus that is present but corrupt, and an explicit `--template-file` that
+  is missing or corrupt, still refuse to run and exit non-zero.
+
+- The log file handler now runs at `DEBUG` while the console stays at `INFO`, so
+  detail worth having when reconstructing a run no longer lands on the
+  operator's terminal.
+
 ## [2.34.1] — 2026-08-17
 
 Documentation only; no behaviour change.

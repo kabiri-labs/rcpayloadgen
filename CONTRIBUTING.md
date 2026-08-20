@@ -35,6 +35,26 @@ cd rcekit        # Python 3.8+, standard library only — no dependencies
 python -m unittest discover -s tests
 ```
 
+## Versioning and releases
+
+`__version__` in `rcekit.py` is **the** release version. Nothing else declares
+one: `pyproject.toml` reads it with `version = { attr = "rcekit.__version__" }`,
+and the README badge and the newest `CHANGELOG.md` entry are held to it by tests.
+Bump it in the same commit as the change it describes — PATCH for a fix, MINOR
+for a new capability, MAJOR for a breaking change to the CLI, the output formats
+or the template schema.
+
+Keep it a plain string literal. setuptools reads it statically where it can, so
+an f-string or a computed value would work today and break the moment the build
+backend takes that path — a test pins the literal form.
+
+Releases are cut by tagging `v<version>` on `main` — `v2.34.1` for
+`__version__ = "2.34.1"` — and publishing a GitHub release. Publishing to PyPI
+runs off `release: published`, not off the tag push, and the workflow refuses to
+build when the tag and the module disagree. That check is deliberate: PyPI never
+allows a version to be re-uploaded, so a mismatch would burn that version number
+permanently.
+
 ## Adding a detection method
 
 The `--methods` engine confirms RCE by proving the target *computed or executed*
