@@ -1,0 +1,55 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # PyPI never lets a version be re-uploaded, so a tag that disagrees with
+      # __version__ would burn that version number permanently. Fail here, before
+      # anything is built.
+      - name: Verify tag matches __version__
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VER=$(python -c "import rcekit; print(rcekit.__version__)")
+          echo "tag=$TAG module=$VER"
+          test "$TAG" = "$VER"
+
+      - name: Run tests
+        run: python -m unittest discover -s tests
+
+      - name: Verify embedded corpus is current
+        run: python tools/embed_corpus.py --check
+
+      - name: Build
+        run: pipx run build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # This block is what creates the /deployments/pypi page and what the PyPI
+    # trusted publisher is scoped to. It is not optional.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/rcekit
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
