@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rcekit"
+dynamic = ["version"]
+description = "RCE detection & confirmation toolkit for authorised penetration testing"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Ahmad Kabiri" }]
+dependencies = []
+keywords = ["rce", "command-injection", "ssti", "oob", "pentesting", "security-tools"]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Environment :: Console",
+  "Intended Audience :: Information Technology",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Topic :: Security",
+]
+
+[project.urls]
+Homepage = "https://github.com/kabiri-labs/rcekit"
+Documentation = "https://github.com/kabiri-labs/rcekit/blob/main/docs/guide.md"
+Changelog = "https://github.com/kabiri-labs/rcekit/blob/main/CHANGELOG.md"
+Issues = "https://github.com/kabiri-labs/rcekit/issues"
+
+[project.scripts]
+rcekit = "rcekit:main"
+
+[tool.setuptools]
+py-modules = ["rcekit"]
+
+[tool.setuptools.dynamic]
+version = { attr = "rcekit.__version__" }

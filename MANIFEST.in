@@ -1,0 +1,16 @@
+# The sdist carries everything needed to run the tests and read the docs from a
+# source checkout. The wheel stays a single module -- see py-modules in
+# pyproject.toml -- because rcekit.py is designed to run alone.
+include README.md
+include LICENSE
+include CHANGELOG.md
+include SECURITY.md
+include CONTRIBUTING.md
+recursive-include templates *.json
+recursive-include tools *.py
+recursive-include docs *.md
+recursive-include tests *.py *.json *.txt *.md
+
+# Large, and useless in a distribution: the GIFs are README illustrations that
+# GitHub serves, and shipping them would multiply the sdist size for no reader.
+prune confirmation-gifs
