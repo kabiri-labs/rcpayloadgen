@@ -8,6 +8,8 @@ formats, or the template schema.
 
 ## [Unreleased]
 
+## [2.35.0] — 2026-08-20
+
 ### Added
 
 - **RCEKit is installable from PyPI**: `pipx install rcekit` (or
@@ -975,7 +977,8 @@ this file and have not been restated here.
 - **[2.7.0]**
 - **[2.1.0]**
 
-[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.34.1...HEAD
+[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.35.0...HEAD
+[2.35.0]: https://github.com/kabiri-labs/rcekit/compare/v2.34.1...v2.35.0
 [2.34.1]: https://github.com/kabiri-labs/rcekit/compare/v2.34.0...v2.34.1
 [2.34.0]: https://github.com/kabiri-labs/rcekit/compare/v2.33.0...v2.34.0
 [2.33.0]: https://github.com/kabiri-labs/rcekit/compare/v2.32.0...v2.33.0
