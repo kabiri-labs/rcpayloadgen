@@ -14,16 +14,34 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("rcekit.log"),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
 logger = logging.getLogger(__name__)
+
+
+def configure_logging() -> None:
+    """Attach RCEKit's file and stdout log handlers.
+
+    Called from :func:`main`, never at import. Importing a module must not
+    create files in the caller's working directory -- and this one did: a bare
+    ``import rcekit`` wrote ``rcekit.log`` wherever the interpreter happened to
+    be, because ``FileHandler`` opens its file the moment it is constructed.
+    That is untenable for an installed distribution, where the module is
+    imported by tooling that never intends to run a scan.
+
+    ``basicConfig`` is a no-op once the root logger has handlers, so calling
+    this twice, or calling it from a host application that configured its own
+    logging, changes nothing."""
+    # The file handler runs a level below the console one on purpose: detail
+    # that would be noise on an operator's terminal is still worth having in
+    # the log when a run has to be reconstructed afterwards.
+    file_handler = logging.FileHandler("rcekit.log")
+    file_handler.setLevel(logging.DEBUG)
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[file_handler, console_handler],
+    )
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
@@ -573,7 +591,8 @@ class RCEKit:
         written for.
 
         Parsed lazily so the in-repo path never pays for it."""
-        self.corpus_source = "built-in (no templates/payloads.json beside the script)"
+        self.corpus_source = ("built-in (embedded in rcekit.py)" if self.standalone_layout()
+                              else "built-in (no templates/payloads.json beside the script)")
         try:
             data = json.loads(EMBEDDED_PAYLOAD_CORPUS)
             self.payload_categories = data.get("payload_categories", {})
@@ -588,11 +607,34 @@ class RCEKit:
             self.detection_payloads = {}
             self.template_error = message
             return
-        logger.info("using the built-in payload corpus (%s not found)", self.template_path)
+        # Debug, not info: on an installed run this is the normal path, and a
+        # line on stdout every time would read as though something were wrong.
+        # It still lands in rcekit.log, which is where a run gets reconstructed.
+        logger.debug("using the built-in payload corpus (%s not found)", self.template_path)
 
     def uses_embedded_corpus(self) -> bool:
         """Whether the run fell back to the corpus embedded in this file."""
         return self.corpus_source.startswith("built-in")
+
+    def standalone_layout(self) -> bool:
+        """Whether this copy of rcekit.py ships without a corpus directory.
+
+        The two ways to run RCEKit without ``templates/payloads.json`` are not
+        the same event, and telling the operator so is the whole point of the
+        distinction:
+
+        * **No ``templates/`` directory at all** — an installed wheel, or a lone
+          ``rcekit.py`` curled onto a jump box. The embedded corpus *is* the
+          corpus here; there is nothing missing, so there is nothing to report.
+        * **A ``templates/`` directory that exists without its corpus file** — a
+          checkout where the file was deleted, moved or never generated. That is
+          a real finding, and staying quiet about it would let someone believe
+          they were running an edited corpus when they were not.
+
+        Keyed on the directory rather than on ``__file__`` living in
+        site-packages: an air-gapped copy of the single file has no site-packages
+        and must still be treated as a first-class way to run."""
+        return not self.template_path.parent.is_dir()
 
     def _corpus_stats(self) -> Tuple[int, int, Set[str]]:
         """Return (exploit payload count, environment count, environments)."""
@@ -5551,13 +5593,18 @@ def load_token_manifest(path: str) -> Dict[str, Dict[str, Any]]:
     return tokens
 
 
-def main():
+def main(argv: Optional[List[str]] = None) -> int:
     """CLI entry point. Returns the process exit status: ``0`` when the
     requested run completed (including a verification that confirmed nothing —
     that is a result, not a failure) and ``1`` when RCEKit could not carry the
     run out at all: unusable corpus or profile, missing consent, an unreadable
     or unmarked request, or an invalid option combination. Scripts and CI can
-    therefore branch on the status instead of scraping stdout."""
+    therefore branch on the status instead of scraping stdout.
+
+    ``argv`` defaults to ``sys.argv[1:]``. Taking it as an argument is what lets
+    a test drive the CLI in-process, and what keeps the console-script entry
+    point (``rcekit = "rcekit:main"``) a plain zero-argument call."""
+    configure_logging()
     parser = argparse.ArgumentParser(description="Generate RCE payloads for penetration testing")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("-o", "--output", default="rce_payloads.txt",
@@ -5830,7 +5877,7 @@ def main():
     parser.add_argument("--sink-decodes", nargs="+", default=None,
                         help="Encodings the sink decodes before use (e.g. base64); those variants become valid and are generated")
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.listen:
         import time
@@ -5858,7 +5905,7 @@ def main():
             correlated = {h["token"] for h in listener.hits if h["payload"]}
             print(f"\n[listen] stopped: {len(listener.hits)} callbacks, "
                   f"{len(unique)} unique tokens, {len(correlated)} correlated to a payload.")
-        return
+        return 0
 
     # A target profile supplies defaults for the selection and filter options;
     # any explicit CLI flag overrides the matching profile field.
@@ -5942,9 +5989,13 @@ def main():
     )
     generator.insecure = args.insecure
 
-    # Never silent: someone who thinks they are running an edited corpus must not
-    # discover only from the results that they were running the built-in one.
-    if generator.uses_embedded_corpus():
+    # Never silent about a corpus that should have been there: someone who
+    # thinks they are running an edited corpus must not discover only from the
+    # results that they were running the built-in one. But an installed wheel
+    # and a lone rcekit.py have no corpus directory at all -- the embedded copy
+    # is the corpus -- so there is nothing to warn about and the notice would be
+    # a permanent false alarm.
+    if generator.uses_embedded_corpus() and not generator.standalone_layout():
         print(f"[i] Using the built-in payload corpus ({generator.template_path} not found). "
               "Pass --template-file to use your own.")
 
@@ -6054,7 +6105,7 @@ def main():
                 print(f"  [{result['category']}] {result['payload']!r}   ({result['detail']})")
         else:
             print("\n[verify-chain] No execution confirmed.")
-        return
+        return 0
 
     if args.verify_url or args.request_file:
         if not args.acknowledge_consent:
@@ -6567,7 +6618,7 @@ def main():
                           "may not fit its sink/context (try --environments/--contexts).")
                     for line in blind_sink_advice(method_names, args):
                         print(line)
-            return
+            return 0
         results = generator.run_verification(
             to_send, url=verify_url, method=method, data=verify_data,
             headers=verify_headers, delay=args.verify_delay, timeout=args.verify_timeout,
@@ -6602,7 +6653,7 @@ def main():
         if not confirmed and not oob_pending:
             print("\n[verify] No execution confirmed. The target may be patched, or the payloads "
                   "may not fit its sink/context (try --target-profile or a different --environments/--contexts).")
-        return
+        return 0
 
     if args.output_format == "text" and not args.include_metadata and selected_encodings:
         # A decoder-required encoding is fine when the sink is known to decode it.
@@ -6642,6 +6693,7 @@ def main():
         return 1
 
     print(f"Generated {count} payloads to {args.output} in {mode} mode")
+    return 0
 
 # --- BEGIN EMBEDDED PAYLOAD CORPUS (generated by tools/embed_corpus.py) ---
 # Source: templates/payloads.json — edit that file, then re-run the script.
@@ -7410,4 +7462,4 @@ EMBEDDED_PAYLOAD_CORPUS = r"""
 # --- END EMBEDDED PAYLOAD CORPUS ---
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())
