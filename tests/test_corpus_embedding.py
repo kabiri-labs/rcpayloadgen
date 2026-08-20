@@ -76,8 +76,26 @@ class StandaloneScriptTestCase(unittest.TestCase):
         self.assertIn("built-in", result.stdout)
         self.assertIn("[doctor] OK", result.stdout)
 
-    def test_fallback_is_announced(self):
-        """Silently swapping the corpus would mislead anyone who edited theirs."""
+    def test_a_lone_script_says_nothing_about_a_missing_corpus(self):
+        """There is no missing corpus here, so there is nothing to announce.
+
+        A lone `rcekit.py` — curled onto a jump box, or installed as a wheel —
+        ships no `templates/` directory at all. The embedded corpus *is* the
+        corpus in that layout, and a notice on every run would be a permanent
+        false alarm telling the operator a file is missing that was never meant
+        to be there."""
+        result = run("rcekit.py", "--doctor", cwd=self.tmp)
+        self.assertNotIn("Using the built-in payload corpus", result.stdout)
+        self.assertNotIn("not found", result.stdout)
+
+    def test_a_corpus_directory_without_its_file_is_announced(self):
+        """The case the notice was written for, and it still fires.
+
+        A `templates/` directory that exists without `payloads.json` is a
+        checkout where the file was deleted, moved or never generated. Silently
+        swapping in the built-in corpus there would mislead anyone who believed
+        they were running an edited one."""
+        (Path(self.tmp) / "templates").mkdir()
         result = run("rcekit.py", "--doctor", cwd=self.tmp)
         self.assertIn("Using the built-in payload corpus", result.stdout)
 

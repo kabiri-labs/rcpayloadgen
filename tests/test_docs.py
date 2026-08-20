@@ -7,9 +7,11 @@ dependency.
 """
 
 import html
+import os
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -78,6 +80,65 @@ class VersionBadgeTestCase(unittest.TestCase):
             rcekit.__version__,
             "README version badge is out of sync with rcekit.__version__",
         )
+
+
+    def test_cli_version_matches_dunder_version(self):
+        """The packaged version and the reported version are the same string.
+
+        `pyproject.toml` reads the release version from `rcekit.__version__`,
+        and the publish workflow refuses to build when the git tag disagrees
+        with it. So a `--version` that reported anything else would put a
+        number on a wheel that the tool itself denies -- and PyPI never lets a
+        version be re-uploaded, so the mistake would be permanent."""
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--version"],
+            cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        reported = result.stdout.strip().split()[-1]
+        self.assertEqual(reported, rcekit.__version__)
+
+    def test_dunder_version_is_a_static_literal(self):
+        """Readable without importing the module.
+
+        setuptools reads it with `attr:`, which parses the source when it can
+        rather than executing it. A computed value would still work today and
+        break the moment the build backend takes the static path."""
+        source = SCRIPT.read_text(encoding="utf-8")
+        match = re.search(r'^__version__ = "(\d+\.\d+\.\d+)"$', source, re.MULTILINE)
+        self.assertIsNotNone(match, "__version__ is not a plain string literal")
+        self.assertEqual(match.group(1), rcekit.__version__)
+
+
+class ImportPurityTestCase(unittest.TestCase):
+    """`import rcekit` must do nothing but define names.
+
+    It used to configure logging at module scope, and `logging.FileHandler`
+    opens its file on construction -- so importing the module wrote `rcekit.log`
+    into whatever directory the interpreter happened to be in. Harmless in a
+    repo checkout, indefensible once the module is installed and imported by
+    tooling that never intends to run a scan."""
+
+    def test_importing_creates_no_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "rcekit.py"
+            script.write_bytes(SCRIPT.read_bytes())
+            before = set(os.listdir(tmp))
+            result = subprocess.run(
+                [sys.executable, "-c", "import rcekit"],
+                cwd=tmp, capture_output=True, text=True, timeout=120,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            created = set(os.listdir(tmp)) - before - {"__pycache__"}
+        self.assertEqual(created, set(), f"import created files: {sorted(created)}")
+
+    def test_importing_writes_nothing_to_stdout(self):
+        result = subprocess.run(
+            [sys.executable, "-c", "import rcekit"],
+            cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
 
 
 class ChangelogTestCase(unittest.TestCase):

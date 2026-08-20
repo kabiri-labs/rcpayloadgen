@@ -1419,6 +1419,94 @@ class DoctorTestCase(unittest.TestCase):
             self.assertFalse(out.exists())
 
 
+class InstalledShapeTestCase(unittest.TestCase):
+    """How RCEKit behaves with no corpus directory beside it.
+
+    That is what an installed wheel looks like — `py-modules = ["rcekit"]` ships
+    the module and nothing else — and what a lone `rcekit.py` curled onto a jump
+    box looks like. In both, the embedded corpus *is* the corpus: nothing is
+    missing, so nothing should be reported as missing.
+
+    The distinction that carries this is the corpus **directory**, not the file.
+    A `templates/` directory that exists without its `payloads.json` is a
+    checkout where something was deleted or never generated, and staying quiet
+    about that would let someone believe they were running an edited corpus when
+    they were not."""
+
+    def _copy_module(self, directory):
+        target = Path(directory) / "rcekit.py"
+        target.write_bytes(SCRIPT.read_bytes())
+        return target
+
+    def _run(self, cwd, *args):
+        return subprocess.run(
+            [sys.executable, "rcekit.py", *args],
+            cwd=str(cwd), capture_output=True, text=True, timeout=120,
+        )
+
+    def test_no_corpus_directory_is_silent_and_healthy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._copy_module(tmp)
+            res = self._run(tmp, "--doctor")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("[doctor] OK", res.stdout)
+        # The two things that made an installed run read as broken.
+        self.assertNotIn("not found", res.stdout)
+        self.assertNotIn("[i] Using the built-in payload corpus", res.stdout)
+
+    def test_the_doctor_names_the_embedded_corpus_as_a_source_not_a_fault(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._copy_module(tmp)
+            res = self._run(tmp, "--doctor")
+        self.assertIn("corpus: built-in (embedded in rcekit.py)", res.stdout)
+        self.assertIn("[ok] corpus loaded and parsed", res.stdout)
+
+    def test_a_corpus_directory_without_its_file_still_says_so(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._copy_module(tmp)
+            (Path(tmp) / "templates").mkdir()
+            res = self._run(tmp, "--doctor")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("[i] Using the built-in payload corpus", res.stdout)
+
+    def test_a_corrupt_corpus_beside_the_module_still_refuses_to_run(self):
+        # The fallback is for an *absent* corpus only. Falling back over a
+        # corrupt one would mask a truncated or tampered file, which is the case
+        # the hard-fail was written for.
+        with tempfile.TemporaryDirectory() as tmp:
+            self._copy_module(tmp)
+            templates = Path(tmp) / "templates"
+            templates.mkdir()
+            (templates / "payloads.json").write_text("{ not json", encoding="utf-8")
+            doctor = self._run(tmp, "--doctor")
+            run = self._run(tmp, "--detection-only", "-o", str(Path(tmp) / "out.txt"))
+        self.assertEqual(doctor.returncode, 1, doctor.stdout)
+        self.assertIn("[FAIL]", doctor.stdout)
+        self.assertEqual(run.returncode, 1, run.stdout)
+
+    def test_an_explicit_template_file_never_falls_back(self):
+        # "I pointed at my corpus" has to keep meaning what it says, whatever
+        # layout the module is running from.
+        with tempfile.TemporaryDirectory() as tmp:
+            self._copy_module(tmp)
+            out = Path(tmp) / "out.txt"
+            res = self._run(tmp, "--detection-only", "--template-file",
+                            str(Path(tmp) / "nope.json"), "-o", str(out))
+            self.assertEqual(res.returncode, 1, res.stdout)
+            self.assertFalse(out.exists(), "a refused run must not leave output behind")
+
+    def test_a_detection_run_works_with_no_corpus_directory(self):
+        # The embedded corpus has to actually serve a run, not merely pass the
+        # doctor: an installed wheel has nothing else to fall back to.
+        with tempfile.TemporaryDirectory() as tmp:
+            self._copy_module(tmp)
+            out = Path(tmp) / "payloads.txt"
+            res = self._run(tmp, "--detection-only", "-o", str(out), "--max-payloads", "5")
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+            self.assertTrue(out.exists())
+            self.assertTrue(out.read_text(encoding="utf-8").strip())
+
+
 class NewSinkCoverageTestCase(unittest.TestCase):
     """Sinks added from the real-world Vulhub evaluation. Each new payload must
     carry the right machine-readable oracle so verification can confirm it."""
