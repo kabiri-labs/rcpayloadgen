@@ -45,7 +45,7 @@ def configure_logging() -> None:
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "2.35.0"
+__version__ = "2.35.1"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -1022,6 +1022,39 @@ class RCEKit:
             return payload.replace("\r", " ").replace("\n", " ")
         return payload
 
+    def _known_environments(self, mode: str) -> Set[str]:
+        """Every environment name the corpus can actually yield in ``mode``."""
+        if mode == "detection":
+            return set(self.detection_payloads)
+        known: Set[str] = set()
+        for category in self.payload_categories.values():
+            known.update(category)
+        return known
+
+    def _warn_unknown_selectors(self, mode: str,
+                                selected_environments: Optional[List[str]],
+                                selected_encodings: Optional[List[str]]) -> None:
+        """Name any explicitly selected environment or encoding that matches
+        nothing, once each.
+
+        A selector that matches nothing produces an empty run, and an empty run
+        is reported as a success -- so ``--environments linux`` (the corpus
+        calls it ``unix``) is indistinguishable from a target for which there
+        are simply no payloads. Unknown contexts and categories were already
+        named; these two went by in silence. Only *explicit* selections are
+        checked: the defaults are the corpus's own and must not warn."""
+        if selected_environments:
+            known = self._known_environments(mode)
+            for env in dict.fromkeys(selected_environments):
+                if env not in known:
+                    logger.warning("Unknown environment: %s (known: %s)",
+                                   env, ", ".join(sorted(known)))
+        if selected_encodings:
+            for enc in dict.fromkeys(selected_encodings):
+                if enc not in self.encoding_methods:
+                    logger.warning("Unknown encoding: %s (known: %s)",
+                                   enc, ", ".join(sorted(self.encoding_methods)))
+
     def generate_payload_records(
         self,
         selected_contexts: Optional[List[str]] = None,
@@ -1039,6 +1072,7 @@ class RCEKit:
         encodings = selected_encodings if selected_encodings else (
             self.safe_detection_encodings if mode == "detection" else list(self.default_encodings)
         )
+        self._warn_unknown_selectors(mode, selected_environments, selected_encodings)
 
         if mode == "detection":
             environments = selected_environments if selected_environments else list(self.detection_payloads.keys())
@@ -1497,7 +1531,18 @@ class RCEKit:
                     for entry in manifest:
                         map_file.write(json.dumps(entry, ensure_ascii=True) + "\n")
 
-            logger.info("Successfully generated %s payloads to %s", count, output_path)
+            if count:
+                logger.info("Successfully generated %s payloads to %s", count, output_path)
+            else:
+                # "Successfully generated 0 payloads" reads as a target with
+                # nothing to fire at. Far more often it is a selector that
+                # matched nothing, and the operator needs to hear the
+                # difference before they conclude anything from the run.
+                logger.warning(
+                    "No payloads matched the selection -- %s is empty. Check "
+                    "--contexts/--categories/--encodings/--environments and any "
+                    "--target-profile filters (--deny-chars, --max-length).",
+                    output_path)
             if include_metadata and output_format == "text":
                 logger.info("Metadata sidecar written to %s", metadata_path)
             if manifest:
@@ -2044,7 +2089,18 @@ class RCEKit:
                 return (response.status, text, self._channels_from_response(response, text, target),
                         time.time() - start)
         except urllib.error.HTTPError as exc:
-            text = exc.read().decode(errors="replace")
+            # Reading the error body can itself fail: a target that truncates
+            # its own error response -- a Content-Length it never delivers,
+            # then a reset -- raises here, mid-`except`. An exception raised
+            # inside an except block is NOT caught by the sibling handler
+            # below, so without this guard one malformed error response ends
+            # the whole run and every probe fired so far is lost. The status
+            # is what the caller needs most; an unreadable body is a body we
+            # report as empty, exactly as a delivery failure would.
+            try:
+                text = exc.read().decode(errors="replace")
+            except Exception:
+                text = ""
             return (exc.code, text, self._channels_from_response(exc, text, target),
                     time.time() - start)
         except Exception as exc:  # network error, timeout, etc.
@@ -2892,6 +2948,31 @@ class RCEKit:
         except Exception as exc:
             logger.error("Unable to log exploitation usage: %s", exc)
 
+
+def terminal_safe(text: str) -> str:
+    """Escape control characters for display on the operator's terminal.
+
+    A callback's host and path are chosen by the *target*, which in an
+    engagement is hostile by definition. Printed raw, an ESC byte lets that
+    target colour, erase and rewrite lines in the operator's own terminal --
+    hiding a genuine hit behind ``\\x1b[2K\\r``, or forging one that never
+    arrived. For a tool whose whole claim is that its output can be trusted,
+    that is the output being forged.
+
+    Escaped rather than stripped: what arrived is still visible, as ``\\xNN``,
+    so the operator can see that something tried this. Only the display is
+    changed -- the recorded hit and the JSONL log keep the bytes verbatim."""
+    out: List[str] = []
+    for char in text:
+        if char.isprintable():
+            out.append(char)
+        elif ord(char) <= 0xFF:
+            out.append("\\x%02x" % ord(char))
+        else:
+            out.append("\\u%04x" % ord(char))
+    return "".join(out)
+
+
 class OOBListener:
     """A lightweight out-of-band listener that records DNS/HTTP callbacks and
     correlates each one back to the payload whose unique token produced it.
@@ -2952,12 +3033,19 @@ class OOBListener:
             "context": entry.get("context") if entry else None,
         }
         self.hits.append(hit)
-        where = f"{host or path}"
+        # Everything interpolated below reached us over the wire (or, for the
+        # manifest fields, out of a file the operator may have hand-edited),
+        # so none of it goes to the terminal unescaped. The hit recorded above
+        # keeps the raw bytes.
+        where = terminal_safe(f"{host or path}")
+        safe_token = terminal_safe(token) if token else token
         if entry:
-            print(f"[HIT] {proto} token={token} from {source} -> {entry.get('payload')} "
-                  f"[{entry.get('category')}/{entry.get('context')}]")
+            print(f"[HIT] {proto} token={safe_token} from {source} "
+                  f"-> {terminal_safe(str(entry.get('payload')))} "
+                  f"[{terminal_safe(str(entry.get('category')))}/"
+                  f"{terminal_safe(str(entry.get('context')))}]")
         else:
-            print(f"[HIT] {proto} from {source} -> {where}  (token={token}; not in manifest)")
+            print(f"[HIT] {proto} from {source} -> {where}  (token={safe_token}; not in manifest)")
         if self.log_path:
             try:
                 with open(self.log_path, "a", encoding="utf-8") as log_file:
@@ -5576,6 +5664,62 @@ def build_request_inputs(text: str, param: Optional[str] = None,
     return url, method, data, out_headers, injection
 
 
+# Selector fields a profile may give as a list of names or as one
+# comma-separated string. Normalised to a list, because a bare string handed
+# to the generator would be iterated *character by character* -- "unix" would
+# select nothing at all, silently.
+_PROFILE_LIST_FIELDS = ("environments", "contexts", "categories", "encodings",
+                        "sink_decodes")
+# Fields whose string form main() already knows how to split itself.
+_PROFILE_STRING_OR_LIST_FIELDS = ("separators", "eval_engines")
+
+
+def validate_target_profile(profile: Any) -> Dict[str, Any]:
+    """Check a loaded target profile's shape and normalise its selector fields,
+    raising ``ValueError`` with an operator-readable message.
+
+    A profile is a file someone writes by hand, so the failure to design for is
+    a typo: a number where a character set belongs, a bare string where a list
+    does. Left unchecked those surface far from their cause -- as a ``TypeError``
+    deep in the payload filter, or as a run that quietly generates nothing.
+    Every check here guards a field the caller goes on to join, index, or
+    compare."""
+    if not isinstance(profile, dict):
+        raise ValueError(f"a target profile must be a JSON object, not "
+                         f"{type(profile).__name__}.")
+
+    def _names(field: str, value: Any) -> List[str]:
+        if isinstance(value, str):
+            return [part.strip() for part in value.split(",") if part.strip()]
+        if isinstance(value, (list, tuple)) and all(isinstance(v, str) for v in value):
+            return list(value)
+        raise ValueError(f"'{field}' must be a string or a list of strings, "
+                         f"not {type(value).__name__}.")
+
+    for field in _PROFILE_LIST_FIELDS:
+        if profile.get(field) is not None:
+            profile[field] = _names(field, profile[field])
+    for field in _PROFILE_STRING_OR_LIST_FIELDS:
+        if profile.get(field) is not None and not isinstance(profile[field], str):
+            _names(field, profile[field])
+
+    deny = profile.get("deny_chars")
+    # A string is already a set of characters; a list is joined into one.
+    if deny is not None and not isinstance(deny, str):
+        _names("deny_chars", deny)
+
+    length = profile.get("max_length")
+    if length is not None and (isinstance(length, bool) or not isinstance(length, int)):
+        raise ValueError(f"'max_length' must be a whole number, not "
+                         f"{type(length).__name__}.")
+
+    request = profile.get("request")
+    if request is not None and not isinstance(request, dict):
+        raise ValueError(f"'request' must be a JSON object, not "
+                         f"{type(request).__name__}.")
+    return profile
+
+
 def load_token_manifest(path: str) -> Dict[str, Dict[str, Any]]:
     """Load a .map.jsonl manifest into a token -> entry dict."""
     tokens: Dict[str, Dict[str, Any]] = {}
@@ -5913,7 +6057,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.target_profile:
         try:
             with open(args.target_profile, "r", encoding="utf-8") as profile_file:
-                profile = json.load(profile_file)
+                profile = validate_target_profile(json.load(profile_file))
         except Exception as exc:
             print(f"[!] Unable to load target profile {args.target_profile}: {exc}")
             return 1

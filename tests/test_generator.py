@@ -6256,3 +6256,215 @@ class DeserializationSinkTestCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TruncatedErrorResponseTestCase(unittest.TestCase):
+    """A target may cut its own error response short. Reading that body raises
+    *inside* the ``except HTTPError`` handler, where the sibling ``except
+    Exception`` cannot catch it -- so before the guard, one malformed error
+    response ended the whole run and lost every probe already fired."""
+
+    def _serve(self, handler):
+        import socket
+        import threading
+        server = socket.socket()
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", 0))
+        server.listen(8)
+        port = server.getsockname()[1]
+
+        def loop():
+            while True:
+                try:
+                    conn, _ = server.accept()
+                except OSError:
+                    return
+                threading.Thread(target=handler, args=(conn,), daemon=True).start()
+
+        threading.Thread(target=loop, daemon=True).start()
+        self.addCleanup(server.close)
+        return port
+
+    def test_error_body_that_never_arrives_does_not_end_the_run(self):
+        def truncate(conn):
+            # Promise 4000 bytes, send 10, then reset the connection.
+            conn.sendall(b"HTTP/1.1 500 Internal Server Error\r\n"
+                         b"Content-Length: 4000\r\n\r\n" + b"A" * 10)
+            conn.close()
+
+        port = self._serve(truncate)
+        generator = RCEKit()
+        status, body, channels, elapsed = generator._fire_channels(
+            "probe", f"http://127.0.0.1:{port}/x?cmd=FUZZ", "GET", None, None,
+            "query_value", "json_string", 5)
+        # The status is what the caller needs most; an unreadable body is
+        # reported as empty rather than as a traceback.
+        self.assertIn(status, (500, None))
+        self.assertIsInstance(body, str)
+        self.assertIsInstance(channels, list)
+        self.assertGreaterEqual(elapsed, 0.0)
+
+    def test_readable_error_body_is_still_returned(self):
+        """The guard must not cost the 500-stack-trace confirmations it exists
+        alongside: a complete error body still comes back in full."""
+        def complete(conn):
+            body = b"computed 1355862 here"
+            conn.sendall(b"HTTP/1.1 500 Internal Server Error\r\n"
+                         b"Content-Length: %d\r\n\r\n" % len(body) + body)
+            conn.close()
+
+        port = self._serve(complete)
+        generator = RCEKit()
+        status, body, _, _ = generator._fire_channels(
+            "probe", f"http://127.0.0.1:{port}/x?cmd=FUZZ", "GET", None, None,
+            "query_value", "json_string", 5)
+        self.assertEqual(status, 500)
+        self.assertIn("1355862", body)
+
+
+class TargetProfileValidationTestCase(unittest.TestCase):
+    """A profile is hand-edited, so a typo in one is ordinary. It must produce
+    an operator-readable message, not a traceback thousands of payloads later."""
+
+    def test_top_level_must_be_an_object(self):
+        for value in ([], None, "hello", 42, True):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError) as caught:
+                    rcekit.validate_target_profile(value)
+                self.assertIn("must be a JSON object", str(caught.exception))
+
+    def test_selector_fields_reject_non_string_values(self):
+        for field in ("environments", "contexts", "categories", "encodings",
+                      "sink_decodes"):
+            with self.subTest(field=field):
+                with self.assertRaises(ValueError) as caught:
+                    rcekit.validate_target_profile({field: 5})
+                self.assertIn(field, str(caught.exception))
+
+    def test_selector_string_is_one_name_not_one_character_each(self):
+        """``"unix"`` iterated as characters selected nothing at all, and the
+        empty run that followed was reported as a success."""
+        profile = rcekit.validate_target_profile({"environments": "unix"})
+        self.assertEqual(profile["environments"], ["unix"])
+        profile = rcekit.validate_target_profile({"contexts": "raw, html"})
+        self.assertEqual(profile["contexts"], ["raw", "html"])
+
+    def test_deny_chars_accepts_a_string_or_a_list(self):
+        self.assertEqual(
+            rcekit.validate_target_profile({"deny_chars": ";|&"})["deny_chars"], ";|&")
+        self.assertEqual(
+            rcekit.validate_target_profile({"deny_chars": [";", "|"]})["deny_chars"],
+            [";", "|"])
+        for bad in (123, True, {"a": 1}):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    rcekit.validate_target_profile({"deny_chars": bad})
+
+    def test_max_length_must_be_a_whole_number(self):
+        self.assertEqual(
+            rcekit.validate_target_profile({"max_length": 120})["max_length"], 120)
+        for bad in ("abc", [1], {}, True):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError) as caught:
+                    rcekit.validate_target_profile({"max_length": bad})
+                self.assertIn("max_length", str(caught.exception))
+
+    def test_request_must_be_an_object(self):
+        with self.assertRaises(ValueError) as caught:
+            rcekit.validate_target_profile({"request": 5})
+        self.assertIn("request", str(caught.exception))
+
+    def test_shipped_profiles_all_validate(self):
+        shipped = sorted((Path(__file__).resolve().parent.parent / "profiles").glob("*.json"))
+        self.assertTrue(shipped, "no profiles shipped to validate")
+        for path in shipped:
+            with self.subTest(profile=path.name):
+                with path.open(encoding="utf-8") as handle:
+                    rcekit.validate_target_profile(json.load(handle))
+
+
+class UnknownSelectorWarningTestCase(unittest.TestCase):
+    """A selector matching nothing yields an empty run, and an empty run reads
+    as 'this target has no payloads'. Unknown names have to be named."""
+
+    def test_unknown_environment_is_named(self):
+        generator = RCEKit()
+        with self.assertLogs("rcekit", level="WARNING") as logs:
+            list(generator.generate_payload_records(selected_environments=["linux"]))
+        joined = "\n".join(logs.output)
+        self.assertIn("Unknown environment: linux", joined)
+        # The message has to carry the answer, not just the complaint.
+        self.assertIn("unix", joined)
+
+    def test_unknown_encoding_is_named(self):
+        generator = RCEKit()
+        with self.assertLogs("rcekit", level="WARNING") as logs:
+            list(generator.generate_payload_records(selected_encodings=["nosuchenc"]))
+        self.assertIn("Unknown encoding: nosuchenc", "\n".join(logs.output))
+
+    def test_known_selectors_stay_quiet(self):
+        generator = RCEKit()
+        with self.assertLogs("rcekit", level="WARNING") as logs:
+            logger_under_test = rcekit.logger
+            logger_under_test.warning("sentinel")
+            list(generator.generate_payload_records(
+                selected_environments=["unix"], selected_encodings=["url_encode"]))
+        self.assertEqual([line for line in logs.output if "Unknown" in line], [])
+
+    def test_defaults_never_warn(self):
+        """The default lists are the corpus's own; warning on them would make
+        every ordinary run noisy."""
+        generator = RCEKit()
+        with self.assertLogs("rcekit", level="WARNING") as logs:
+            rcekit.logger.warning("sentinel")
+            list(generator.generate_payload_records(max_safety="safe"))
+        self.assertEqual(
+            [line for line in logs.output if "Unknown environment" in line], [])
+
+
+class TerminalSafeOutputTestCase(unittest.TestCase):
+    """A callback's host and path are chosen by the target. Printed raw, an ESC
+    byte lets that target rewrite the operator's terminal -- hiding a real hit
+    or forging one."""
+
+    def test_control_bytes_are_escaped(self):
+        self.assertEqual(rcekit.terminal_safe("a\x1b[31mb"), "a\\x1b[31mb")
+        self.assertEqual(rcekit.terminal_safe("x\ry\nz"), "x\\x0dy\\x0az")
+        self.assertEqual(rcekit.terminal_safe("nul\x00here"), "nul\\x00here")
+
+    def test_printable_text_is_untouched(self):
+        for text in ("plain.host.example", "/path?q=1", "; curl http://x/", "héllo"):
+            with self.subTest(text=text):
+                self.assertEqual(rcekit.terminal_safe(text), text)
+
+    def test_non_bmp_and_separator_codepoints_are_escaped(self):
+        # U+2028 LINE SEPARATOR is non-printable but above 0xFF.
+        self.assertEqual(rcekit.terminal_safe("a b"), "a\\u2028b")
+
+    def test_listener_never_prints_a_raw_escape(self):
+        import contextlib
+        import io
+        listener = OOBListener()
+        hostile = "evil\x1b[31mRED\x1b[0m\x1b[2K\rspoofed"
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            hit = listener.record("http", "10.0.0.5", hostile, "/cb")
+        printed = buffer.getvalue()
+        self.assertNotIn("\x1b", printed)
+        self.assertNotIn("\r", printed)
+        self.assertIn("\\x1b", printed)
+        # The record itself stays faithful -- only the display is escaped.
+        self.assertEqual(hit["host"], hostile)
+
+    def test_manifest_payload_is_escaped_on_the_hit_line(self):
+        tokens = {"tok1": {"payload": "; curl http://tok1.oob.test/\r\n",
+                           "category": "oob", "context": "raw"}}
+        listener = OOBListener(tokens=tokens)
+        import contextlib
+        import io
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            listener.record("dns", "10.0.0.5", "tok1.oob.test", "")
+        printed = buffer.getvalue()
+        self.assertNotIn("\r", printed)
+        self.assertIn("\\x0d", printed)
