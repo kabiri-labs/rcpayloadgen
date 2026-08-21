@@ -8,6 +8,45 @@ formats, or the template schema.
 
 ## [Unreleased]
 
+## [2.35.1] — 2026-08-21
+
+A robustness pass over error handling: no new capability, four ways the tool
+could crash or mislead on input it did not choose.
+
+### Fixed
+
+- **A truncated error response no longer ends the run.** Reading an
+  `HTTPError`'s body happens *inside* the `except` handler, where the sibling
+  `except Exception` cannot reach it — so a target that promised a
+  `Content-Length` it never delivered raised `ConnectionResetError` straight out
+  of `main()`, taking every probe already fired with it. The read is now
+  guarded: the status still comes back, an unreadable body is reported empty.
+  A body that *does* arrive is still returned in full — the 500-stack-trace
+  confirmations that branch exists for are unaffected.
+- **A `--target-profile` is checked before it is used.** A profile is written by
+  hand, so a typo in one is ordinary; it surfaced as a traceback. A top level
+  that is not a JSON object, `deny_chars` that is not text, a `max_length` that
+  is not a number, a selector field that is not a list of names — each is now an
+  operator-readable `[!]` message and exit 1, the same way the sink-shape fields
+  already behaved. Twelve inputs that produced an `AttributeError` or a
+  `TypeError` now produce a sentence.
+- **A selector field given as one string means one name.** `"environments":
+  "unix"` in a profile was iterated character by character, matched nothing, and
+  the empty run that followed was reported as a success. A string is now split
+  on commas: `"unix"` is `["unix"]`, `"raw, html"` is `["raw", "html"]`.
+- **Unknown `--environments` and `--encodings` are named.** Both were silent, so
+  `--environments linux` — the corpus calls it `unix` — produced an empty file
+  and exit 0, indistinguishable from a target with no payloads for it. Both now
+  warn and list the names that exist, as unknown contexts and categories already
+  did. An empty result is also no longer announced as "Successfully generated 0
+  payloads"; it says the selection matched nothing and points at the filters.
+- **A callback cannot rewrite the operator's terminal.** The host and path of an
+  OOB callback are chosen by the target. Printed raw, an ESC byte let that
+  target colour, erase and rewrite lines — hiding a genuine `[HIT]` behind
+  `\x1b[2K\r`, or forging one that never arrived. Control characters are now
+  escaped for display as `\xNN`; the recorded hit and the `--listen-log` JSONL
+  keep the bytes verbatim.
+
 ## [2.35.0] — 2026-08-20
 
 ### Added
@@ -977,7 +1016,8 @@ this file and have not been restated here.
 - **[2.7.0]**
 - **[2.1.0]**
 
-[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.35.0...HEAD
+[Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.35.1...HEAD
+[2.35.1]: https://github.com/kabiri-labs/rcekit/compare/v2.35.0...v2.35.1
 [2.35.0]: https://github.com/kabiri-labs/rcekit/compare/v2.34.1...v2.35.0
 [2.34.1]: https://github.com/kabiri-labs/rcekit/compare/v2.34.0...v2.34.1
 [2.34.0]: https://github.com/kabiri-labs/rcekit/compare/v2.33.0...v2.34.0
