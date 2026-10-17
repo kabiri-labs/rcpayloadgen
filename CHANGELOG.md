@@ -320,6 +320,16 @@ formats, or the template schema.
   What this does not change: nothing differs on the wire for a capture without a
   literal `FUZZ` in it, which is every capture the test suite and the docs use.
 
+  Threading the marker to the delivery layer **appends** it to every signature it
+  touches — `run_detection`, `run_verification`, `_fire`, `_fire_channels`,
+  `_escalate` and `_detect_body_location` — so no existing parameter moves. In
+  `run_detection` that puts it after `config` and `rng` rather than beside
+  `body_location` where it belongs by meaning, and deliberately: inserting it in
+  the obvious place shifted those two along by one, so a caller passing `config`
+  positionally bound a dict to `mark` and the first delivery raised `TypeError`
+  from `str.replace`. A test pins the ordering per signature, because the fix
+  looks like untidiness and the next tidy-up would reintroduce the break.
+
 ## [3.1.0] — 2026-10-17
 
 ### Added

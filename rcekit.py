@@ -3153,9 +3153,17 @@ class RCEKit:
                       max_payloads: Optional[int] = None,
                       url_location: str = "query_value",
                       body_location: Optional[str] = None,
-                      mark: str = "FUZZ",
                       config: Optional[Dict[str, Any]] = None,
-                      rng: Optional["random.Random"] = None) -> List[Dict[str, Any]]:
+                      rng: Optional["random.Random"] = None,
+                      # Last, and not beside `body_location` where it belongs by
+                      # meaning. Every other signature the marker was threaded
+                      # through took it by appending; inserting it here instead
+                      # moved `config` and `rng` along by one, so a caller
+                      # passing `config` positionally bound a dict to `mark` and
+                      # the first delivery raised `TypeError` from `str.replace`.
+                      # Tidying this back into its semantic place reintroduces
+                      # that, which `DuplicateMarkerTestCase` fails on.
+                      mark: str = "FUZZ") -> List[Dict[str, Any]]:
         """Method-driven RCE detection against an AUTHORISED target.
 
         For each selected :class:`DetectionMethod`, build probes from the
