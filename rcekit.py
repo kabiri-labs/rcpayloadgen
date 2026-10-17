@@ -46,7 +46,7 @@ def configure_logging() -> None:
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "3.1.0"
+__version__ = "3.1.1"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -2407,20 +2407,21 @@ class RCEKit:
 
     def _fire(self, payload: str, url: str, method: str, data: Optional[str],
               headers: Optional[List[str]], url_location: str, body_location: str,
-              timeout: float) -> Tuple[Optional[int], str, float]:
+              timeout: float, mark: str = "FUZZ") -> Tuple[Optional[int], str, float]:
         """Deliver one request and return ``(status, body, elapsed)``.
 
         The body-only view of :meth:`_fire_channels`, kept for callers whose
         oracle reads the body alone (the classic ``run_verification`` path)."""
         status, body, _channels, elapsed = self._fire_channels(
-            payload, url, method, data, headers, url_location, body_location, timeout)
+            payload, url, method, data, headers, url_location, body_location, timeout, mark)
         return status, body, elapsed
 
     def _fire_channels(self, payload: str, url: str, method: str, data: Optional[str],
                        headers: Optional[List[str]], url_location: str, body_location: str,
-                       timeout: float) -> Tuple[Optional[int], str, List[Tuple[str, str]], float]:
-        """Deliver one request with ``payload`` substituted at the FUZZ marker(s),
-        encoded independently for each injection point. Returns
+                       timeout: float, mark: str = "FUZZ"
+                       ) -> Tuple[Optional[int], str, List[Tuple[str, str]], float]:
+        """Deliver one request with ``payload`` substituted at ``mark`` wherever
+        it appears, encoded independently for each injection point. Returns
         ``(status, body, channels, elapsed)`` — ``status`` is ``None`` on a
         delivery error or timeout, in which case ``channels`` is empty. Shared
         delivery layer for ``run_verification`` and the method-driven detection
@@ -2434,7 +2435,7 @@ class RCEKit:
         import urllib.request
         import urllib.error
         target, body, hdrs = self._build_verify_request(
-            payload, url, data, headers, url_location, body_location)
+            payload, url, data, headers, url_location, body_location, mark)
         request = urllib.request.Request(target, data=body, headers=hdrs, method=method)
         # The context is built whatever the scheme: urllib follows a redirect
         # with the handler it was given, so an http:// target that lands on a
@@ -2598,9 +2599,10 @@ class RCEKit:
                          delay: float = 0.0, timeout: float = 8.0,
                          max_payloads: Optional[int] = None,
                          url_location: str = "query_value",
-                         body_location: Optional[str] = None) -> List[Dict[str, Any]]:
+                         body_location: Optional[str] = None,
+                         mark: str = "FUZZ") -> List[Dict[str, Any]]:
         """Fire payloads at an AUTHORISED target and confirm execution via each
-        payload's oracle (match regex / canary token / timing). The FUZZ marker in
+        payload's oracle (match regex / canary token / timing). ``mark`` in
         the URL / data / headers is replaced with the payload, encoded for the
         injection point it lands in: ``url_location`` for the URL, ``body_location``
         for the request body (auto-detected from Content-Type/body shape when not
@@ -2608,13 +2610,14 @@ class RCEKit:
         """
         import time
 
-        resolved_body_location = body_location or self._detect_body_location(data, headers)
+        resolved_body_location = body_location or self._detect_body_location(
+            data, headers, mark)
         if data is not None:
             logger.info("Verification body injected as '%s'", resolved_body_location)
 
         def fire(payload: str, req_timeout: Optional[float] = None):
             return self._fire(payload, url, method, data, headers, url_location,
-                              resolved_body_location, req_timeout or timeout)
+                              resolved_body_location, req_timeout or timeout, mark)
 
         # Baseline from several benign requests: a single sample can be a cold
         # start or a jitter spike, which would poison every timing verdict. Take
@@ -2977,7 +2980,8 @@ class RCEKit:
                   url_location: str, body_location: str, timeout: float,
                   control_status: Optional[int],
                   started_requests: int = 0,
-                  max_payloads: Optional[int] = None
+                  max_payloads: Optional[int] = None,
+                  mark: str = "FUZZ"
                   ) -> Optional[Tuple[str, Any, Any, Any, float]]:
         """Re-send a refused probe, climbing the rungs to the run's ceiling.
 
@@ -3037,7 +3041,7 @@ class RCEKit:
                 continue
             status, body, chans, elapsed = self._fire_channels(
                 climbed, url, method, data, headers, url_location, body_location,
-                timeout)
+                timeout, mark)
             # A retry is a request the target receives, so it is charged to the
             # same meter as the probe that prompted it. `escalated_probes`
             # counts these too, but that number describes the ladder rather
@@ -3149,6 +3153,7 @@ class RCEKit:
                       max_payloads: Optional[int] = None,
                       url_location: str = "query_value",
                       body_location: Optional[str] = None,
+                      mark: str = "FUZZ",
                       config: Optional[Dict[str, Any]] = None,
                       rng: Optional["random.Random"] = None) -> List[Dict[str, Any]]:
         """Method-driven RCE detection against an AUTHORISED target.
@@ -3171,7 +3176,8 @@ class RCEKit:
         confirm_depth = (config or {}).get("confirm_depth") or "first"
         # The ceiling a refused probe may climb to. `none` disables the retry.
         self.config_evade = (config or {}).get("evade") or "none"
-        resolved_body_location = body_location or self._detect_body_location(data, headers)
+        resolved_body_location = body_location or self._detect_body_location(
+            data, headers, mark)
         selected = [DETECTION_METHODS[name](self, config) for name in methods
                     if name in DETECTION_METHODS]
 
@@ -3182,7 +3188,7 @@ class RCEKit:
         # through is a payload a filter rejected, and that is not a negative.
         control_status, control_body, control_channels, _ = self._fire_channels(
             f"rcekit-control-{self._generate_canary()}", url, method, data, headers,
-            url_location, resolved_body_location, timeout)
+            url_location, resolved_body_location, timeout, mark)
 
         # The observed channel's control has to be taken *before* any probe is
         # sent, not after: the whole premise is that a probe changes what that
@@ -3279,7 +3285,7 @@ class RCEKit:
                             req_timeout = timeout + (probe.delay_s or 0.0) + 2.0
                             status, body, chans, elapsed = self._fire_channels(
                                 probe.payload, url, method, data, headers, url_location,
-                                resolved_body_location, req_timeout)
+                                resolved_body_location, req_timeout, mark)
                             self.delivered_probes += 1
                             # The same retry the per-probe path makes. `time`,
                             # `oob`, `lookup` and `deser` live in this branch,
@@ -3298,7 +3304,7 @@ class RCEKit:
                                 climbed = self._escalate(
                                     meth, probe, record, url, method, data, headers,
                                     url_location, resolved_body_location, req_timeout,
-                                    control_status, started_requests, max_payloads)
+                                    control_status, started_requests, max_payloads, mark)
                                 if climbed is not None:
                                     sent, status, body, chans, elapsed = climbed
                                     probe = dataclass_replace(probe, payload=sent)
@@ -3456,7 +3462,7 @@ class RCEKit:
                     seen.add(probe.payload)
                     status, body, chans, elapsed = self._fire_channels(
                         probe.payload, url, method, data, headers, url_location,
-                        resolved_body_location, timeout)
+                        resolved_body_location, timeout, mark)
                     self.delivered_probes += 1
                     # A followup fetch (file-based self-OOB): retrieve the file the
                     # probe asked the target to write. Its body is the confirmation
@@ -3482,7 +3488,7 @@ class RCEKit:
                         climbed = self._escalate(
                             meth, probe, record, url, method, data, headers,
                             url_location, resolved_body_location, timeout,
-                            control_status, started_requests, max_payloads)
+                            control_status, started_requests, max_payloads, mark)
                         if climbed is not None:
                             sent, status, body, chans, elapsed = climbed
                             probe = dataclass_replace(probe, payload=sent)
@@ -8542,6 +8548,28 @@ def _infer_request_scheme(host: str) -> str:
     return "https" if port == "443" else "http"
 
 
+def unique_marker(default: str = "FUZZ") -> str:
+    """A marker a capture cannot already be carrying.
+
+    The delivery layer substitutes the payload at *every* occurrence of the
+    marker, which is right for a marker the operator wrote -- two ``FUZZ`` in a
+    request mean both -- and wrong for one RCEKit inserted. Enumeration places
+    its own marker at a chosen point, so a capture that already contains the
+    literal ``FUZZ`` of its own then has two, the payload lands in both, and a
+    confirmation cannot be attributed to the point under test.
+
+    Only reached when that collision is real: the default marker is otherwise
+    left alone, because it is what every export, every doc example and the
+    inline path all name. The ``FUZZ`` prefix is kept so a marked request still
+    reads as marked in a debug dump.
+
+    Not a reason to think the substitution itself is bounded. It is not, and
+    the operator-written case needs it not to be; this only keeps RCEKit's own
+    marker from colliding with theirs."""
+    return default + "".join(
+        random.choice(string.ascii_uppercase + string.digits) for _ in range(10))
+
+
 def build_request_inputs(text: str, param: Optional[str] = None,
                          scheme: Optional[str] = None, mark: str = "FUZZ",
                          point: Optional[InjectionPoint] = None
@@ -9243,6 +9271,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         # `injection_runs` is non-empty only when enumerating: one entry per
         # candidate point, each a fully built request in its own encoding.
         injection_runs: List[Tuple[Any, str, str, Optional[str], List[str], str]] = []
+        # The marker the delivery layer substitutes at. Only enumeration ever
+        # changes it, and only to avoid colliding with one the capture already
+        # carries; every other path keeps the FUZZ that the exports, the docs
+        # and the inline marker all name.
+        enumeration_mark = "FUZZ"
         if args.request_file:
             try:
                 with open(args.request_file, "r", encoding="utf-8") as request_fh:
@@ -9295,10 +9328,22 @@ def main(argv: Optional[List[str]] = None) -> int:
                     return 1
                 dropped = max(0, len(points) - args.max_points)
                 points = points[:args.max_points]
+                # Enumeration is the one path that inserts a marker of its own
+                # into a request that may already carry one: a point wins over
+                # an inline marker by design, so a capture containing the
+                # literal FUZZ ends up with two and the payload lands in both.
+                # `-p NAME` cannot reach this -- a pre-existing marker sends it
+                # down the inline path instead, where every occurrence is the
+                # operator's and replacing all of them is the point.
+                enumeration_mark = (unique_marker() if "FUZZ" in raw_request else "FUZZ")
+                if enumeration_mark != "FUZZ":
+                    print("[verify] the capture already contains the literal FUZZ, so this run "
+                          "marks each point with a token of its own; the captured FUZZ is sent "
+                          "as the value it is.")
                 for point in points:
                     try:
                         built = build_request_inputs(raw_request, scheme=args.request_scheme,
-                                                     point=point)
+                                                     point=point, mark=enumeration_mark)
                     except ValueError:
                         continue
                     injection_runs.append((point, ) + built)
@@ -9763,6 +9808,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                             timeout=args.verify_timeout, max_payloads=remaining,
                             url_location=args.verify_url_location,
                             body_location=point_location,
+                            mark=enumeration_mark,
                             config=detection_config,
                         )
                         point_results.extend(wave_results)
@@ -9782,6 +9828,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     data=verify_data, headers=verify_headers, delay=args.verify_delay,
                     timeout=args.verify_timeout, max_payloads=args.max_payloads,
                     url_location=args.verify_url_location, body_location=args.verify_body_location,
+                    mark=enumeration_mark,
                     config=detection_config,
                 )
             if args.detect_json:
@@ -10011,6 +10058,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             headers=verify_headers, delay=args.verify_delay, timeout=args.verify_timeout,
             max_payloads=args.max_payloads,
             url_location=args.verify_url_location, body_location=args.verify_body_location,
+            mark=enumeration_mark,
         )
         by_verdict: Dict[str, int] = {}
         for result in results:

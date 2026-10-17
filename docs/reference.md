@@ -730,13 +730,20 @@ percent-encodes. An application that scrapes the envelope with a regex instead o
 parsing it needs `--verify-body-location raw`.
 
 Each enumerated point carries the shape of its own value, so the escaping is
-never worked out by looking for the marker in the body. That matters because the
-delivery layer replaces **every** occurrence of `FUZZ`: a capture that already
-contains a literal `FUZZ` of its own has two, and the first is not the point
-under test. For a hand-written `--verify-data` envelope the marker is still
-located, and where its occurrences fall in values of more than one shape there
-is no single right escaping — the body falls through to `raw` rather than a
-silent guess, and `--verify-body-location` settles it.
+never worked out by looking for the marker in the body. For a hand-written
+`--verify-data` envelope the marker is still located, and where its occurrences
+fall in values of more than one shape there is no single right escaping — the
+body falls through to `raw` rather than a silent guess, and
+`--verify-body-location` settles it.
+
+**A capture that already contains the literal `FUZZ`** is marked with a token of
+its own, and the run says so. The delivery layer replaces *every* occurrence of
+the marker, which is what an operator writing `FUZZ` twice asks for and the wrong
+thing for a marker RCEKit inserted: the payload would land in a field nobody
+selected, and the confirmation could not be attributed to the point under test.
+The captured `FUZZ` goes to the target as the value it is. `-p NAME` is
+unaffected — a pre-existing marker sends it down the inline path before the
+parameter is placed, so there is never a second marker to collide with.
 
 Before this, an XML body fell through to the **form** branch — which it reaches,
 because a prolog and every attribute contain `=`. Splitting it on `&` produced
