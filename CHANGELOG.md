@@ -290,6 +290,36 @@ formats, or the template schema.
 
   No version bump -- this is documentation and tests only.
 
+## [3.1.1] — 2026-10-17
+
+### Fixed
+
+- **A capture carrying its own `FUZZ` had the payload put in two places.** The
+  delivery layer substitutes at *every* occurrence of the marker, which is right
+  for a marker the operator wrote — two `FUZZ` in a request mean both — and wrong
+  for one RCEKit inserted. Enumeration places its own marker at a chosen point,
+  and a point wins over an inline marker by design, so a capture containing the
+  literal `FUZZ` ended up with two markers: the payload landed in a field nobody
+  selected, and a confirmation could not be attributed to the point under test.
+  Measured for `xml`, `json`, `form` and `query` alike, so it was not specific to
+  any one carrier.
+
+  Enumeration now marks each point with a token of its own whenever — and only
+  when — the capture already contains the default marker, and the run says so.
+  The captured `FUZZ` then goes to the target as the value it is. The swap is
+  conditional because `FUZZ` is what the exports, the documentation and the
+  inline path all name, so it is left alone wherever it cannot collide; the token
+  keeps the `FUZZ` prefix so a marked request still reads as marked.
+
+  **`-p NAME` never reached this, and is deliberately unchanged.** A pre-existing
+  marker sends it down the *inline* path before the parameter is ever placed, so
+  giving it a marker of its own would change which place the run tests. The
+  unbounded substitution is also unchanged: the operator-written case needs it,
+  and this only stops RCEKit's own marker colliding with theirs.
+
+  What this does not change: nothing differs on the wire for a capture without a
+  literal `FUZZ` in it, which is every capture the test suite and the docs use.
+
 ## [3.1.0] — 2026-10-17
 
 ### Added
@@ -2849,6 +2879,7 @@ this file and have not been restated here.
 
 
 [Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.36.0...HEAD
+[3.1.1]: https://github.com/kabiri-labs/rcekit/compare/v3.1.0...v3.1.1
 [3.1.0]: https://github.com/kabiri-labs/rcekit/compare/v3.0.1...v3.1.0
 [3.0.1]: https://github.com/kabiri-labs/rcekit/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/kabiri-labs/rcekit/compare/v2.45.7...v3.0.0

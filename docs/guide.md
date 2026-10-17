@@ -119,6 +119,16 @@ Three ways to mark the injection point:
 - **All of them** — `-p all` (or `--auto-params`) enumerates every candidate the
   capture carries, including each part of a `multipart/form-data` body.
 
+The three do not interact the way you might expect, and one case is worth
+knowing. An inline marker wins over `-p`, so a capture that still has a leftover
+`FUZZ` in it is tested *there* rather than at the parameter you named — the run
+prints which place it chose, so read that line. Enumeration is the exception: a
+point wins over an inline marker, because asking about a specific candidate and
+then testing a leftover marker instead would test the same place for every one
+of them. Where a capture carries its own `FUZZ`, enumeration marks each point
+with a token of its own and says so, and the captured `FUZZ` is sent as the value
+it is.
+
 **The scheme trap.** A portless capture cannot record whether it was HTTPS, so
 RCEKit infers `https` when the `Host` is on `:443` and `http` otherwise — which
 keeps lab and internal targets reachable. The inferred scheme is always printed,

@@ -8542,6 +8542,94 @@ class InjectionPointPlacementTestCase(unittest.TestCase):
         self.assertEqual(injection, "query param 'view'")
 
 
+class DuplicateMarkerTestCase(unittest.TestCase):
+    """A capture that already carries `FUZZ` had the payload put in two places.
+
+    The delivery layer substitutes at *every* occurrence of the marker, which is
+    right for a marker the operator wrote -- two `FUZZ` in a request mean both --
+    and wrong for one RCEKit inserted. Enumeration places its own marker at a
+    chosen point and a point wins over an inline marker by design, so a capture
+    containing the literal `FUZZ` ended up with two: the payload landed in a
+    field nobody selected, and a confirmation could not be attributed to the
+    point under test.
+
+    `-p NAME` never reached this, and that is the near neighbour worth pinning:
+    a pre-existing marker sends it down the *inline* path instead, where every
+    occurrence is the operator's and replacing all of them is the whole point."""
+
+    def _built(self, ctype, body, kind, name, query=""):
+        raw = (f"POST /s{query} HTTP/1.1\r\nHost: t.example\r\n"
+               f"Content-Type: {ctype}\r\n\r\n{body}")
+        mark = rcekit.unique_marker() if "FUZZ" in raw else "FUZZ"
+        point = next(p for p in rcekit.enumerate_injection_points(parse_raw_request(raw))
+                     if p.kind == kind and p.name == name)
+        url, _m, data, hdrs, _l = rcekit.build_request_inputs(raw, point=point, mark=mark)
+        return RCEKit(), url, data, hdrs, mark, point
+
+    def test_the_marker_is_recognisable_and_cannot_be_in_a_capture(self):
+        first, second = rcekit.unique_marker(), rcekit.unique_marker()
+        self.assertTrue(first.startswith("FUZZ"), "a marked request should still read as marked")
+        self.assertNotEqual(first, second, "a fresh marker per call")
+        self.assertTrue(first[4:].isalnum(), "must survive every carrier's escaping")
+        self.assertGreater(len(first), len("FUZZ"))
+
+    def test_the_payload_lands_once_in_each_body_kind(self):
+        for ctype, body, kind, name, untouched in [
+            ("text/xml", "<root><doc><![CDATA[FUZZ]]></doc><cmd>a</cmd></root>",
+             "xml", "root/cmd", "<![CDATA[FUZZ]]>"),
+            ("application/json", '{"note": "FUZZ", "cmd": "a"}',
+             "json", "cmd", '"note": "FUZZ"'),
+            ("application/x-www-form-urlencoded", "note=FUZZ&cmd=a",
+             "form", "cmd", "note=FUZZ"),
+        ]:
+            kit, url, data, hdrs, mark, point = self._built(ctype, body, kind, name)
+            location = (f"xml_{point.span}" if point.kind == "xml"
+                        else kit._detect_body_location(data, hdrs, mark))
+            _t, rendered, _h = kit._build_verify_request(
+                "PAYLOAD", url, data, hdrs, "query_value", location, mark)
+            sent = rendered.decode()
+            self.assertEqual(sent.count("PAYLOAD"), 1, f"{kind}: {sent}")
+            self.assertIn(untouched, sent, f"{kind}: the captured value must go as captured")
+
+    def test_the_payload_lands_once_in_a_query_string(self):
+        kit, url, data, hdrs, mark, _p = self._built(
+            "text/plain", "x", "query", "cmd", query="?note=FUZZ&cmd=a")
+        target, _b, _h = kit._build_verify_request(
+            "PAYLOAD", url, data, hdrs, "raw", "raw", mark)
+        self.assertEqual(target.count("PAYLOAD"), 1, target)
+        self.assertIn("note=FUZZ", target)
+
+    def test_a_capture_without_the_marker_still_uses_fuzz(self):
+        # The near neighbour of every case above, and the reason the swap is
+        # conditional: FUZZ is what the exports, the docs and the inline path
+        # all name, so it is left alone wherever it cannot collide.
+        raw = ("POST /s HTTP/1.1\r\nHost: t.example\r\n"
+               "Content-Type: application/json\r\n\r\n" '{"note": "x", "cmd": "a"}')
+        self.assertNotIn("FUZZ", raw)
+        point = next(p for p in rcekit.enumerate_injection_points(parse_raw_request(raw))
+                     if p.kind == "json" and p.name == "cmd")
+        _u, _m, data, _h, _l = rcekit.build_request_inputs(raw, point=point, mark="FUZZ")
+        self.assertEqual(data, '{"note": "x", "cmd": "FUZZ"}')
+
+    def test_naming_a_param_in_a_marked_capture_still_takes_the_inline_path(self):
+        # Unchanged on purpose. `-p` cannot produce the collision because a
+        # pre-existing marker wins before the parameter is ever placed, so
+        # giving it a marker of its own would change which place is tested.
+        raw = ("POST /s HTTP/1.1\r\nHost: t.example\r\n"
+               "Content-Type: application/json\r\n\r\n" '{"note": "FUZZ", "cmd": "a"}')
+        _u, _m, data, _h, injection = rcekit.build_request_inputs(raw, param="cmd")
+        self.assertEqual(injection, "inline marker")
+        self.assertEqual(data, '{"note": "FUZZ", "cmd": "a"}')
+
+    def test_an_operator_who_wrote_two_markers_still_gets_both(self):
+        # The behaviour the unbounded substitution exists for.
+        kit = RCEKit()
+        _t, rendered, _h = kit._build_verify_request(
+            "P", "http://t.example/s", '{"a": "FUZZ", "b": "FUZZ"}',
+            ["Content-Type: application/json"], "query_value", "json_string")
+        self.assertEqual(rendered.decode().count("P"), 2)
+
+
 class EnumerationEndToEndTestCase(unittest.TestCase):
     """The acceptance case: a sink reachable only through a header, found with
     `-p all` and no manual header selection."""
@@ -8657,6 +8745,57 @@ class EnumerationEndToEndTestCase(unittest.TestCase):
         self.assertIn("carries an XML signature", result.stdout)
         self.assertIn("nothing was tested", result.stdout)
         self.assertEqual(result.returncode, 1)
+
+    def test_a_captured_marker_is_never_overwritten_on_the_wire(self):
+        # The duplicate-marker regression, measured where it matters: in the
+        # bodies the target actually received. A unit test can show the one
+        # rendered request; only this shows that no probe in a whole run put
+        # the payload in a field nobody selected.
+        import json as _json
+        import tempfile
+
+        received = []
+
+        def route(method, path, params, headers, body):
+            received.append(body or "")
+            return 200, "ok"
+
+        with local_target(route) as base, tempfile.TemporaryDirectory() as tmp:
+            host = base.split("//", 1)[1]
+            capture = Path(tmp) / "request.txt"
+            capture.write_text("POST /api HTTP/1.1\n"
+                               f"Host: {host}\n"
+                               "Content-Type: application/json\n"
+                               "\n"
+                               '{"note": "FUZZ", "cmd": "alice"}')
+            result = self._run("--acknowledge-consent", "-r", str(capture),
+                               "--auto-params", "json", "--methods", "reflected",
+                               "--request-scheme", "http", "--environments", "unix",
+                               "--contexts", "raw", "--probe-depth", "quick",
+                               "--max-payloads", "6")
+
+        self.assertEqual(result.returncode, 0, result.stdout[-2000:])
+        self.assertTrue(received, "the target received nothing")
+        # Both fields are enumerated, so `note` carrying the payload is correct
+        # in the run that tests `note`. What must never happen is one request
+        # carrying it in *both*, which is what the shared marker produced and
+        # what makes a confirmation unattributable.
+        touched_cmd = 0
+        for raw_body in received:
+            try:
+                parsed = _json.loads(raw_body)
+            except ValueError:
+                continue
+            changed = [field for field, captured in (("note", "FUZZ"), ("cmd", "alice"))
+                       if parsed.get(field) != captured]
+            self.assertLessEqual(len(changed), 1,
+                                 f"the payload landed in {changed}: {raw_body}")
+            touched_cmd += "cmd" in changed
+        self.assertTrue(touched_cmd, "the run never tested the second point, so this "
+                                     "would have passed without exercising the fix")
+        # Checked last, so a failure names the behaviour rather than the wording.
+        self.assertIn("already contains the literal FUZZ", result.stdout,
+                      "the run should say it is using a marker of its own")
 
     def test_enumeration_without_methods_is_refused(self):
         import tempfile
