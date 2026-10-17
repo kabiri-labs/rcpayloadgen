@@ -8087,6 +8087,123 @@ class XmlSignatureDetectionTestCase(unittest.TestCase):
         self.assertFalse(rcekit.xml_body_is_signed(""))
         self.assertFalse(rcekit.xml_body_is_signed(None))
 
+    def test_a_commented_out_signature_example_is_not_a_signature(self):
+        # The regex scan reads the whole document, so an example in a comment
+        # counted as markup -- the same wrong answer, in the same direction, as
+        # the URI-substring test this check replaced.
+        body = (f'<Envelope xmlns:ds="{rcekit._XML_DSIG_NS}">'
+                "<!-- a signed request puts <ds:Signature> here -->"
+                "<Body><cmd>x</cmd></Body></Envelope>")
+        self.assertFalse(rcekit.xml_body_is_signed(body))
+        self.assertEqual(self._points(body), ["Envelope/Body/cmd"])
+
+    def test_a_signature_inside_cdata_is_not_a_signature(self):
+        body = (f'<Envelope xmlns:ds="{rcekit._XML_DSIG_NS}">'
+                "<doc><![CDATA[<ds:Signature>example</ds:Signature>]]></doc>"
+                "<Body><cmd>x</cmd></Body></Envelope>")
+        self.assertFalse(rcekit.xml_body_is_signed(body))
+        self.assertIn("Envelope/Body/cmd", self._points(body))
+
+    def test_a_declaration_only_inside_a_comment_binds_no_prefix(self):
+        body = (f'<Envelope><!-- xmlns:ds="{rcekit._XML_DSIG_NS}" -->'
+                "<ds:Signature/><Body><cmd>x</cmd></Body></Envelope>")
+        self.assertFalse(rcekit.xml_body_is_signed(body))
+
+    def test_a_real_signature_after_an_inert_region_is_still_found(self):
+        # The near neighbours of the three above: blanking the inert regions
+        # must not blank the markup around them.
+        for inert in ("<!-- note -->", "<d><![CDATA[a]]></d>",
+                      "<d><![CDATA[contains ]]> a delimiter]]></d>"):
+            body = (f'<Envelope xmlns:ds="{rcekit._XML_DSIG_NS}">{inert}'
+                    "<ds:Signature>a</ds:Signature><Body><cmd>x</cmd></Body></Envelope>")
+            self.assertTrue(rcekit.xml_body_is_signed(body), inert)
+            self.assertEqual(self._points(body), [], inert)
+
+    def test_blanking_inert_regions_preserves_the_document_length(self):
+        body = "<a><!-- hidden --><b><![CDATA[more]]></b></a>"
+        self.assertEqual(len(rcekit._xml_without_inert(body)), len(body))
+        self.assertNotIn("hidden", rcekit._xml_without_inert(body))
+        self.assertNotIn("more", rcekit._xml_without_inert(body))
+        self.assertIn("<b>", rcekit._xml_without_inert(body))
+
+    def test_an_unterminated_inert_region_blanks_to_the_end(self):
+        # Never raises, for the same reason the span scanner does not.
+        self.assertEqual(len(rcekit._xml_without_inert("<a><!-- open")), len("<a><!-- open"))
+        self.assertEqual(len(rcekit._xml_without_inert("<a><![CDATA[open")),
+                         len("<a><![CDATA[open"))
+
+
+class XmlPointCarriesItsOwnEncodingTestCase(unittest.TestCase):
+    """The marker cannot be located to work out the escaping.
+
+    The delivery layer replaces *every* occurrence of `FUZZ`, so a capture that
+    already contains a literal `FUZZ` of its own has two, and the first one is
+    not the point under test. Reading the first picked that other span's shape:
+    a probe aimed at element text was escaped as CDATA, so its `&` went on the
+    wire bare and the target refused to parse the document -- a whole sink
+    answering `negative` for a reason that has nothing to do with the sink.
+
+    XML is the only kind this can happen to, because it is the only one whose
+    encoding depends on *where* in the body the value sits rather than on what
+    the body is. So the point carries its own shape and the engine is told,
+    instead of searching for it."""
+
+    CAPTURE = ("POST /s HTTP/1.1\r\nHost: t.example\r\n"
+               "Content-Type: text/xml\r\n\r\n"
+               "<root><doc><![CDATA[FUZZ]]></doc><cmd>alice</cmd></root>")
+
+    def setUp(self):
+        self.kit = RCEKit()
+        self.points = [p for p in
+                       rcekit.enumerate_injection_points(parse_raw_request(self.CAPTURE))
+                       if p.kind == "xml"]
+
+    def test_each_xml_point_declares_its_own_shape(self):
+        self.assertEqual({p.name: p.span for p in self.points},
+                         {"root/doc/cdata()": "cdata", "root/cmd": "text"})
+
+    def test_a_non_xml_point_declares_no_shape(self):
+        # Its escaping is a property of the body, not of the position.
+        req = parse_raw_request("POST /s HTTP/1.1\r\nHost: t.example\r\n"
+                                "Content-Type: application/json\r\n\r\n"
+                                '{"cmd": "alice"}')
+        point = next(p for p in rcekit.enumerate_injection_points(req) if p.kind == "json")
+        self.assertEqual(point.span, "")
+
+    def test_the_point_supplied_encoder_keeps_the_document_well_formed(self):
+        target = next(p for p in self.points if p.name == "root/cmd")
+        url, _m, data, hdrs, _l = rcekit.build_request_inputs(self.CAPTURE, point=target)
+        _t, rendered, _h = self.kit._build_verify_request(
+            "; echo a && b", url, data, hdrs, "query_value", f"xml_{target.span}")
+        body = rendered.decode()
+        self.assertIn("<cmd>; echo a &amp;&amp; b</cmd>", body)
+        self.assertNotIn("&& b</cmd>", body, "a bare & in element text is not well-formed")
+
+    def test_locating_the_marker_declines_when_two_shapes_claim_it(self):
+        # Rather than guessing one and mis-escaping silently. `raw` is what an
+        # XML body got before any of this existed, and --verify-body-location
+        # settles it.
+        _u, _m, data, hdrs, _l = rcekit.build_request_inputs(
+            self.CAPTURE, point=next(p for p in self.points if p.name == "root/cmd"))
+        self.assertEqual(data.count("FUZZ"), 2, "the capture's own marker is still there")
+        self.assertEqual(self.kit._detect_body_location(data, hdrs), "raw")
+
+    def test_an_unambiguous_inline_marker_is_still_located(self):
+        for body, want in [('<a id="FUZZ"><b>x</b></a>', "xml_attr"),
+                           ("<a><b>FUZZ</b></a>", "xml_text"),
+                           ("<a><b><![CDATA[FUZZ]]></b></a>", "xml_cdata"),
+                           # Two markers of the same shape are not ambiguous:
+                           # both want the same escaping.
+                           ("<a><b>FUZZ</b><c>FUZZ</c></a>", "xml_text")]:
+            self.assertEqual(
+                self.kit._detect_body_location(body, ["Content-Type: text/xml"]), want, body)
+
+    def test_all_occurrences_finds_every_marker_not_just_the_first(self):
+        self.assertEqual(rcekit._all_occurrences("aXbXc", "X"), [1, 3])
+        self.assertEqual(rcekit._all_occurrences("XX", "X"), [0, 1])
+        self.assertEqual(rcekit._all_occurrences("abc", "X"), [])
+        self.assertEqual(rcekit._all_occurrences("abc", ""), [])
+
 
 class XmlEmptyLeafValueTestCase(unittest.TestCase):
     """An empty field is still a field.

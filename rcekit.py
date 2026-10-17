@@ -2160,16 +2160,30 @@ class RCEKit:
         in the body by the time this is asked, so its offset answers the
         question without the location having to be threaded through every
         caller -- and a hand-written ``--verify-data`` envelope with an inline
-        FUZZ gets the same treatment as an enumerated point."""
-        index = (data or "").find(mark)
-        if index < 0:
+        FUZZ gets the same treatment as an enumerated point.
+
+        Only for the inline path. An enumerated point carries its own
+        ``span`` and is passed as an explicit ``body_location``, because
+        locating the marker cannot answer for it: the delivery layer replaces
+        *every* occurrence of the mark, so a capture that already contains a
+        literal ``FUZZ`` of its own has two, and the first one is not the point
+        under test.
+
+        Where the mark occurs in spans of more than one shape there is no
+        single right escaping, and guessing one silently is how a probe arrives
+        as a document the target refuses to parse -- a whole sink answering
+        ``negative`` for a reason that has nothing to do with the sink. So this
+        declines to answer, the body falls through to ``raw``, which is what an
+        XML body got before any of this existed, and
+        ``--verify-body-location`` is there to settle it."""
+        found = {kind for kind, _path, start, end in _xml_value_spans(data or "")
+                 for index in _all_occurrences(data or "", mark)
+                 if start <= index and index + len(mark) <= end}
+        if len(found) != 1:
             return None
-        for kind, _path, start, end in _xml_value_spans(data or ""):
-            if start <= index and index + len(mark) <= end:
-                # The span kinds are named so this is the encoder key:
-                # text -> xml_text, attr -> xml_attr, cdata -> xml_cdata.
-                return f"xml_{kind}"
-        return None
+        # The span kinds are named so this is the encoder key:
+        # text -> xml_text, attr -> xml_attr, cdata -> xml_cdata.
+        return f"xml_{found.pop()}"
 
     def _detect_body_location(self, data: Optional[str], headers: Optional[List[str]],
                               mark: str = "FUZZ") -> str:
@@ -7665,6 +7679,15 @@ class InjectionPoint:
     name: str
     label: str
     tokens: Tuple[Any, ...] = ()
+    # For an ``xml`` point, which shape of value this is -- ``text``, ``attr``
+    # or ``cdata`` -- and so which escaping the payload needs. Carried on the
+    # point rather than recovered from the body later, because recovering it
+    # meant locating the marker, and a capture that already contains the
+    # literal ``FUZZ`` has more than one: the first occurrence won, so a probe
+    # aimed at element text could be escaped as CDATA and arrive as a document
+    # the target refuses to parse. Empty for every other kind, whose escaping
+    # is a property of the body rather than of the position.
+    span: str = ""
 
 
 # Headers worth trying before the rest. Not a guess: each is a header that
@@ -7851,6 +7874,56 @@ _XML_BOM = "\ufeff"
 _XML_SPAN_LIMIT = 256
 
 
+def _all_occurrences(text: str, needle: str) -> List[int]:
+    """Every index of ``needle`` in ``text``, not just the first.
+
+    The delivery layer replaces every occurrence of the marker, so every
+    occurrence is where the payload lands, and a question about "the marker"
+    that reads only the first one answers about a different place."""
+    if not needle:
+        return []
+    found, pos = [], text.find(needle)
+    while pos >= 0:
+        found.append(pos)
+        pos = text.find(needle, pos + len(needle))
+    return found
+
+
+def _xml_without_inert(text: str) -> str:
+    """``text`` with comment and CDATA *contents* blanked, same length.
+
+    Both are inert regions: a tag or a namespace declaration written inside one
+    is an example or a payload, never markup. :func:`xml_body_is_signed` scans
+    the whole document with regexes instead of walking it, so a commented-out
+    ``<!-- <ds:Signature> -->`` example counted as a signature and suppressed
+    every injection point -- the same wrong answer, in the same direction, as
+    the URI-substring test it replaced. A declaration that exists only inside a
+    comment bound a prefix for the same reason.
+
+    Walked left to right rather than applied as two independent substitutions,
+    because ``]]>`` occurs inside comments and ``<!--`` inside CDATA, so either
+    pattern run alone takes the other's delimiter for its own. Length is
+    preserved so nothing downstream has to care that it is looking at a copy."""
+    out: List[str] = []
+    pos = 0
+    while pos < len(text):
+        comment, cdata = text.find("<!--", pos), text.find("<![CDATA[", pos)
+        starts = [p for p in (comment, cdata) if p >= 0]
+        if not starts:
+            out.append(text[pos:])
+            break
+        start = min(starts)
+        out.append(text[pos:start])
+        if start == comment:
+            end = text.find("-->", start + 4)
+        else:
+            end = text.find("]]>", start + 9)
+        stop = len(text) if end < 0 else end + 3
+        out.append(" " * (stop - start))
+        pos = stop
+    return "".join(out)
+
+
 def starts_xml_body(stripped: str) -> bool:
     """Whether a stripped body opens an XML document, byte-order mark and all.
 
@@ -7878,8 +7951,13 @@ def xml_body_is_signed(body: str) -> bool:
     and a document that both binds a prefix to DSig and carries an element of
     that name under it is signed outside of a deliberately pathological
     rebinding. A scanner, for the reasons in the note above this block --
-    there is still no parser here, and nothing resolves an entity."""
-    text = body or ""
+    there is still no parser here, and nothing resolves an entity.
+
+    Comment and CDATA contents are blanked first, by
+    :func:`_xml_without_inert`: a tag or a declaration written inside either is
+    an example or a payload, and counting one reports an unsigned document as
+    signed."""
+    text = _xml_without_inert(body or "")
     if _XML_DSIG_NS not in text:
         return False
     prefixes = set()
@@ -8227,7 +8305,8 @@ def enumerate_injection_points(req: Dict[str, Any], kinds: Optional[Tuple[str, .
         if "xml" in selected and not xml_body_is_signed(body):
             for kind, path, start, end in _xml_value_spans(body or ""):
                 points.append(InjectionPoint(
-                    "xml", path, f"XML {_XML_POINT_NOUNS[kind]} '{path}'", (start, end)))
+                    "xml", path, f"XML {_XML_POINT_NOUNS[kind]} '{path}'", (start, end),
+                    span=kind))
     elif "=" in (body or "") and "form" in selected:
         for pair in body.split("&"):
             key, sep, _ = pair.partition("=")
@@ -9640,6 +9719,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                 results = []
                 for point, point_url, point_method, point_data, point_headers, label in injection_runs:
                     point_results: List[Dict[str, Any]] = []
+                    # An XML point names its own escaping, because it is the one
+                    # kind whose encoding depends on *where* in the body the
+                    # value sits rather than on what the body is. Passed
+                    # explicitly so the engine never has to find the marker to
+                    # work it out: a capture carrying a literal FUZZ of its own
+                    # has more than one, and the first is not this point's.
+                    point_location = args.verify_body_location or (
+                        f"xml_{point.span}" if point.kind == "xml" and point.span else None)
                     # Deliveries for this point alone, for the same reason the
                     # run-wide summary counts them: rows and requests are the
                     # same number only while every method answers from each
@@ -9675,7 +9762,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                             data=point_data, headers=point_headers, delay=args.verify_delay,
                             timeout=args.verify_timeout, max_payloads=remaining,
                             url_location=args.verify_url_location,
-                            body_location=args.verify_body_location,
+                            body_location=point_location,
                             config=detection_config,
                         )
                         point_results.extend(wave_results)

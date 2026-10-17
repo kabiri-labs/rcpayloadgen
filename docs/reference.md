@@ -717,7 +717,9 @@ request before it is signed, or name a point outside the body.
 halves are required. The namespace URI on its own appears wherever a schema
 predeclares the prefix without signing anything, and an element named
 `Signature` is ordinary in plenty of schemas — so either test alone would
-suppress every point in a document that is perfectly testable.
+suppress every point in a document that is perfectly testable. Comments and
+CDATA sections do not count either way: a tag or a declaration written inside
+one is an example or a payload, not markup.
 
 The payload is escaped for the position it lands in — `xml_text` for character
 data, `xml_attr` which also escapes both quotes, `xml_cdata` which leaves the
@@ -726,6 +728,15 @@ target's parser undoes the escaping, so the sink receives `a && b` from
 `a &amp;&amp; b`, for the same reason `json_string` escapes rather than
 percent-encodes. An application that scrapes the envelope with a regex instead of
 parsing it needs `--verify-body-location raw`.
+
+Each enumerated point carries the shape of its own value, so the escaping is
+never worked out by looking for the marker in the body. That matters because the
+delivery layer replaces **every** occurrence of `FUZZ`: a capture that already
+contains a literal `FUZZ` of its own has two, and the first is not the point
+under test. For a hand-written `--verify-data` envelope the marker is still
+located, and where its occurrences fall in values of more than one shape there
+is no single right escaping — the body falls through to `raw` rather than a
+silent guess, and `--verify-body-location` settles it.
 
 Before this, an XML body fell through to the **form** branch — which it reaches,
 because a prolog and every attribute contain `=`. Splitting it on `&` produced
