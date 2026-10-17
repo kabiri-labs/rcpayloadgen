@@ -347,7 +347,10 @@ formats, or the template schema.
   required: the namespace URI alone appears wherever a schema predeclares the
   prefix without signing anything, and an element named `Signature` is ordinary
   in plenty of schemas, so either test on its own would suppress every point in
-  a document that is perfectly testable.
+  a document that is perfectly testable. Comments and CDATA sections count
+  neither way — a tag or a declaration written inside one is an example or a
+  payload, not markup, and a commented-out `<!-- <ds:Signature> -->` reached the
+  same wrong answer by a second route.
 
 - **`--verify-body-location` gained `xml_text`, `xml_attr` and `xml_cdata`**, and
   the automatic choice now reads the marker's *position* rather than the body's
@@ -366,6 +369,17 @@ formats, or the template schema.
   `xml_cdata` leaves the payload alone except for the one sequence that would end
   the section, which it splits across a section boundary — the bytes the sink
   receives are unchanged.
+
+  Each enumerated point **carries the shape of its own value**, so the escaping
+  is never recovered by locating the marker. The delivery layer replaces every
+  occurrence of `FUZZ`, so a capture that already contains a literal `FUZZ` of
+  its own has two, and reading the first one picked the other span's shape: a
+  probe aimed at element text was escaped as CDATA, its `&` went on the wire
+  bare, and the target refused to parse the document — a whole sink answering
+  `negative` for a reason that has nothing to do with the sink. For a
+  hand-written `--verify-data` envelope the marker is still located, and where
+  its occurrences fall in values of more than one shape the body falls through
+  to `raw` rather than a silent guess.
 
 ### Changed
 
