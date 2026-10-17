@@ -8629,6 +8629,36 @@ class DuplicateMarkerTestCase(unittest.TestCase):
             ["Content-Type: application/json"], "query_value", "json_string")
         self.assertEqual(rendered.decode().count("P"), 2)
 
+    def test_threading_the_marker_moved_no_existing_positional_slot(self):
+        """The marker is appended to every signature it was threaded through.
+
+        Inserting it mid-signature moves every later parameter along by one, and
+        a caller passing one of those positionally then binds the wrong value:
+        `run_detection`'s `config` landed in `mark`, and the first delivery
+        raised `TypeError` from `str.replace`. Pinned per signature rather than
+        as one rule, because the fix for `run_detection` puts `mark` somewhere
+        its meaning does not suggest -- so the next person to tidy it needs this
+        to fail."""
+        import inspect
+        for name in ("run_detection", "run_verification", "_fire", "_fire_channels",
+                     "_escalate", "_detect_body_location"):
+            params = list(inspect.signature(getattr(RCEKit, name)).parameters)
+            self.assertEqual(params[-1], "mark",
+                             f"{name}: mark must be last, or it shifts "
+                             f"{params[params.index('mark') + 1:]}")
+
+    def test_a_caller_passing_config_positionally_still_gets_config(self):
+        # The break this ordering exists to prevent, stated as the call that
+        # broke: `config` was the twelfth positional argument after `self`.
+        import inspect
+        config = {"probe_depth": "quick"}
+        bound = inspect.signature(RCEKit.run_detection).bind(
+            RCEKit(), iter([]), "http://t.example/x?q=FUZZ", ["reflected"],
+            "GET", None, None, 0.0, 1.0, 1, "query_value", None, config)
+        self.assertEqual(bound.arguments.get("config"), config)
+        self.assertNotIn("mark", bound.arguments,
+                         "mark must fall back to its default, not eat config")
+
 
 class EnumerationEndToEndTestCase(unittest.TestCase):
     """The acceptance case: a sink reachable only through a header, found with
