@@ -311,6 +311,23 @@ formats, or the template schema.
   covered. `xmlns` declarations are not candidates: a payload in a namespace URI
   renames the element instead of reaching anything that reads its value.
 
+  An element with no element children is a candidate **even when it is empty or
+  holds only whitespace**, because `<cmd></cmd>` and `<cmd>   </cmd>` are the
+  ordinary shape of a field in a SOAP template, and a JSON `""` leaf and a form
+  `key=` were candidates already — XML would have been the one carrier that
+  dropped them, so an envelope of placeholders could report no body injection
+  point at all. Whitespace between two *elements* is still formatting and yields
+  nothing: the test is whether the element had an element child, not whether its
+  text is blank, because the blank test answers the same for a placeholder field
+  and for the indentation of a pretty-printed envelope. A self-closing `<cmd/>`
+  is not a candidate, for the reason a missing JSON key is not.
+
+  The body is recognised **byte-order mark and all**. `str.strip()` does not
+  remove U+FEFF, and the cost of missing it is not a missed point but the wrong
+  branch: a body with a prolog contains `=`, so a marked envelope would have
+  fallen through to the form branch and produced the single bogus point this
+  kind exists to replace. .NET clients emit a mark routinely.
+
   The document is **spliced at the value's offsets**, never parsed and
   re-emitted. Two reasons, and the second decided it. A signed envelope
   (WS-Security / XML-DSig) covers its own bytes with a digest, and
@@ -325,7 +342,12 @@ formats, or the template schema.
 
   A signed body is therefore not probed, and the run **says so** rather than
   reporting zero points — every probe would come back refused for a reason that
-  has nothing to do with the sink, which reads exactly like a filter.
+  has nothing to do with the sink, which reads exactly like a filter. "Signed"
+  means a `Signature` element **in** the XML-DSig namespace, and both halves are
+  required: the namespace URI alone appears wherever a schema predeclares the
+  prefix without signing anything, and an element named `Signature` is ordinary
+  in plenty of schemas, so either test on its own would suppress every point in
+  a document that is perfectly testable.
 
 - **`--verify-body-location` gained `xml_text`, `xml_attr` and `xml_cdata`**, and
   the automatic choice now reads the marker's *position* rather than the body's

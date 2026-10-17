@@ -2183,7 +2183,7 @@ class RCEKit:
         stripped = (data or "").strip()
         if stripped[:1] in "{[":
             return "json_string"
-        if stripped[:1] == "<" or "xml" in ctype:
+        if starts_xml_body(stripped) or "xml" in ctype:
             # Before the form test, which an envelope would not match anyway,
             # and after the JSON ones so a `<` inside a JSON string cannot
             # claim the body. A body that says XML and carries no recognisable
@@ -7827,10 +7827,23 @@ def _render_multipart(parts: List[List[str]], boundary: str) -> str:
 _XML_TAG_RE = re.compile(r"<(/?)([A-Za-z_][\w:.-]*)((?:\"[^\"]*\"|'[^']*'|[^>\"'])*?)(/?)>", re.S)
 _XML_ATTR_RE = re.compile(r"([A-Za-z_][\w:.-]*)\s*=\s*(?:\"([^\"]*)\"|'([^']*)')")
 
-# The XML-DSig namespace. Its presence means a rewrite anywhere in the document
-# invalidates a digest, so every probe would come back refused for a reason
-# that has nothing to do with the sink -- which reads exactly like a filter.
+# The XML-DSig namespace. A `Signature` element *in* it means a rewrite
+# anywhere in the document invalidates a digest, so every probe would come back
+# refused for a reason that has nothing to do with the sink -- which reads
+# exactly like a filter.
 _XML_DSIG_NS = "http://www.w3.org/2000/09/xmldsig#"
+
+# A namespace declaration and the URI it binds, in either quoting style.
+_XML_NS_DECL_RE = re.compile(
+    r"(xmlns(?::[A-Za-z_][\w.-]*)?)\s*=\s*(?:\"([^\"]*)\"|'([^']*)')")
+
+# A UTF-8 byte-order mark. `str.strip()` does not remove it -- U+FEFF is not
+# whitespace -- so a capture that carries one reads as "not XML" to a test on
+# the first character. .NET clients emit one routinely, and the cost of missing
+# it is not a missed point but the wrong branch: a body with a prolog contains
+# `=`, so it lands in the form branch and produces the single bogus point that
+# the xml branch exists to replace.
+_XML_BOM = "\ufeff"
 
 # Spans per body, matching the JSON leaf cap for the same reason: a generated
 # document can carry thousands, and a bounded run that spends its whole budget
@@ -7838,13 +7851,60 @@ _XML_DSIG_NS = "http://www.w3.org/2000/09/xmldsig#"
 _XML_SPAN_LIMIT = 256
 
 
+def starts_xml_body(stripped: str) -> bool:
+    """Whether a stripped body opens an XML document, byte-order mark and all.
+
+    One predicate for the two places that ask -- the enumerator's branch and
+    the body-location detector -- because the two of them disagreeing is how a
+    body gets enumerated as XML and then escaped as something else."""
+    return stripped.lstrip(_XML_BOM)[:1] == "<"
+
+
 def xml_body_is_signed(body: str) -> bool:
     """Whether this body carries an XML signature, and so cannot be rewritten.
 
-    Checked by namespace rather than by element name: ``<Signature>`` is an
-    ordinary element in plenty of schemas, and the namespace is what says the
-    document covers its own bytes with a digest."""
-    return _XML_DSIG_NS in (body or "")
+    Both halves are required: an element named ``Signature`` **and** a prefix
+    bound to the XML-DSig namespace. Neither alone is the question.
+    ``<Signature>`` is an ordinary element in plenty of schemas, so the name
+    cannot decide it; and the namespace URI on its own appears wherever a schema
+    predeclares the prefix without signing anything -- or in a comment, or in
+    text content. Reading the URI alone suppressed every point in such a
+    document, so a testable request reported that there was nothing to test,
+    which is the one outcome this tool refuses to produce.
+
+    A declaration is treated as binding for the whole document rather than for
+    the subtree it sits in. That is not what XML says, and it is the cautious
+    direction for a guard: it can only make this answer ``True`` more readily,
+    and a document that both binds a prefix to DSig and carries an element of
+    that name under it is signed outside of a deliberately pathological
+    rebinding. A scanner, for the reasons in the note above this block --
+    there is still no parser here, and nothing resolves an entity."""
+    text = body or ""
+    if _XML_DSIG_NS not in text:
+        return False
+    prefixes = set()
+    default_bound = False
+    for decl in _XML_NS_DECL_RE.finditer(text):
+        uri = decl.group(2) if decl.group(2) is not None else decl.group(3)
+        if uri != _XML_DSIG_NS:
+            continue
+        _xmlns, _sep, prefix = decl.group(1).partition(":")
+        if prefix:
+            prefixes.add(prefix)
+        else:
+            default_bound = True
+    if not prefixes and not default_bound:
+        return False
+    for tag in _XML_TAG_RE.finditer(text):
+        if tag.group(1):
+            continue
+        prefix, sep, local = tag.group(2).partition(":")
+        if (local if sep else prefix) != "Signature":
+            continue
+        bound = prefix in prefixes if sep else default_bound
+        if bound:
+            return True
+    return False
 
 
 def _xml_value_spans(body: str) -> List[Tuple[str, str, int, int]]:
@@ -7864,15 +7924,32 @@ def _xml_value_spans(body: str) -> List[Tuple[str, str, int, int]]:
     ``xmlns`` declarations are not candidates: a payload in a namespace URI
     renames the element rather than reaching anything that reads its value.
 
+    An element with no element children yields a span even when its value is
+    empty or only whitespace: ``<cmd></cmd>`` and ``<cmd>   </cmd>`` are the
+    ordinary shape of a field in a SOAP template, and a JSON ``""`` leaf and a
+    form ``key=`` are both candidates already. Whitespace between two
+    *elements* is still formatting and yields nothing, which is why the test is
+    "did this element have an element child" rather than "is this text blank" --
+    the latter answers the same for a placeholder field and for the indentation
+    of a pretty-printed envelope.
+
+    A self-closing ``<cmd/>`` is not a candidate, for the reason
+    :func:`_set_json_tokens` refuses to create a key that was not there: it has
+    no text node, so rewriting it as ``<cmd>payload</cmd>`` would test a shape
+    the application never sends.
+
     Never raises. The input is a capture the operator supplied, and a document
     that does not close a tag is still the one carrying the sink."""
     spans: List[Tuple[str, str, int, int]] = []
-    stack: List[Tuple[str, str]] = []
+    # Per open element: its name, its sibling-indexed label, where its content
+    # begins, whether an element child has appeared inside it, and whether a
+    # text span has already been emitted for it.
+    stack: List[List[Any]] = []
     counts: List[Dict[str, int]] = [{}]
     pos, length = 0, len(body or "")
 
     def path_of(extra: Optional[str] = None) -> str:
-        names = [label for _name, label in stack]
+        names = [entry[1] for entry in stack]
         if extra is not None:
             names.append(extra)
         return "/".join(names)
@@ -7882,10 +7959,12 @@ def _xml_value_spans(body: str) -> List[Tuple[str, str, int, int]]:
         if lt < 0:
             break
         if lt > pos and stack:
-            # Character data belongs to whichever element is open. Whitespace
-            # between two tags is formatting, not a value.
+            # Character data belongs to whichever element is open. Blank runs
+            # are left to the closing tag, which knows whether this element has
+            # children and so whether the run is a value or indentation.
             if body[pos:lt].strip():
                 spans.append(("text", path_of(), pos, lt))
+                stack[-1][4] = True
         if body.startswith("<!--", lt):
             end = body.find("-->", lt + 4)
             pos = length if end < 0 else end + 3
@@ -7896,6 +7975,9 @@ def _xml_value_spans(body: str) -> List[Tuple[str, str, int, int]]:
                 break
             if stack:
                 spans.append(("cdata", path_of() + "/cdata()", lt + 9, end))
+                # A CDATA section is this element's value, so the closing tag
+                # must not add an empty one beside it.
+                stack[-1][4] = True
             pos = end + 3
             continue
         if body.startswith("<?", lt) or body.startswith("<!", lt):
@@ -7921,6 +8003,13 @@ def _xml_value_spans(body: str) -> List[Tuple[str, str, int, int]]:
                                               match.group(3) or "", match.group(4))
         if closing:
             if stack and stack[-1][0] == name:
+                _n, _label, content_start, had_child, emitted = stack[-1]
+                if not had_child and not emitted:
+                    # A leaf whose value is empty or whitespace. The span may be
+                    # zero-length -- `<cmd></cmd>` -- and that is the right
+                    # answer: placement splices at the offsets, so the payload
+                    # lands between the tags where the application reads it.
+                    spans.append(("text", path_of(), content_start, lt))
                 stack.pop()
                 counts.pop()
             pos = match.end()
@@ -7928,6 +8017,8 @@ def _xml_value_spans(body: str) -> List[Tuple[str, str, int, int]]:
         siblings = counts[-1]
         siblings[name] = siblings.get(name, 0) + 1
         label = name if siblings[name] == 1 else f"{name}[{siblings[name]}]"
+        if stack:
+            stack[-1][3] = True
         for attr in _XML_ATTR_RE.finditer(attrs):
             attr_name = attr.group(1)
             if attr_name == "xmlns" or attr_name.startswith("xmlns:"):
@@ -7939,7 +8030,7 @@ def _xml_value_spans(body: str) -> List[Tuple[str, str, int, int]]:
             if len(spans) >= _XML_SPAN_LIMIT:
                 break
         if not self_closing:
-            stack.append((name, label))
+            stack.append([name, label, match.end(), False, False])
             counts.append({})
         pos = match.end()
     return spans[:_XML_SPAN_LIMIT]
@@ -8123,7 +8214,7 @@ def enumerate_injection_points(req: Dict[str, Any], kinds: Optional[Tuple[str, .
                 rendered = _render_json_path(tokens)
                 points.append(InjectionPoint("json", rendered,
                                              f"JSON field '{rendered}'", tokens))
-    elif stripped[:1] == "<":
+    elif starts_xml_body(stripped):
         # Chosen by the body's own shape, and deliberately not folded into the
         # form branch below -- which is where an XML body used to land. A SOAP
         # envelope carries `=` in its prolog and in every attribute, so
