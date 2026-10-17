@@ -46,7 +46,7 @@ def configure_logging() -> None:
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "3.0.1"
+__version__ = "3.1.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -2105,6 +2105,19 @@ class RCEKit:
     #                              hand the sink the literal "%3B%20id" instead of
     #                              "; id" and the oracle would never fire.
     #   * header                 — keep the payload on one header line (strip CR/LF).
+    #   * xml_text / xml_attr    — XML character escaping, for the same reason
+    #                              json_string escapes rather than percent-encodes:
+    #                              the target's parser undoes it, so the sink
+    #                              receives "a && b" from "a &amp;&amp; b". Left
+    #                              raw, a single "&" or "<" in a payload makes the
+    #                              body not-well-formed and the request is rejected
+    #                              before anything reads the value. The attribute
+    #                              form also escapes both quotes, which would
+    #                              otherwise close the attribute early.
+    #   * xml_cdata              — nothing inside CDATA is escaped, so only the one
+    #                              sequence that *ends* the section is handled, by
+    #                              splitting it across a section boundary. The bytes
+    #                              the sink receives are unchanged.
     #   * raw                    — send verbatim (unknown/custom body).
     _INJECTION_ENCODERS = {
         "query_value": lambda p: urllib.parse.quote(p, safe=""),
@@ -2112,6 +2125,12 @@ class RCEKit:
         "form_value": lambda p: urllib.parse.quote_plus(p),
         "json_string": lambda p: json.dumps(p)[1:-1],
         "header": lambda p: p.replace("\r", " ").replace("\n", " "),
+        "xml_text": lambda p: (p.replace("&", "&amp;").replace("<", "&lt;")
+                               .replace(">", "&gt;")),
+        "xml_attr": lambda p: (p.replace("&", "&amp;").replace("<", "&lt;")
+                               .replace(">", "&gt;").replace('"', "&quot;")
+                               .replace("'", "&apos;")),
+        "xml_cdata": lambda p: p.replace("]]>", "]]]]><![CDATA[>"),
         "raw": lambda p: p,
     }
 
@@ -2129,7 +2148,31 @@ class RCEKit:
                 return value.strip().lower()
         return ""
 
-    def _detect_body_location(self, data: Optional[str], headers: Optional[List[str]]) -> str:
+    @staticmethod
+    def _xml_mark_location(data: str, mark: str) -> Optional[str]:
+        """Which XML escaping the marker's position needs, or ``None`` when it
+        is not inside a value this scanner recognises.
+
+        An XML body needs the encoding chosen per *position*, not per body: a
+        payload in an attribute has to escape the quote that delimits it, one
+        in character data does not, and one inside CDATA must not be escaped at
+        all or the sink receives `&amp;&amp;` literally. The marker is already
+        in the body by the time this is asked, so its offset answers the
+        question without the location having to be threaded through every
+        caller -- and a hand-written ``--verify-data`` envelope with an inline
+        FUZZ gets the same treatment as an enumerated point."""
+        index = (data or "").find(mark)
+        if index < 0:
+            return None
+        for kind, _path, start, end in _xml_value_spans(data or ""):
+            if start <= index and index + len(mark) <= end:
+                # The span kinds are named so this is the encoder key:
+                # text -> xml_text, attr -> xml_attr, cdata -> xml_cdata.
+                return f"xml_{kind}"
+        return None
+
+    def _detect_body_location(self, data: Optional[str], headers: Optional[List[str]],
+                              mark: str = "FUZZ") -> str:
         """Pick the on-the-wire encoding for a payload injected into the request
         body, from the Content-Type header first, then the body's own shape."""
         ctype = self._content_type(headers)
@@ -2140,6 +2183,14 @@ class RCEKit:
         stripped = (data or "").strip()
         if stripped[:1] in "{[":
             return "json_string"
+        if stripped[:1] == "<" or "xml" in ctype:
+            # Before the form test, which an envelope would not match anyway,
+            # and after the JSON ones so a `<` inside a JSON string cannot
+            # claim the body. A body that says XML and carries no recognisable
+            # span falls through to `raw` rather than guessing an escaping.
+            located = self._xml_mark_location(data or "", mark)
+            if located is not None:
+                return located
         if re.match(r"^[^\s=&]+=[^&]*(&[^\s=&]+=[^&]*)*$", stripped):
             return "form_value"
         return "raw"
@@ -7636,7 +7687,11 @@ NON_INJECTABLE_HEADERS = {
 }
 
 # The candidate kinds, in the order they are tried.
-INJECTION_POINT_KINDS = ("query", "json", "form", "multipart", "cookie", "header", "path")
+INJECTION_POINT_KINDS = ("query", "json", "xml", "form", "multipart", "cookie", "header", "path")
+
+# What a finding calls each shape of XML value. The span's kind also picks the
+# escaping, so the noun and the encoder stay in step.
+_XML_POINT_NOUNS = {"text": "element", "attr": "attribute", "cdata": "CDATA"}
 
 # A part's name in its Content-Disposition line. Quoted form only: RFC 7578
 # requires the quotes, and every library that writes a multipart body emits
@@ -7753,6 +7808,141 @@ def _render_multipart(parts: List[List[str]], boundary: str) -> str:
         out.append(f"{delim}\r\n{canonical}\r\n\r\n{content}\r\n")
     out.append(f"{delim}--\r\n")
     return "".join(out)
+
+
+# An XML/SOAP body is scanned for value spans and rewritten by *offset*, never
+# parsed and re-emitted. Two reasons, and the second is the load-bearing one.
+#
+# A captured envelope may be signed (WS-Security / XML-DSig), and then every
+# byte outside the value under test has to survive. Parse-then-re-emit loses
+# attribute order, insignificant whitespace and the prolog's quoting style,
+# none of which an XML document is required to preserve and all of which a
+# digest covers. Offsets leave the rest of the capture byte for byte.
+#
+# And a capture aimed at an XXE sink carries a DOCTYPE with an external entity,
+# because that is what the operator is trying to prove the *target* resolves.
+# A real parser resolves it here instead, which turns the tool into the thing
+# it is testing for. A scanner never interprets an entity, so there is nothing
+# to resolve, no billion laughs to expand, and no retrieval to disable.
+_XML_TAG_RE = re.compile(r"<(/?)([A-Za-z_][\w:.-]*)((?:\"[^\"]*\"|'[^']*'|[^>\"'])*?)(/?)>", re.S)
+_XML_ATTR_RE = re.compile(r"([A-Za-z_][\w:.-]*)\s*=\s*(?:\"([^\"]*)\"|'([^']*)')")
+
+# The XML-DSig namespace. Its presence means a rewrite anywhere in the document
+# invalidates a digest, so every probe would come back refused for a reason
+# that has nothing to do with the sink -- which reads exactly like a filter.
+_XML_DSIG_NS = "http://www.w3.org/2000/09/xmldsig#"
+
+# Spans per body, matching the JSON leaf cap for the same reason: a generated
+# document can carry thousands, and a bounded run that spends its whole budget
+# on one envelope has tested one request.
+_XML_SPAN_LIMIT = 256
+
+
+def xml_body_is_signed(body: str) -> bool:
+    """Whether this body carries an XML signature, and so cannot be rewritten.
+
+    Checked by namespace rather than by element name: ``<Signature>`` is an
+    ordinary element in plenty of schemas, and the namespace is what says the
+    document covers its own bytes with a digest."""
+    return _XML_DSIG_NS in (body or "")
+
+
+def _xml_value_spans(body: str) -> List[Tuple[str, str, int, int]]:
+    """Every injectable value in an XML body as ``(kind, path, start, end)``.
+
+    ``kind`` is ``text``, ``attr`` or ``cdata`` and decides the escaping the
+    payload needs; ``start``/``end`` bound the value's bytes in ``body`` and are
+    the authority, exactly as ``tokens`` is for a JSON leaf. ``path`` is for
+    reading.
+
+    A sibling repeated under one parent is indexed from the second occurrence
+    (``item``, ``item[2]``, ``item[3]``) rather than from the first, which is
+    how a repeated multipart field is labelled too. The asymmetry is cosmetic
+    because the offsets address the span; naming every element ``a[1]/b[1]``
+    to be uniform would make the common document unreadable.
+
+    ``xmlns`` declarations are not candidates: a payload in a namespace URI
+    renames the element rather than reaching anything that reads its value.
+
+    Never raises. The input is a capture the operator supplied, and a document
+    that does not close a tag is still the one carrying the sink."""
+    spans: List[Tuple[str, str, int, int]] = []
+    stack: List[Tuple[str, str]] = []
+    counts: List[Dict[str, int]] = [{}]
+    pos, length = 0, len(body or "")
+
+    def path_of(extra: Optional[str] = None) -> str:
+        names = [label for _name, label in stack]
+        if extra is not None:
+            names.append(extra)
+        return "/".join(names)
+
+    while pos < length and len(spans) < _XML_SPAN_LIMIT:
+        lt = body.find("<", pos)
+        if lt < 0:
+            break
+        if lt > pos and stack:
+            # Character data belongs to whichever element is open. Whitespace
+            # between two tags is formatting, not a value.
+            if body[pos:lt].strip():
+                spans.append(("text", path_of(), pos, lt))
+        if body.startswith("<!--", lt):
+            end = body.find("-->", lt + 4)
+            pos = length if end < 0 else end + 3
+            continue
+        if body.startswith("<![CDATA[", lt):
+            end = body.find("]]>", lt + 9)
+            if end < 0:
+                break
+            if stack:
+                spans.append(("cdata", path_of() + "/cdata()", lt + 9, end))
+            pos = end + 3
+            continue
+        if body.startswith("<?", lt) or body.startswith("<!", lt):
+            # Prolog, DOCTYPE or processing instruction, skipped whole. A
+            # DOCTYPE with an internal subset carries `>` inside the brackets
+            # -- every entity declaration ends with one -- so the first `>` is
+            # not the end of it. The bracket has to be opened before the first
+            # `>` to count: searching the rest of the document for `]>` instead
+            # finds the one inside a later `]]>` and swallows the body with it.
+            end = body.find(">", lt + 2)
+            if body.startswith("<!DOCTYPE", lt) and 0 <= body.find("[", lt + 9) < (
+                    end if end >= 0 else length):
+                closed = body.find("]", body.find("[", lt + 9))
+                end = body.find(">", closed) if closed >= 0 else end
+            pos = length if end < 0 else end + 1
+            continue
+        match = _XML_TAG_RE.match(body, lt)
+        if match is None:
+            # A bare `<` in character data, or a tag the scanner cannot read.
+            pos = lt + 1
+            continue
+        closing, name, attrs, self_closing = (match.group(1), match.group(2),
+                                              match.group(3) or "", match.group(4))
+        if closing:
+            if stack and stack[-1][0] == name:
+                stack.pop()
+                counts.pop()
+            pos = match.end()
+            continue
+        siblings = counts[-1]
+        siblings[name] = siblings.get(name, 0) + 1
+        label = name if siblings[name] == 1 else f"{name}[{siblings[name]}]"
+        for attr in _XML_ATTR_RE.finditer(attrs):
+            attr_name = attr.group(1)
+            if attr_name == "xmlns" or attr_name.startswith("xmlns:"):
+                continue
+            group = 2 if attr.group(2) is not None else 3
+            spans.append(("attr", path_of(label) + f"/@{attr_name}",
+                          match.start(3) + attr.start(group),
+                          match.start(3) + attr.end(group)))
+            if len(spans) >= _XML_SPAN_LIMIT:
+                break
+        if not self_closing:
+            stack.append((name, label))
+            counts.append({})
+        pos = match.end()
+    return spans[:_XML_SPAN_LIMIT]
 
 
 def _order_graphql_leaves(parsed: Any,
@@ -7933,6 +8123,20 @@ def enumerate_injection_points(req: Dict[str, Any], kinds: Optional[Tuple[str, .
                 rendered = _render_json_path(tokens)
                 points.append(InjectionPoint("json", rendered,
                                              f"JSON field '{rendered}'", tokens))
+    elif stripped[:1] == "<":
+        # Chosen by the body's own shape, and deliberately not folded into the
+        # form branch below -- which is where an XML body used to land. A SOAP
+        # envelope carries `=` in its prolog and in every attribute, so
+        # splitting it on `&` yielded exactly one point named `<?xml version`
+        # that no probe could confirm, while every element and attribute in the
+        # document went untested. The kind filter is therefore applied *inside*
+        # the branch: `--auto-params form` against an envelope now finds no body
+        # point rather than a point that tests nothing, because coverage
+        # reported and not delivered reads exactly like a clean target.
+        if "xml" in selected and not xml_body_is_signed(body):
+            for kind, path, start, end in _xml_value_spans(body or ""):
+                points.append(InjectionPoint(
+                    "xml", path, f"XML {_XML_POINT_NOUNS[kind]} '{path}'", (start, end)))
     elif "=" in (body or "") and "form" in selected:
         for pair in body.split("&"):
             key, sep, _ = pair.partition("=")
@@ -7997,6 +8201,20 @@ def place_injection_point(target: str, headers: List[List[str]], body: str,
         if not _set_json_tokens(parsed, point.tokens, mark):
             return None
         return target, headers, json.dumps(parsed)
+    if point.kind == "xml":
+        # The offsets are the authority, as ``tokens`` is for a JSON leaf, and
+        # the document is spliced rather than re-emitted so a signed or
+        # whitespace-significant envelope survives byte for byte outside the
+        # value under test. The span is re-derived and matched on both its path
+        # and its bounds: a point built from a different capture would
+        # otherwise overwrite whatever happens to sit at those offsets here.
+        if len(point.tokens) != 2:
+            return None
+        start, end = point.tokens
+        if not any(path == point.name and span_start == start and span_end == end
+                   for _kind, path, span_start, span_end in _xml_value_spans(body or "")):
+            return None
+        return target, headers, (body or "")[:start] + mark + (body or "")[end:]
     if point.kind == "form":
         marked = _mark_urlencoded_param(body, point.name, mark)
         return (target, headers, marked) if marked is not None else None
@@ -8348,11 +8566,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--verify-url-location", choices=["query_value", "url_path", "raw"], default="query_value",
                         help="How to encode the payload where FUZZ appears in --verify-url "
                              "(default query_value: percent-encoded, as a query parameter)")
-    parser.add_argument("--verify-body-location", choices=["json_string", "form_value", "raw"], default=None,
+    parser.add_argument("--verify-body-location",
+                        choices=["json_string", "form_value", "xml_text", "xml_attr",
+                                 "xml_cdata", "raw"], default=None,
                         help="How to encode the payload where FUZZ appears in --verify-data "
-                             "(default: auto-detected from Content-Type/body shape). json_string "
+                             "(default: auto-detected from Content-Type/body shape, and for an XML "
+                             "body from the marker's own position). json_string "
                              "escapes for a JSON body WITHOUT percent-encoding; form_value percent-"
-                             "encodes for x-www-form-urlencoded; raw sends it verbatim")
+                             "encodes for x-www-form-urlencoded; xml_text and xml_attr apply XML "
+                             "character escaping, which the target's parser undoes, the attribute "
+                             "form also escaping both quotes; xml_cdata leaves the payload alone "
+                             "except for the sequence that would end the section; raw sends it "
+                             "verbatim — which is what an envelope the application scrapes with a "
+                             "regex rather than parses needs")
     parser.add_argument("--verify-allow-destructive", action="store_true",
                         help="Allow --verify-url to fire destructive payloads (persistence/backdoors/etc.); off by default")
     parser.add_argument("--verify-active-risk", choices=["safe", "intrusive", "stateful"], default=None,
@@ -8372,8 +8598,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--auto-params", default=None, metavar="KINDS",
                         help="(-r with --methods) Enumerate injection points instead of naming one. "
                              f"Comma-separated kinds from {', '.join(INJECTION_POINT_KINDS)}, or 'all'. "
-                             "Query values, JSON leaves addressed by path, form fields, cookie values and "
-                             "headers each get their own encoding. Implied by '-p all'.")
+                             "Query values, JSON leaves addressed by path, XML elements, attributes "
+                             "and CDATA sections addressed the same way, form fields, cookie values "
+                             "and headers each get their own encoding. Implied by '-p all'.")
     parser.add_argument("--point-order", choices=["fast", "thorough"], default="fast",
                         help="(enumeration) 'fast' (default) tries query, body, cookies and a curated "
                              "high-yield header list; 'thorough' also tries every remaining "
@@ -8883,6 +9110,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                     parsed_request, kinds=kinds,
                     include_path_segments=args.include_path_segments,
                     thorough=args.point_order == "thorough")
+                if xml_body_is_signed(parsed_request.get("body") or ""):
+                    # Said rather than left to the point count, because a
+                    # signed envelope is the one case where finding nothing in
+                    # the body is a statement about the capture and not about
+                    # the target. Probing it anyway would spend the budget on
+                    # digest failures that read exactly like a filter.
+                    print("[verify] the captured body carries an XML signature; rewriting any "
+                          "part of it breaks the digest, so no XML point was enumerated. Capture "
+                          "the request before it is signed, or name a point outside the body.")
                 if not points:
                     print("[!] No injection points found in the capture — nothing was tested. "
                           "Widen --auto-params, or add --include-path-segments.")

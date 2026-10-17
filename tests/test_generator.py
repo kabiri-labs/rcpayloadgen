@@ -7867,6 +7867,228 @@ class RepeatedMultipartFieldTestCase(unittest.TestCase):
             point, "FUZZ"))
 
 
+SOAP_BODY = (
+    '<?xml version="1.0" encoding="UTF-8"?>\n'
+    '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">\n'
+    "  <soap:Body>\n"
+    '    <getUser id="42" realm=\'corp\'>\n'
+    "      <name>alice</name>\n"
+    "      <note><![CDATA[free text]]></note>\n"
+    "    </getUser>\n"
+    "    <items>\n"
+    '      <item sku="a1">one</item>\n'
+    '      <item sku="b2">two</item>\n'
+    "    </items>\n"
+    "  </soap:Body>\n"
+    "</soap:Envelope>"
+)
+
+RAW_SOAP = (
+    "POST /services/user HTTP/1.1\r\n"
+    "Host: target.example\r\n"
+    "Content-Type: text/xml; charset=utf-8\r\n"
+    "SOAPAction: getUser\r\n"
+    "\r\n"
+    + SOAP_BODY
+)
+
+
+class XmlInjectionPointTestCase(unittest.TestCase):
+    """An XML body had one injection point, and it was not a real one.
+
+    No branch recognised XML, so an envelope fell through to the form branch --
+    which it reaches because a prolog and every attribute contain `=`. Splitting
+    it on `&` produced exactly one point named `<?xml version`, and every probe
+    for it rewrote the prolog. The run printed a point and a probe count while
+    no element or attribute in the document was ever tested, which is the
+    failure that matters: coverage reported and not delivered reads exactly like
+    a clean target.
+    """
+
+    def setUp(self):
+        self.req = parse_raw_request(RAW_SOAP)
+        self.body = self.req["body"]
+
+    def _points(self, **kwargs):
+        return rcekit.enumerate_injection_points(self.req, **kwargs)
+
+    def _xml(self, **kwargs):
+        return [p for p in self._points(**kwargs) if p.kind == "xml"]
+
+    def _place(self, name, mark="FUZZ"):
+        point = next(p for p in self._xml() if p.name == name)
+        return rcekit.place_injection_point(
+            self.req["target"], self.req["headers"], self.body, point, mark)
+
+    def test_elements_attributes_and_cdata_are_all_candidates(self):
+        found = {p.name for p in self._xml()}
+        self.assertIn("soap:Envelope/soap:Body/getUser/name", found)
+        self.assertIn("soap:Envelope/soap:Body/getUser/@id", found)
+        self.assertIn("soap:Envelope/soap:Body/getUser/@realm", found)
+        self.assertIn("soap:Envelope/soap:Body/getUser/note/cdata()", found)
+
+    def test_the_bogus_form_point_is_gone(self):
+        # The regression this branch exists for. An envelope must not be read
+        # as `a=1&b=2`, and the one point that produced is named here so a
+        # future refactor that restores the fall-through fails loudly.
+        points = self._points()
+        self.assertFalse([p for p in points if p.kind == "form"])
+        self.assertFalse([p for p in points if p.name.startswith("<?xml")])
+
+    def test_a_repeated_sibling_is_indexed_from_the_second(self):
+        # Both `item` elements are reachable. Addressing by name alone would
+        # rewrite the first for either candidate, so the second would be
+        # counted as covered and tested nowhere.
+        names = [p.name for p in self._xml() if "/items/" in p.name and "@" not in p.name]
+        self.assertEqual(names, ["soap:Envelope/soap:Body/items/item",
+                                 "soap:Envelope/soap:Body/items/item[2]"])
+        self.assertIn("<item sku=\"a1\">FUZZ</item>",
+                      self._place("soap:Envelope/soap:Body/items/item")[2])
+        self.assertIn("<item sku=\"b2\">FUZZ</item>",
+                      self._place("soap:Envelope/soap:Body/items/item[2]")[2])
+
+    def test_namespace_declarations_are_not_candidates(self):
+        # A payload in a namespace URI renames the element instead of reaching
+        # anything that reads a value.
+        self.assertFalse([p for p in self._xml() if p.name.endswith("@xmlns:soap")])
+
+    def test_placement_changes_the_value_and_nothing_else(self):
+        _target, _headers, body = self._place("soap:Envelope/soap:Body/getUser/name")
+        self.assertIn("<name>FUZZ</name>", body)
+        # Byte for byte outside the span: a signed or whitespace-significant
+        # envelope has to survive, which is why the document is spliced rather
+        # than parsed and re-emitted.
+        self.assertEqual(body.replace("FUZZ", "alice"), self.body)
+
+    def test_an_attribute_keeps_the_quoting_style_it_was_captured_with(self):
+        self.assertIn("realm='FUZZ'", self._place("soap:Envelope/soap:Body/getUser/@realm")[2])
+        self.assertIn('id="FUZZ"', self._place("soap:Envelope/soap:Body/getUser/@id")[2])
+
+    def test_a_point_that_no_longer_describes_the_body_places_nothing(self):
+        # Offsets from another capture would otherwise overwrite whatever
+        # happens to sit at them here.
+        point = rcekit.InjectionPoint("xml", "soap:Envelope/soap:Body/getUser/name",
+                                      "x", (3, 9))
+        self.assertIsNone(rcekit.place_injection_point(
+            self.req["target"], self.req["headers"], self.body, point, "FUZZ"))
+
+    def test_a_signed_envelope_yields_no_xml_point(self):
+        # Rewriting any byte breaks the digest, so every probe would come back
+        # refused for a reason that has nothing to do with the sink.
+        signed = SOAP_BODY.replace(
+            "<soap:Body>",
+            '<ds:Signature xmlns:ds="http://www.w3.org/2000/09/xmldsig#">'
+            "<ds:SignatureValue>AA==</ds:SignatureValue></ds:Signature><soap:Body>")
+        head = RAW_SOAP.split("\r\n\r\n")[0]
+        req = parse_raw_request(head + "\r\n\r\n" + signed)
+        self.assertTrue(rcekit.xml_body_is_signed(signed))
+        self.assertFalse([p for p in rcekit.enumerate_injection_points(req) if p.kind == "xml"])
+
+    def test_the_kind_can_be_narrowed_away_without_the_form_branch_claiming_it(self):
+        # Applying the filter inside the branch rather than on it: asking for
+        # form points against an envelope finds none, instead of finding the
+        # one that tests nothing.
+        self.assertFalse([p for p in self._points(kinds=("form",)) if p.kind in ("xml", "form")])
+        self.assertTrue(self._xml(kinds=("xml",)))
+
+    def test_a_doctype_with_an_internal_subset_does_not_swallow_the_document(self):
+        # The capture an XXE test is built from. Every entity declaration ends
+        # in `>`, so the first `>` is not the end of the DOCTYPE.
+        body = ('<?xml version="1.0"?>'
+                '<!DOCTYPE foo [ <!ENTITY xxe SYSTEM "file:///etc/passwd"> ]>'
+                "<root><a>hi</a></root>")
+        self.assertEqual([(k, p) for k, p, _s, _e in rcekit._xml_value_spans(body)],
+                         [("text", "root/a")])
+
+    def test_a_plain_doctype_before_a_cdata_section_does_not_swallow_it(self):
+        # `]]>` contains `]>`, so looking for the subset's close anywhere after
+        # the DOCTYPE finds the CDATA's and skips the body with it.
+        body = ('<?xml version="1.0"?><!DOCTYPE foo SYSTEM "f.dtd">'
+                "<root><a><![CDATA[x]]></a><b>bee</b></root>")
+        self.assertEqual([p for _k, p, _s, _e in rcekit._xml_value_spans(body)],
+                         ["root/a/cdata()", "root/b"])
+
+    def test_the_scanner_never_raises_on_a_capture_it_cannot_read(self):
+        # The input is whatever the operator captured, and a document that
+        # does not close a tag is still the one carrying the sink.
+        for broken in ("<a><b>x", "<<<>>>", "<!--", "<![CDATA[x", "<?xml", "", "<a/>",
+                       "<a attr=unquoted>x</a>", "</a>", "<a>" * 500):
+            self.assertIsInstance(rcekit._xml_value_spans(broken), list, broken)
+
+    def test_the_span_count_is_bounded(self):
+        body = "<root>" + "".join(f"<n>{i}</n>" for i in range(400)) + "</root>"
+        self.assertEqual(len(rcekit._xml_value_spans(body)), rcekit._XML_SPAN_LIMIT)
+
+
+class XmlBodyLocationTestCase(unittest.TestCase):
+    """The escaping an XML payload needs is a property of its *position*.
+
+    A payload in an attribute has to escape the quote that delimits it; one in
+    character data does not; one inside CDATA must not be escaped at all or the
+    sink receives `&amp;&amp;` literally. Sent raw, a single `&` or `<` makes
+    the body not-well-formed and the request is rejected before anything reads
+    the value -- a whole class of sink answering `negative` for a reason that
+    has nothing to do with the sink."""
+
+    def setUp(self):
+        self.kit = RCEKit()
+        self.req = parse_raw_request(RAW_SOAP)
+
+    def _location_for(self, name):
+        point = next(p for p in rcekit.enumerate_injection_points(self.req)
+                     if p.kind == "xml" and p.name == name)
+        _url, _method, data, headers, _label = rcekit.build_request_inputs(
+            RAW_SOAP, point=point)
+        return self.kit._detect_body_location(data, headers)
+
+    def test_each_shape_of_value_picks_its_own_encoding(self):
+        self.assertEqual(self._location_for("soap:Envelope/soap:Body/getUser/name"),
+                         "xml_text")
+        self.assertEqual(self._location_for("soap:Envelope/soap:Body/getUser/@id"),
+                         "xml_attr")
+        self.assertEqual(self._location_for("soap:Envelope/soap:Body/getUser/note/cdata()"),
+                         "xml_cdata")
+
+    def test_character_data_is_escaped_so_the_parser_hands_the_sink_the_payload(self):
+        encoded = self.kit._encode_for_location("; echo a && b <c>", "xml_text")
+        self.assertEqual(encoded, "; echo a &amp;&amp; b &lt;c&gt;")
+
+    def test_an_attribute_also_escapes_both_quotes(self):
+        encoded = self.kit._encode_for_location("""a"b'c""", "xml_attr")
+        self.assertEqual(encoded, "a&quot;b&apos;c")
+
+    def test_cdata_is_left_alone_except_for_the_sequence_that_ends_it(self):
+        self.assertEqual(self.kit._encode_for_location("; echo a && b", "xml_cdata"),
+                         "; echo a && b")
+        # Split across a section boundary, so the bytes the sink receives are
+        # unchanged while the section stays open.
+        self.assertEqual(self.kit._encode_for_location("x]]>y", "xml_cdata"),
+                         "x]]]]><![CDATA[>y")
+
+    def test_an_xml_body_with_no_recognisable_span_falls_through_to_raw(self):
+        # Better than guessing an escaping for a marker the scanner cannot
+        # place: an envelope the application scrapes with a regex rather than
+        # parses needs the payload verbatim.
+        self.assertEqual(
+            self.kit._detect_body_location("<root><a>x</a></root>",
+                                           ["Content-Type: text/xml"]),
+            "raw")
+
+    def test_a_json_body_is_still_json_even_with_a_tag_inside_a_string(self):
+        self.assertEqual(
+            self.kit._detect_body_location('{"a": "<b>FUZZ</b>"}',
+                                           ["Content-Type: application/json"]),
+            "json_string")
+
+    def test_an_inline_marker_in_a_hand_written_envelope_is_located_too(self):
+        # --verify-data with its own FUZZ gets the same treatment as an
+        # enumerated point.
+        self.assertEqual(
+            self.kit._detect_body_location('<a id="FUZZ"><b>x</b></a>',
+                                           ["Content-Type: application/soap+xml"]),
+            "xml_attr")
+
+
 class GraphQLPointOrderTestCase(unittest.TestCase):
     """A GraphQL POST spends most of its budget where nothing can be confirmed.
 
@@ -8062,6 +8284,77 @@ class EnumerationEndToEndTestCase(unittest.TestCase):
         # ...and the finding names the point that worked.
         self.assertIn("EXECUTED (", result.stdout)
         self.assertIn("at header 'User-Agent'", result.stdout)
+
+    def _soap_run(self, path, body=None):
+        """Point the whole CLI at a SOAP endpoint that shells its `<name>`.
+
+        The target parses the envelope, so it undoes the XML escaping the
+        delivery layer applied -- which is the half a unit test of the encoder
+        cannot show. `&amp;` has to arrive at the sink as `&`, or a payload
+        carrying a separator reaches a shell that never sees it."""
+        import tempfile
+
+        name_re = re.compile(r"<name>(.*?)</name>", re.S)
+
+        def route(method, path_, params, headers, body_):
+            match = name_re.search(body_ or "")
+            value = match.group(1) if match else ""
+            for entity, char in (("&lt;", "<"), ("&gt;", ">"), ("&quot;", '"'),
+                                 ("&apos;", "'"), ("&amp;", "&")):
+                value = value.replace(entity, char)
+            if path_.startswith("/vuln"):
+                pipe = sh_popen("echo " + value + " 2>&1")
+                out = pipe.read()
+                pipe.close()
+            else:  # /reflect: echo the value, never execute it
+                out = value
+            return 200, f"<?xml version=\"1.0\"?><Envelope><Body><r>{out}</r></Body></Envelope>"
+
+        envelope = body if body is not None else (
+            '<?xml version="1.0"?><Envelope><Body>'
+            '<getUser id="42"><name>alice</name></getUser></Body></Envelope>')
+        with local_target(route) as base, tempfile.TemporaryDirectory() as tmp:
+            host = base.split("//", 1)[1]
+            capture = Path(tmp) / "request.txt"
+            capture.write_text(f"POST {path} HTTP/1.1\nHost: {host}\n"
+                               "Content-Type: text/xml; charset=utf-8\n\n" + envelope)
+            return self._run("--acknowledge-consent", "-r", str(capture),
+                             "--auto-params", "xml", "--methods", "reflected",
+                             "--request-scheme", "http", "--environments", "unix",
+                             "--contexts", "raw", "--probe-depth", "quick")
+
+    def test_a_soap_element_sink_is_found_and_confirmed_end_to_end(self):
+        result = self._soap_run("/vuln")
+        self.assertEqual(result.returncode, 0, result.stdout[-2000:])
+        # It enumerated the envelope rather than reading it as a form...
+        self.assertIn("XML element 'Envelope/Body/getUser/name'", result.stdout)
+        self.assertIn("XML attribute 'Envelope/Body/getUser/@id'", result.stdout)
+        # ...so no form point claimed the body, which is the regression: the
+        # envelope used to yield exactly one, named after its prolog.
+        self.assertNotIn("body param", result.stdout)
+        # ...and the finding names the XML point that worked.
+        self.assertIn("EXECUTED (", result.stdout)
+        self.assertIn("at XML element 'Envelope/Body/getUser/name'", result.stdout)
+
+    def test_a_soap_endpoint_that_only_echoes_is_never_confirmed(self):
+        # The other half of the gate. The same envelope, the same probes, a
+        # target that returns the value instead of running it.
+        result = self._soap_run("/reflect")
+        self.assertEqual(result.returncode, 0, result.stdout[-2000:])
+        self.assertIn("XML element 'Envelope/Body/getUser/name'", result.stdout)
+        self.assertNotIn("EXECUTED (", result.stdout)
+        self.assertNotIn("<-- EXECUTED", result.stdout)
+
+    def test_a_signed_envelope_says_why_it_enumerated_nothing(self):
+        # Finding nothing in a signed body is a statement about the capture,
+        # not about the target, so the run must not let it pass for a clean one.
+        signed = ('<Envelope xmlns:ds="http://www.w3.org/2000/09/xmldsig#">'
+                  "<ds:Signature><ds:SignatureValue>AA==</ds:SignatureValue></ds:Signature>"
+                  '<Body><getUser id="42"><name>alice</name></getUser></Body></Envelope>')
+        result = self._soap_run("/vuln", body=signed)
+        self.assertIn("carries an XML signature", result.stdout)
+        self.assertIn("nothing was tested", result.stdout)
+        self.assertEqual(result.returncode, 1)
 
     def test_enumeration_without_methods_is_refused(self):
         import tempfile

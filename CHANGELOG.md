@@ -290,6 +290,68 @@ formats, or the template schema.
 
   No version bump -- this is documentation and tests only.
 
+## [3.1.0] — 2026-10-17
+
+### Added
+
+- **An XML or SOAP body is enumerated, and until now it had one injection point
+  that could not confirm anything.** No branch recognised XML, so an envelope
+  fell through to the **form** branch — which it reaches, because a prolog and
+  every attribute contain `=`. Splitting it on `&` produced exactly one point,
+  named `<?xml version`, and every probe for it rewrote the prolog. The run
+  printed a point and a probe count while no element, attribute or CDATA section
+  in the document was ever tested. That is the failure that matters: coverage
+  reported and not delivered reads exactly like a clean target.
+
+  The new `xml` kind addresses every element's character data, every attribute
+  value and every CDATA section by path — `soap:Body/getUser/name`,
+  `getUser/@id`, `note/cdata()`. A repeated sibling is indexed from the second
+  occurrence (`items/item`, `items/item[2]`), the same way a repeated multipart
+  field is labelled, so the later ones are reachable rather than counted as
+  covered. `xmlns` declarations are not candidates: a payload in a namespace URI
+  renames the element instead of reaching anything that reads its value.
+
+  The document is **spliced at the value's offsets**, never parsed and
+  re-emitted. Two reasons, and the second decided it. A signed envelope
+  (WS-Security / XML-DSig) covers its own bytes with a digest, and
+  parse-then-emit loses attribute order, insignificant whitespace and the
+  prolog's quoting style — none of which XML requires preserved and all of which
+  the digest covers. And a capture aimed at an **XXE** sink carries a DOCTYPE
+  with an external entity, because that is exactly what the operator is trying to
+  prove the *target* resolves; a real parser resolves it here instead, which
+  turns the tool into the thing it is testing for. A scanner interprets no
+  entity, so there is nothing to resolve, no billion laughs to expand and no
+  retrieval to disable.
+
+  A signed body is therefore not probed, and the run **says so** rather than
+  reporting zero points — every probe would come back refused for a reason that
+  has nothing to do with the sink, which reads exactly like a filter.
+
+- **`--verify-body-location` gained `xml_text`, `xml_attr` and `xml_cdata`**, and
+  the automatic choice now reads the marker's *position* rather than the body's
+  type. The escaping an XML payload needs is not a property of the body: a
+  payload in an attribute has to escape the quote that delimits it, one in
+  character data does not, and one inside CDATA must not be escaped at all or the
+  sink receives `&amp;&amp;` literally. The target's parser undoes the escaping,
+  so the sink receives `a && b` from `a &amp;&amp; b` — the same reason
+  `json_string` escapes rather than percent-encodes. Sent raw, a single `&` or
+  `<` makes the body not-well-formed and the request is rejected before anything
+  reads the value, which is a whole class of sink answering `negative` for a
+  reason that has nothing to do with the sink. An application that scrapes the
+  envelope with a regex instead of parsing it still needs
+  `--verify-body-location raw`, and can now say so.
+
+  `xml_cdata` leaves the payload alone except for the one sequence that would end
+  the section, which it splits across a section boundary — the bytes the sink
+  receives are unchanged.
+
+### Changed
+
+- **`--auto-params form` against an XML body now finds no body point**, where it
+  used to find the one that tested nothing. The branch is chosen by the body's
+  own shape and the kind filter is applied inside it, so an envelope can no
+  longer be read as `a=1&b=2`.
+
 ## [3.0.1] — 2026-10-01
 
 ### Fixed
@@ -2751,6 +2813,7 @@ this file and have not been restated here.
 
 
 [Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.36.0...HEAD
+[3.1.0]: https://github.com/kabiri-labs/rcekit/compare/v3.0.1...v3.1.0
 [3.0.1]: https://github.com/kabiri-labs/rcekit/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/kabiri-labs/rcekit/compare/v2.45.7...v3.0.0
 [2.45.7]: https://github.com/kabiri-labs/rcekit/compare/v2.45.6...v2.45.7
