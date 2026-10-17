@@ -669,6 +669,14 @@ serialization rather than blanket-encoded:
 A JSON leaf is only *replaced*, never created: assigning to a missing key would
 test a field the application never sends.
 
+A **byte-order mark** on either a JSON or an XML body is tolerated, at the branch
+and at the parse alike — `str.strip()` leaves U+FEFF in place and `json.loads`
+rejects it outright, so a marked capture used to yield no body point at all.
+Because the JSON path re-serialises, the mark is put back on the body that goes
+to the target: the capture carried it and the application accepted it, and the
+payload-free control is rendered the same way, so probe and control still differ
+in the field under test and in nothing else.
+
 A **multipart** body is recognised from `Content-Type`, and each part is a
 candidate — including a file part, whose content is the value under test while
 its `filename` and `Content-Type` stay as captured. The body is re-serialised
