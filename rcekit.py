@@ -46,7 +46,7 @@ def configure_logging() -> None:
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "3.1.1"
+__version__ = "3.1.2"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -524,6 +524,39 @@ def parse_sink_shapes(value: Optional[str]) -> Optional[Tuple[str, ...]]:
 # this is not a detection channel that was missed; it is a small reply expanding
 # into the scanner.
 MAX_DECOMPRESSED_BODY = 32 * 1024 * 1024
+
+# A UTF-8 byte-order mark. `str.strip()` does not remove it, because U+FEFF is
+# not whitespace, so a capture carrying one reads as "not XML" and "not JSON" to
+# any test on the first character -- and `json.loads` refuses it outright
+# ("Unexpected UTF-8 BOM"). .NET clients emit one routinely.
+#
+# Kept here rather than beside either carrier's own code, because both ask: it
+# arrived as an XML-only constant and the JSON branch then needed the same
+# answer. The cost of missing it is never a missed point but the wrong branch --
+# an XML body with a prolog contains `=`, so it lands in the form branch, and a
+# JSON body lands nowhere at all.
+_BOM = "\ufeff"
+
+
+def strip_bom(text: str) -> str:
+    """``text`` without a leading byte-order mark.
+
+    One helper for every place that has to decide what a body *is*, so a mark
+    cannot be tolerated at the branch and then rejected at the parse -- which
+    was the shape of this bug: fixing the test on the first character alone
+    would have handed the mark straight to `json.loads`, which rejects it."""
+    return (text or "").lstrip(_BOM)
+
+
+def _restore_bom(original: str, rendered: str) -> str:
+    """Put ``original``'s byte-order mark back on a re-serialised body.
+
+    The JSON path parses and re-emits, so the mark would be dropped silently.
+    The capture carried it and the application accepted it, so sending it back
+    is the faithful answer; and the payload-free control is rendered through the
+    same path, so probe and control differ in the field under test and in
+    nothing else -- which is what the control has to hold constant."""
+    return _BOM + rendered if (original or "").startswith(_BOM) else rendered
 
 
 def _inflate_bounded(raw: bytes, wbits: int) -> Tuple[bytes, bool]:
@@ -2195,7 +2228,7 @@ class RCEKit:
         if "x-www-form-urlencoded" in ctype:
             return "form_value"
         stripped = (data or "").strip()
-        if stripped[:1] in "{[":
+        if strip_bom(stripped)[:1] in "{[":
             return "json_string"
         if starts_xml_body(stripped) or "xml" in ctype:
             # Before the form test, which an envelope would not match anyway,
@@ -7874,14 +7907,6 @@ _XML_DSIG_NS = "http://www.w3.org/2000/09/xmldsig#"
 _XML_NS_DECL_RE = re.compile(
     r"(xmlns(?::[A-Za-z_][\w.-]*)?)\s*=\s*(?:\"([^\"]*)\"|'([^']*)')")
 
-# A UTF-8 byte-order mark. `str.strip()` does not remove it -- U+FEFF is not
-# whitespace -- so a capture that carries one reads as "not XML" to a test on
-# the first character. .NET clients emit one routinely, and the cost of missing
-# it is not a missed point but the wrong branch: a body with a prolog contains
-# `=`, so it lands in the form branch and produces the single bogus point that
-# the xml branch exists to replace.
-_XML_BOM = "\ufeff"
-
 # Spans per body, matching the JSON leaf cap for the same reason: a generated
 # document can carry thousands, and a bounded run that spends its whole budget
 # on one envelope has tested one request.
@@ -7944,7 +7969,7 @@ def starts_xml_body(stripped: str) -> bool:
     One predicate for the two places that ask -- the enumerator's branch and
     the body-location detector -- because the two of them disagreeing is how a
     body gets enumerated as XML and then escaped as something else."""
-    return stripped.lstrip(_XML_BOM)[:1] == "<"
+    return strip_bom(stripped)[:1] == "<"
 
 
 def xml_body_is_signed(body: str) -> bool:
@@ -8292,9 +8317,9 @@ def enumerate_injection_points(req: Dict[str, Any], kinds: Optional[Tuple[str, .
             if field in repeated:
                 label += f" (part {index + 1})"
             points.append(InjectionPoint("multipart", field, label, (index,)))
-    elif stripped[:1] in "{[" and "json" in selected:
+    elif strip_bom(stripped)[:1] in "{[" and "json" in selected:
         try:
-            parsed = json.loads(body)
+            parsed = json.loads(strip_bom(body))
         except (ValueError, TypeError, RecursionError):
             # RecursionError belongs here for the same reason it does in the
             # response-channel parser: json's scanner recurses in C, and a
@@ -8379,12 +8404,17 @@ def place_injection_point(target: str, headers: List[List[str]], body: str,
         return (f"{path}?{marked}", headers, body) if marked is not None else None
     if point.kind == "json":
         try:
-            parsed = json.loads(body)
+            parsed = json.loads(strip_bom(body))
         except (ValueError, TypeError, RecursionError):
             return None
         if not _set_json_tokens(parsed, point.tokens, mark):
             return None
-        return target, headers, json.dumps(parsed)
+        # The mark goes back on. This branch re-serialises, so it never
+        # preserved the capture byte for byte, but the capture carried a
+        # byte-order mark and the application accepted it -- sending it back is
+        # the faithful answer, and it keeps the probe and the payload-free
+        # control identical in that respect too.
+        return target, headers, _restore_bom(body, json.dumps(parsed))
     if point.kind == "xml":
         # The offsets are the authority, as ``tokens`` is for a JSON leaf, and
         # the document is spliced rather than re-emitted so a signed or
@@ -8479,12 +8509,12 @@ def _mark_json_field(body: str, param: str, mark: str) -> Optional[str]:
     """Set top-level JSON field ``param`` to ``mark``. Returns the re-serialised
     body, or None if the body is not a JSON object containing ``param``."""
     try:
-        obj = json.loads(body)
+        obj = json.loads(strip_bom(body))
     except (ValueError, TypeError):
         return None
     if isinstance(obj, dict) and param in obj:
         obj[param] = mark
-        return json.dumps(obj)
+        return _restore_bom(body, json.dumps(obj))
     return None
 
 
@@ -8513,7 +8543,7 @@ def _place_param_marker(target, headers, body, param, mark):
         if marked_query is not None:
             return f"{path}?{marked_query}", headers, body, f"query param '{param}'"
     stripped = body.strip()
-    if stripped[:1] in "{[":
+    if strip_bom(stripped)[:1] in "{[":
         marked = _mark_json_field(body, param, mark)
         if marked is not None:
             return target, headers, marked, f"JSON field '{param}'"

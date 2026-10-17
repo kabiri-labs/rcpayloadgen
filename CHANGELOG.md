@@ -290,6 +290,36 @@ formats, or the template schema.
 
   No version bump -- this is documentation and tests only.
 
+## [3.1.2] — 2026-10-17
+
+### Fixed
+
+- **A JSON body with a byte-order mark yielded no injection point at all.** The
+  same U+FEFF that used to send an XML body down the form branch sent a JSON body
+  nowhere: `str.strip()` leaves the mark, so the test on the first character said
+  "not JSON", and `-p NAME` could not reach a JSON field either. .NET clients
+  emit a mark routinely.
+
+  Fixing that test alone would not have been enough, and that is the shape of the
+  bug worth recording: `json.loads` **rejects** the mark outright
+  (`Unexpected UTF-8 BOM`), so the branch and the parse had to agree. Five
+  request-side sites did not — two branch tests, a third in `-p NAME`'s own path,
+  and three parses behind them.
+
+  The mark is now stripped through one shared helper wherever RCEKit decides what
+  a body *is*, which is also where the XML branch already asked, so the two
+  carriers cannot drift apart again. The constant moved out of the XML block and
+  lost its `_XML_` prefix, since both now use it.
+
+  Because the JSON path re-serialises, **the mark is put back on** the body that
+  goes to the target: the capture carried it and the application accepted it, so
+  sending it back is the faithful answer, and the payload-free control is rendered
+  through the same path, so probe and control still differ in the field under test
+  and in nothing else.
+
+  A mark is not a licence to guess. A body that is still neither JSON nor XML once
+  it is stripped goes down exactly the paths it did before.
+
 ## [3.1.1] — 2026-10-17
 
 ### Fixed
@@ -2889,6 +2919,7 @@ this file and have not been restated here.
 
 
 [Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.36.0...HEAD
+[3.1.2]: https://github.com/kabiri-labs/rcekit/compare/v3.1.1...v3.1.2
 [3.1.1]: https://github.com/kabiri-labs/rcekit/compare/v3.1.0...v3.1.1
 [3.1.0]: https://github.com/kabiri-labs/rcekit/compare/v3.0.1...v3.1.0
 [3.0.1]: https://github.com/kabiri-labs/rcekit/compare/v3.0.0...v3.0.1

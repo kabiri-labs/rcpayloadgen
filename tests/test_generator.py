@@ -8277,6 +8277,90 @@ class XmlEmptyLeafValueTestCase(unittest.TestCase):
              ("text", "soap:Envelope/soap:Body/items/item[2]")])
 
 
+class JsonByteOrderMarkTestCase(unittest.TestCase):
+    """A marked JSON capture yielded no body point at all.
+
+    The same U+FEFF that sent an XML body down the form branch sent a JSON body
+    nowhere: `str.strip()` leaves the mark, so the test on the first character
+    said "not JSON", and `-p NAME` could not reach a JSON field either. Fixing
+    that test alone would not have been enough — `json.loads` rejects the mark
+    outright ("Unexpected UTF-8 BOM"), so the branch and the parse had to agree.
+
+    The cases below assert the four observable outcomes together rather than one
+    each, because the failure this bug had was precisely that one site tolerated
+    the mark and the next rejected it."""
+
+    BOM = "\ufeff"
+
+    def setUp(self):
+        self.body = self.BOM + '{"note": "x", "cmd": "alice"}'
+        self.raw = ("POST /api HTTP/1.1\r\nHost: t.example\r\n"
+                    "Content-Type: application/json\r\n\r\n" + self.body)
+        self.req = parse_raw_request(self.raw)
+        self.kit = RCEKit()
+
+    def test_the_mark_defeats_strip_and_json_loads_alike(self):
+        # Why the fix is two things and not one.
+        self.assertEqual(self.BOM.strip(), self.BOM)
+        with self.assertRaises(ValueError):
+            json.loads(self.BOM + "{}")
+        self.assertEqual(rcekit.strip_bom(self.BOM + "{}"), "{}")
+        self.assertEqual(rcekit.strip_bom("{}"), "{}")
+        self.assertEqual(rcekit.strip_bom(None), "")
+
+    def test_every_path_agrees_that_a_marked_body_is_json(self):
+        points = rcekit.enumerate_injection_points(self.req)
+        self.assertEqual([p.name for p in points if p.kind == "json"], ["note", "cmd"])
+        self.assertFalse([p for p in points if p.kind == "form"],
+                         "a marked JSON body must not fall through to the form branch")
+        target = next(p for p in points if p.kind == "json" and p.name == "cmd")
+        _u, _m, data, hdrs, label = rcekit.build_request_inputs(self.raw, point=target)
+        self.assertEqual(label, "JSON field 'cmd'")
+        self.assertEqual(self.kit._detect_body_location(data, hdrs), "json_string")
+        # -p NAME goes through its own branch and its own parse.
+        _u, _m, by_name, _h, injection = rcekit.build_request_inputs(self.raw, param="cmd")
+        self.assertEqual(injection, "JSON field 'cmd'")
+        self.assertIn('"cmd": "FUZZ"', by_name)
+
+    def test_the_mark_is_sent_back_as_captured(self):
+        # This path re-serialises, so the mark would otherwise be dropped. The
+        # capture carried it and the application accepted it.
+        target = next(p for p in rcekit.enumerate_injection_points(self.req)
+                      if p.kind == "json" and p.name == "cmd")
+        _t, _h, placed = rcekit.place_injection_point(
+            self.req["target"], self.req["headers"], self.body, target, "FUZZ")
+        self.assertTrue(placed.startswith(self.BOM), repr(placed))
+        self.assertIn('"cmd": "FUZZ"', placed)
+        self.assertIn('"note": "x"', placed)
+
+    def test_an_unmarked_capture_gains_no_mark(self):
+        # The near neighbour, and the one every other test in this file uses.
+        plain = '{"note": "x", "cmd": "alice"}'
+        raw = ("POST /api HTTP/1.1\r\nHost: t.example\r\n"
+               "Content-Type: application/json\r\n\r\n" + plain)
+        _u, _m, data, _h, _l = rcekit.build_request_inputs(raw, param="cmd")
+        self.assertEqual(data, '{"note": "x", "cmd": "FUZZ"}')
+        self.assertFalse(data.startswith(self.BOM))
+        self.assertEqual(rcekit._restore_bom(plain, "{}"), "{}")
+        self.assertEqual(rcekit._restore_bom(self.BOM + plain, "{}"), self.BOM + "{}")
+
+    def test_a_marked_xml_capture_still_works_through_the_shared_helper(self):
+        # Both carriers now ask the same helper, so a regression in it would
+        # take out the XML branch the same way.
+        raw = ("POST /s HTTP/1.1\r\nHost: t.example\r\nContent-Type: text/xml\r\n\r\n"
+               + self.BOM + '<?xml version="1.0"?><root><cmd>x</cmd></root>')
+        points = rcekit.enumerate_injection_points(parse_raw_request(raw))
+        self.assertEqual([p.name for p in points if p.kind == "xml"], ["root/cmd"])
+        self.assertFalse([p for p in points if p.kind == "form"])
+
+    def test_a_marked_body_that_is_neither_is_untouched(self):
+        # A mark is not a licence to guess: a body that is not JSON or XML with
+        # it stripped still goes through the paths it did before.
+        self.assertEqual(
+            self.kit._detect_body_location(self.BOM + "a=1&b=2", []), "form_value")
+        self.assertEqual(self.kit._detect_body_location(self.BOM + "opaque", []), "raw")
+
+
 class XmlByteOrderMarkTestCase(unittest.TestCase):
     """A byte-order mark is not whitespace, and `str.strip()` leaves it in.
 
