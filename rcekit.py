@@ -548,6 +548,23 @@ def strip_bom(text: str) -> str:
     return (text or "").lstrip(_BOM)
 
 
+def strip_bom_then_space(text: str) -> str:
+    """``text`` with a byte-order mark removed **and then** whitespace, in that
+    order, for deciding what a body is.
+
+    The order is the whole content of this function. ``str.strip()`` stops at a
+    mark, because U+FEFF is not whitespace, so stripping first leaves
+    ``\\ufeff\\n{...}`` with a newline still in front of the delimiter -- and
+    every test on the first character then says "not JSON" about a document
+    ``json.loads`` accepts, and "not XML" about one the scanner reads. Which is
+    the same branch-disagrees-with-parse failure that the mark handling exists
+    to end, reached by writing the rule correctly and the order backwards.
+
+    Named for the order rather than for the result so the next reader does not
+    have to reconstruct why it is not simply ``text.strip()``."""
+    return strip_bom(text).strip()
+
+
 def _restore_bom(original: str, rendered: str) -> str:
     """Put ``original``'s byte-order mark back on a re-serialised body.
 
@@ -2227,8 +2244,8 @@ class RCEKit:
             return "json_string"
         if "x-www-form-urlencoded" in ctype:
             return "form_value"
-        stripped = (data or "").strip()
-        if strip_bom(stripped)[:1] in "{[":
+        stripped = strip_bom_then_space(data)
+        if stripped[:1] in "{[":
             return "json_string"
         if starts_xml_body(stripped) or "xml" in ctype:
             # Before the form test, which an envelope would not match anyway,
@@ -7968,7 +7985,13 @@ def starts_xml_body(stripped: str) -> bool:
 
     One predicate for the two places that ask -- the enumerator's branch and
     the body-location detector -- because the two of them disagreeing is how a
-    body gets enumerated as XML and then escaped as something else."""
+    body gets enumerated as XML and then escaped as something else.
+
+    Both pass text that :func:`strip_bom_then_space` has already cleaned. The
+    mark is stripped again here rather than assumed away, so a direct caller
+    handing this a raw body still gets the right answer -- but note it does not
+    strip whitespace, because a body whose mark is followed by one has to be
+    cleaned in the right order *before* any test on its first character."""
     return strip_bom(stripped)[:1] == "<"
 
 
@@ -8296,7 +8319,7 @@ def enumerate_injection_points(req: Dict[str, Any], kinds: Optional[Tuple[str, .
             if sep and key:
                 points.append(InjectionPoint("query", key, f"query param '{key}'"))
 
-    stripped = (body or "").strip()
+    stripped = strip_bom_then_space(body)
     if _is_multipart_body(headers):
         # Decided from Content-Type, and decided before the form branch, which
         # used to split a multipart body on `&` and yield a single point named
@@ -8317,7 +8340,7 @@ def enumerate_injection_points(req: Dict[str, Any], kinds: Optional[Tuple[str, .
             if field in repeated:
                 label += f" (part {index + 1})"
             points.append(InjectionPoint("multipart", field, label, (index,)))
-    elif strip_bom(stripped)[:1] in "{[" and "json" in selected:
+    elif stripped[:1] in "{[" and "json" in selected:
         try:
             parsed = json.loads(strip_bom(body))
         except (ValueError, TypeError, RecursionError):
@@ -8349,6 +8372,13 @@ def enumerate_injection_points(req: Dict[str, Any], kinds: Optional[Tuple[str, .
     elif "=" in (body or "") and "form" in selected:
         for pair in body.split("&"):
             key, sep, _ = pair.partition("=")
+            # A byte-order mark sits in front of the *first* key, where it is an
+            # artefact of how the body was encoded rather than part of the field
+            # name. Named without it, so the report does not print an invisible
+            # character and `-p NAME` addresses what the operator can read. The
+            # body keeps its own bytes: the key is rewritten as captured, since
+            # a urlencoded parser on the far side sees the mark too.
+            key = strip_bom(key)
             if sep and key:
                 points.append(InjectionPoint("form", key, f"body param '{key}'"))
 
@@ -8497,7 +8527,11 @@ def _mark_urlencoded_param(blob: str, param: str, mark: str) -> Optional[str]:
     out: List[str] = []
     for pair in blob.split("&"):
         key, _, _value = pair.partition("=")
-        if key == param:
+        # `strip_bom` on the comparison only: a mark in front of the first key
+        # is an encoding artefact and the point is named without it, but the key
+        # is written back exactly as captured, because the application's parser
+        # sees the mark as well and a key RCEKit rewrote is a key it changed.
+        if key == param or strip_bom(key) == param:
             out.append(f"{key}={mark}")
             found = True
         else:
@@ -8542,8 +8576,8 @@ def _place_param_marker(target, headers, body, param, mark):
         marked_query = _mark_urlencoded_param(query, param, mark)
         if marked_query is not None:
             return f"{path}?{marked_query}", headers, body, f"query param '{param}'"
-    stripped = body.strip()
-    if strip_bom(stripped)[:1] in "{[":
+    stripped = strip_bom_then_space(body)
+    if stripped[:1] in "{[":
         marked = _mark_json_field(body, param, mark)
         if marked is not None:
             return target, headers, marked, f"JSON field '{param}'"

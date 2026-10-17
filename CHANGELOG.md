@@ -320,6 +320,24 @@ formats, or the template schema.
   A mark is not a licence to guess. A body that is still neither JSON nor XML once
   it is stripped goes down exactly the paths it did before.
 
+  The mark is removed **and then** whitespace, in that order, and the order is
+  the whole of it: `str.strip()` stops at a mark, so a body whose mark is
+  followed by a newline still has that newline in front of its delimiter after
+  stripping — and every test on the first character then says "not JSON" about a
+  document `json.loads` accepts, and "not XML" about one the scanner reads. That
+  is the same branch-disagrees-with-parse failure this entry is about, reached by
+  writing the rule correctly and the order backwards. One helper named for the
+  order now owns it, and a test fails if the two are swapped.
+
+- **A form key behind a byte-order mark was addressable only as an invisible
+  name.** A mark sits in front of the *first* key, where it is an artefact of how
+  the body was encoded rather than part of the field name, so enumeration
+  reported `<mark>cmd` — a report with an invisible character in it — and
+  `-p cmd` could not find the field at all. The point is now named without the
+  mark, while the body keeps its own bytes: the key is written back exactly as
+  captured, because a urlencoded parser on the far side sees the mark too, and a
+  key RCEKit rewrote is a key it changed.
+
 ## [3.1.1] — 2026-10-17
 
 ### Fixed
