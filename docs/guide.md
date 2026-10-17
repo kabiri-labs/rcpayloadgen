@@ -142,9 +142,11 @@ the payload arrives at the sink already mangled, so nothing executes.
 
 RCEKit encodes each payload for **the exact injection point it lands in** — a
 query value is percent-encoded, a JSON field is JSON-escaped, a form field is
-form-encoded, a header stays single-line. So `; id` is delivered as a working
-separator inside a JSON string, not as the literal `%3B%20id` that the sink never
-decodes:
+form-encoded, a header stays single-line, and inside an XML body the escaping
+follows the *position*: character data, an attribute value whose quote the
+payload must not close, or a CDATA section where nothing is escaped at all. So
+`; id` is delivered as a working separator inside a JSON string, not as the
+literal `%3B%20id` that the sink never decodes:
 
 ```bash
 python rcekit.py --acknowledge-consent \
@@ -160,7 +162,9 @@ body. Override it when the guess is wrong:
 |---|---|
 | `--verify-body-location json_string` | JSON body — escapes for JSON, **no** percent-encoding |
 | `--verify-body-location form_value` | `application/x-www-form-urlencoded` body |
-| `--verify-body-location raw` | the payload must go on the wire verbatim |
+| `--verify-body-location xml_text` / `xml_attr` | XML body — escapes the characters the parser undoes, the attribute form also escaping both quotes |
+| `--verify-body-location xml_cdata` | the marker sits inside a CDATA section, where nothing is escaped |
+| `--verify-body-location raw` | the payload must go on the wire verbatim — including an envelope the application scrapes with a regex rather than parses |
 | `--verify-url-location url_path` | `FUZZ` sits in the path, not a query value |
 | `--verify-url-location raw` | no URL encoding at all |
 

@@ -2,7 +2,7 @@
 
 **`executed` means the target executed the input. `negative` means the probes reached it.**
 
-**Version 3.0.1** · MIT · Python 3.8+ · zero third-party dependencies
+**Version 3.1.0** · MIT · Python 3.8+ · zero third-party dependencies
 
 RCEKit is an **RCE detection &amp; confirmation toolkit** for authorised penetration
 testing, red teaming and security research. Point it at a target you are allowed
@@ -238,7 +238,8 @@ cookie, the content type and the body go with every probe.
 
 The method, path, headers, body and cookies are reused as captured, and each
 value is encoded for the context it lands in — a JSON leaf, a form field and a
-cookie are not escaped the same way. Drop `-p` and mark the spot with `FUZZ` or
+cookie are not escaped the same way, and inside an XML body an attribute value
+and a CDATA section are not either. Drop `-p` and mark the spot with `FUZZ` or
 `*` instead, if you prefer.
 
 ### Everything the tool has
@@ -274,7 +275,7 @@ What each flag opens up:
 
 | | |
 |---|---|
-| `--auto-params all` | every query value, JSON leaf, form field, multipart part, cookie and header, instead of one named field |
+| `--auto-params all` | every query value, JSON leaf, XML element, attribute and CDATA section, form field, multipart part, cookie and header, instead of one named field |
 | `--point-order thorough` | every non-hop-by-hop header, not just the high-yield ones |
 | `--methods ...,lookup,deser` | expression-lookup and deserialization sinks, which the shell-shaped methods cannot reach |
 | `--oob-host` | a callback host for the blind methods. An IP the target can reach serves `oob`; `lookup` and `deser`'s gadget can only put a token in a DNS label, so both need a domain delegated to you, and port 53 needs root |
@@ -464,11 +465,15 @@ them will call `executed`:
 - **Query-language bridges** (`--bridges`) — `COPY … FROM PROGRAM`,
   `xp_cmdshell`, `expect://`. A bridge is a carrier, not an oracle: it wraps the
   command the methods already build, so the same tiers apply through it.
-- **Injection-point enumeration** (`-p all`) — query, JSON leaves, form fields,
-  multipart parts, cookies, headers and path segments, each encoded for where it
-  lands, with the probe cost printed before anything fires. A GraphQL body is
-  ordered by what can actually confirm: the `variables` a resolver reads before
-  the operation document itself.
+- **Injection-point enumeration** (`-p all`) — query, JSON leaves, XML and SOAP
+  elements, attributes and CDATA sections, form fields, multipart parts, cookies,
+  headers and path segments, each encoded for where it lands, with the probe cost
+  printed before anything fires. A GraphQL body is ordered by what can actually
+  confirm: the `variables` a resolver reads before the operation document itself.
+  An XML body is spliced at the value's offsets rather than re-emitted, so a
+  whitespace-significant envelope survives and a DOCTYPE in an XXE capture is
+  never resolved by RCEKit itself; a *signed* envelope is not probed, and the run
+  says so instead of reporting zero points.
 
 Mix methods freely: `--methods reflected,eval,time` runs all three and reports each
 tier separately.
@@ -623,6 +628,7 @@ below have the worked commands.
 | I have a URL and a parameter | [Point at a URL](docs/guide.md#point-at-a-url) |
 | I have a request saved from Burp | [Point at a captured request](docs/guide.md#point-at-a-captured-request) |
 | The app is JSON / the payload keeps getting mangled | [Landing the payload intact](docs/guide.md#landing-the-payload-intact) |
+| The body is XML or a SOAP envelope | [Enumerating injection points](docs/reference.md#enumerating-injection-points) |
 | The sink strips `;` | [When the sink filters separators](docs/guide.md#when-the-sink-filters-separators) |
 | My input lands inside `'quotes'` | [Injecting inside quotes](docs/guide.md#injecting-inside-quotes) |
 | The sink runs my input as the whole command | [Whole-command sinks](docs/guide.md#whole-command-sinks) |

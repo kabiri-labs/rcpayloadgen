@@ -38,7 +38,7 @@ starting point — this page is for looking things up once you know what you wan
 | `-p`, `--param` | Parameter/field/header/cookie to inject into for `-r` (query → body → header → cookie) | None |
 | `--request-scheme` | `http` / `https` for the URL built from `-r` | auto |
 | `--verify-url-location` | Where `FUZZ` sits in the URL: `query_value`, `url_path`, `raw` | `query_value` |
-| `--verify-body-location` | How to encode `FUZZ` in the body: `json_string`, `form_value`, `raw` | auto |
+| `--verify-body-location` | How to encode `FUZZ` in the body: `json_string`, `form_value`, `xml_text`, `xml_attr`, `xml_cdata`, `raw` | auto |
 | `--verify-delay` | Seconds between verification requests (rate limiting) | `0` |
 | `--verify-timeout` | Per-request timeout in seconds | `8` |
 | `--insecure` | Drop every TLS assurance: no certificate or hostname check, and OpenSSL's security level and minimum protocol version lowered so a legacy stack still completes a handshake | Off |
@@ -659,6 +659,7 @@ serialization rather than blanket-encoded:
 |---|---|---|
 | `query` | parameter name | the `a=1&b=2` encoder |
 | `json` | path — `user.profile.name`, `tags[1]` | the JSON encoder, re-serialised |
+| `xml` | path — `soap:Body/getUser/name`, `getUser/@id`, `note/cdata()` | the document spliced at the value's offsets, XML-escaped for its position |
 | `form` | field name | the `a=1&b=2` encoder |
 | `multipart` | part name from `Content-Disposition` | the part's own body, re-serialised with CRLF delimiters |
 | `cookie` | crumb name | the `Cookie` header, other crumbs untouched |
@@ -676,6 +677,43 @@ the whole request with its line endings normalised. Part *content* is left
 character for character, so a lone newline inside an uploaded text file
 survives. The payload-free control is rendered the same way, so it differs from
 the probe in the field under test and in nothing else.
+
+An **XML or SOAP** body is recognised from its first character, and every
+element's character data, every attribute value and every CDATA section is a
+candidate. A repeated sibling is indexed from the second occurrence —
+`items/item`, `items/item[2]` — so the later ones are reachable rather than
+counted as covered; `xmlns` declarations are not candidates, because a payload
+in a namespace URI renames the element instead of reaching anything that reads
+its value.
+
+The document is **spliced at the value's offsets**, never parsed and re-emitted.
+Two reasons, and the second is the one that decided it. A signed envelope
+(WS-Security / XML-DSig) covers its own bytes with a digest, and parse-then-emit
+loses attribute order, insignificant whitespace and the prolog's quoting style —
+none of which XML requires preserved and all of which the digest covers. And a
+capture aimed at an **XXE** sink carries a DOCTYPE with an external entity,
+because that is exactly what the operator is trying to prove the *target*
+resolves; a real parser would resolve it here instead, turning the tool into the
+thing it is testing for. A scanner interprets no entity, so there is nothing to
+resolve and no retrieval to disable.
+
+A signed body is therefore not probed at all, and the run says so rather than
+reporting zero points: every probe would come back refused for a reason that has
+nothing to do with the sink, which reads exactly like a filter. Capture the
+request before it is signed, or name a point outside the body.
+
+The payload is escaped for the position it lands in — `xml_text` for character
+data, `xml_attr` which also escapes both quotes, `xml_cdata` which leaves the
+payload alone except for the one sequence that would end the section. The
+target's parser undoes the escaping, so the sink receives `a && b` from
+`a &amp;&amp; b`, for the same reason `json_string` escapes rather than
+percent-encodes. An application that scrapes the envelope with a regex instead of
+parsing it needs `--verify-body-location raw`.
+
+Before this, an XML body fell through to the **form** branch — which it reaches,
+because a prolog and every attribute contain `=`. Splitting it on `&` produced
+one point named `<?xml version`, and every probe for it rewrote the prolog. The
+run printed a point and a probe count while nothing in the document was tested.
 
 A **GraphQL** body is enumerated as JSON, then reordered. `variables` carries
 the values the operation is called with, and those reach resolvers; `query` is
