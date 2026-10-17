@@ -8360,6 +8360,74 @@ class JsonByteOrderMarkTestCase(unittest.TestCase):
             self.kit._detect_body_location(self.BOM + "a=1&b=2", []), "form_value")
         self.assertEqual(self.kit._detect_body_location(self.BOM + "opaque", []), "raw")
 
+    def test_whitespace_after_the_mark_does_not_hide_the_body(self):
+        """The order of the two strips is the whole of this case.
+
+        `str.strip()` stops at a mark, because U+FEFF is not whitespace, so
+        stripping first leaves a newline still in front of the delimiter and
+        every test on the first character says "not JSON" about a document
+        `json.loads` accepts. That is the same branch-disagrees-with-parse
+        failure the mark handling exists to end, reached by writing the rule
+        correctly and the order backwards."""
+        self.assertEqual(rcekit.strip_bom_then_space(self.BOM + "\n{}"), "{}")
+        self.assertEqual(rcekit.strip_bom_then_space("  \n{}  "), "{}")
+        self.assertEqual(rcekit.strip_bom_then_space(None), "")
+        # The order, stated as the thing that goes wrong without it.
+        wrong_order = rcekit.strip_bom((self.BOM + "\n{}").strip())
+        self.assertEqual(wrong_order, "\n{}",
+                         "stripping whitespace first cannot reach past the mark")
+        self.assertNotIn(wrong_order[:1], "{[",
+                         "which is why every shape test said 'not JSON'")
+        self.assertEqual(rcekit.strip_bom_then_space(self.BOM + "\n{}")[:1], "{")
+
+        for ctype, body, kind, want in [
+            ("application/json", '{"cmd": "x", "note": "y"}', "json", ["cmd", "note"]),
+            ("text/xml", "<root><cmd>x</cmd></root>", "xml", ["root/cmd"]),
+        ]:
+            raw = (f"POST /api HTTP/1.1\r\nHost: t.example\r\n"
+                   f"Content-Type: {ctype}\r\n\r\n" + self.BOM + "\n" + body)
+            points = rcekit.enumerate_injection_points(parse_raw_request(raw))
+            self.assertEqual([p.name for p in points if p.kind == kind], want, ctype)
+            self.assertFalse([p for p in points if p.kind == "form"], ctype)
+
+    def test_whitespace_after_the_mark_does_not_hide_a_named_parameter(self):
+        raw = ("POST /api HTTP/1.1\r\nHost: t.example\r\n"
+               "Content-Type: application/json\r\n\r\n"
+               + self.BOM + '\n{"cmd": "x"}')
+        _u, _m, data, _h, injection = rcekit.build_request_inputs(raw, param="cmd")
+        self.assertEqual(injection, "JSON field 'cmd'")
+        self.assertIn('"cmd": "FUZZ"', data)
+
+    def test_a_form_key_behind_the_mark_is_addressable_and_readable(self):
+        """A mark sits in front of the *first* key, where it is an artefact of
+        how the body was encoded rather than part of the field name.
+
+        The point is therefore named without it -- so a report does not print an
+        invisible character and `-p NAME` addresses what the operator can read --
+        while the body keeps its own bytes, because a urlencoded parser on the
+        far side sees the mark too and a key RCEKit rewrote is a key it
+        changed."""
+        raw = ("POST /api HTTP/1.1\r\nHost: t.example\r\n"
+               "Content-Type: application/x-www-form-urlencoded\r\n\r\n"
+               + self.BOM + "cmd=alice&note=x")
+        points = rcekit.enumerate_injection_points(parse_raw_request(raw))
+        self.assertEqual([p.name for p in points if p.kind == "form"], ["cmd", "note"])
+        _u, _m, data, _h, injection = rcekit.build_request_inputs(raw, param="cmd")
+        self.assertEqual(injection, "body param 'cmd'")
+        # The key goes on the wire as captured, mark and all.
+        self.assertEqual(data, self.BOM + "cmd=FUZZ&note=x")
+
+    def test_an_unmarked_form_key_is_matched_exactly_as_before(self):
+        # The near neighbour: tolerating a mark on the comparison must not make
+        # the match loose for anything else.
+        self.assertEqual(rcekit._mark_urlencoded_param("cmd=a&note=b", "cmd", "F"),
+                         "cmd=F&note=b")
+        self.assertIsNone(rcekit._mark_urlencoded_param("cmd=a", "cm", "F"))
+        self.assertIsNone(rcekit._mark_urlencoded_param("cmd=a", "cmdx", "F"))
+        self.assertEqual(
+            rcekit._mark_urlencoded_param(self.BOM + "cmd=a", self.BOM + "cmd", "F"),
+            self.BOM + "cmd=F", "the captured spelling must still match itself")
+
 
 class XmlByteOrderMarkTestCase(unittest.TestCase):
     """A byte-order mark is not whitespace, and `str.strip()` leaves it in.

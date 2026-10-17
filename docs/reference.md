@@ -671,11 +671,20 @@ test a field the application never sends.
 
 A **byte-order mark** on either a JSON or an XML body is tolerated, at the branch
 and at the parse alike — `str.strip()` leaves U+FEFF in place and `json.loads`
-rejects it outright, so a marked capture used to yield no body point at all.
+rejects it outright, so a marked capture used to yield no body point at all. The
+mark is removed *and then* whitespace, so `U+FEFF` followed by a newline is read
+as the JSON or XML it is.
+
 Because the JSON path re-serialises, the mark is put back on the body that goes
 to the target: the capture carried it and the application accepted it, and the
 payload-free control is rendered the same way, so probe and control still differ
 in the field under test and in nothing else.
+
+On a **form** body the mark lands in front of the first key, where it is an
+encoding artefact and not part of the field name. The point is named without it,
+so a finding does not print an invisible character and `-p NAME` addresses what
+you can read — and the key still goes on the wire exactly as captured, because
+the application's own parser sees the mark too.
 
 A **multipart** body is recognised from `Content-Type`, and each part is a
 candidate — including a file part, whose content is the value under test while
