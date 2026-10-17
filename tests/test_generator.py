@@ -8020,6 +8020,191 @@ class XmlInjectionPointTestCase(unittest.TestCase):
         self.assertEqual(len(rcekit._xml_value_spans(body)), rcekit._XML_SPAN_LIMIT)
 
 
+class XmlSignatureDetectionTestCase(unittest.TestCase):
+    """A signature is an element *in* a namespace, and neither half decides it.
+
+    Reading the namespace URI alone suppressed every point in a document that
+    merely predeclared the prefix -- which plenty of WS-* schemas do on the
+    envelope root whether or not anything is signed -- so a testable request
+    reported that there was nothing to test. Reading the element name alone is
+    the other half of the same mistake: `<Signature>` is an ordinary element in
+    plenty of schemas. The cases below are deliberately near neighbours of each
+    other, because a guard like this does not break on an obvious stranger."""
+
+    def _points(self, body):
+        req = parse_raw_request("POST /s HTTP/1.1\r\nHost: t.example\r\n"
+                                "Content-Type: text/xml\r\n\r\n" + body)
+        return [p.name for p in rcekit.enumerate_injection_points(req) if p.kind == "xml"]
+
+    def test_a_declared_but_unused_prefix_is_not_a_signature(self):
+        # The finding. A schema that predeclares the prefix on the root is not
+        # a signed document, and suppressing its points reports a testable
+        # request as having nothing to test.
+        body = ('<root xmlns:ds="http://www.w3.org/2000/09/xmldsig#">'
+                "<cmd>x</cmd></root>")
+        self.assertFalse(rcekit.xml_body_is_signed(body))
+        self.assertEqual(self._points(body), ["root/cmd"])
+
+    def test_the_namespace_uri_in_text_content_is_not_a_signature(self):
+        body = ("<root><note>see http://www.w3.org/2000/09/xmldsig# for details</note>"
+                "<cmd>x</cmd></root>")
+        self.assertFalse(rcekit.xml_body_is_signed(body))
+        self.assertIn("root/cmd", self._points(body))
+
+    def test_an_element_named_signature_outside_the_namespace_is_not_one(self):
+        # The other half. Deciding on the name would call this signed.
+        body = "<root><Signature>abc</Signature><cmd>x</cmd></root>"
+        self.assertFalse(rcekit.xml_body_is_signed(body))
+        self.assertIn("root/cmd", self._points(body))
+
+    def test_a_signature_element_bound_to_another_namespace_is_not_one(self):
+        body = '<root xmlns:s="urn:other"><s:Signature>a</s:Signature><cmd>x</cmd></root>'
+        self.assertFalse(rcekit.xml_body_is_signed(body))
+        self.assertIn("root/cmd", self._points(body))
+
+    def test_a_prefixed_signature_in_the_dsig_namespace_is_one(self):
+        body = ('<root xmlns:ds="http://www.w3.org/2000/09/xmldsig#">'
+                "<ds:Signature>a</ds:Signature><cmd>x</cmd></root>")
+        self.assertTrue(rcekit.xml_body_is_signed(body))
+        self.assertEqual(self._points(body), [])
+
+    def test_a_default_namespaced_signature_is_one(self):
+        # The declaration sits on the Signature element itself, which is how
+        # a detached signature is usually written.
+        body = ('<root><Signature xmlns="http://www.w3.org/2000/09/xmldsig#">a</Signature>'
+                "<cmd>x</cmd></root>")
+        self.assertTrue(rcekit.xml_body_is_signed(body))
+        self.assertEqual(self._points(body), [])
+
+    def test_a_prefix_bound_on_the_signature_element_itself_is_one(self):
+        body = ('<Envelope><ds:Signature '
+                'xmlns:ds="http://www.w3.org/2000/09/xmldsig#"/><cmd>x</cmd></Envelope>')
+        self.assertTrue(rcekit.xml_body_is_signed(body))
+        self.assertEqual(self._points(body), [])
+
+    def test_a_body_without_the_namespace_at_all_short_circuits(self):
+        self.assertFalse(rcekit.xml_body_is_signed("<root><cmd>x</cmd></root>"))
+        self.assertFalse(rcekit.xml_body_is_signed(""))
+        self.assertFalse(rcekit.xml_body_is_signed(None))
+
+
+class XmlEmptyLeafValueTestCase(unittest.TestCase):
+    """An empty field is still a field.
+
+    `<cmd></cmd>` and `<cmd>   </cmd>` are the ordinary shape of a value in a
+    SOAP template, and a JSON `""` leaf and a form `key=` are both candidates
+    already -- XML was the only carrier that dropped them, so an envelope of
+    placeholders could report no body injection points at all.
+
+    The rule is not "is this text blank", because that answers the same for a
+    placeholder field and for the indentation of a pretty-printed envelope. It
+    is "did this element have an element child", and the pretty-printed parent
+    below is the near neighbour that tells the two apart."""
+
+    def _spans(self, body):
+        return [(kind, path) for kind, path, _s, _e in rcekit._xml_value_spans(body)]
+
+    def test_an_empty_leaf_is_a_candidate(self):
+        self.assertEqual(self._spans("<root><cmd></cmd></root>"), [("text", "root/cmd")])
+
+    def test_a_whitespace_only_leaf_is_a_candidate(self):
+        self.assertEqual(self._spans("<root><cmd>   </cmd></root>"), [("text", "root/cmd")])
+
+    def test_a_pretty_printed_parent_is_not_a_candidate(self):
+        # Its whitespace is indentation. This is the case the blank test could
+        # not tell from the two above.
+        body = "<Body>\n  <getUser>\n    <n>a</n>\n  </getUser>\n</Body>"
+        self.assertEqual(self._spans(body), [("text", "Body/getUser/n")])
+
+    def test_a_leaf_with_a_value_yields_exactly_one_span(self):
+        # The closing tag must not add a second, empty one beside the value.
+        self.assertEqual(self._spans("<root><cmd>x</cmd></root>"), [("text", "root/cmd")])
+
+    def test_a_cdata_leaf_yields_only_its_cdata_span(self):
+        self.assertEqual(self._spans("<note><![CDATA[free text]]></note>"),
+                         [("cdata", "note/cdata()")])
+        self.assertEqual(self._spans("<note><![CDATA[]]></note>"),
+                         [("cdata", "note/cdata()")])
+
+    def test_mixed_content_keeps_both_of_its_text_runs(self):
+        self.assertEqual(self._spans("<a>x<b/>y</a>"), [("text", "a"), ("text", "a")])
+
+    def test_a_self_closing_element_is_not_a_candidate(self):
+        # It has no text node, so rewriting it would test a shape the
+        # application never sends -- the reason _set_json_tokens refuses to
+        # create a key that was not there.
+        self.assertEqual(self._spans("<root><cmd/></root>"), [])
+
+    def test_an_empty_span_places_the_payload_between_the_tags(self):
+        body = "<root><cmd></cmd></root>"
+        req = parse_raw_request("POST /s HTTP/1.1\r\nHost: t.example\r\n"
+                                "Content-Type: text/xml\r\n\r\n" + body)
+        point = next(p for p in rcekit.enumerate_injection_points(req) if p.kind == "xml")
+        self.assertEqual(point.tokens[0], point.tokens[1], "the span is zero-length")
+        _t, _h, placed = rcekit.place_injection_point(
+            req["target"], req["headers"], body, point, "FUZZ")
+        self.assertEqual(placed, "<root><cmd>FUZZ</cmd></root>")
+
+    def test_the_shipped_envelope_gains_no_spurious_span(self):
+        # The regression guard for the restructuring: the SOAP fixture's spans
+        # are what they were before the closing tag learned to emit.
+        self.assertEqual(
+            self._spans(SOAP_BODY),
+            [("attr", "soap:Envelope/soap:Body/getUser/@id"),
+             ("attr", "soap:Envelope/soap:Body/getUser/@realm"),
+             ("text", "soap:Envelope/soap:Body/getUser/name"),
+             ("cdata", "soap:Envelope/soap:Body/getUser/note/cdata()"),
+             ("attr", "soap:Envelope/soap:Body/items/item/@sku"),
+             ("text", "soap:Envelope/soap:Body/items/item"),
+             ("attr", "soap:Envelope/soap:Body/items/item[2]/@sku"),
+             ("text", "soap:Envelope/soap:Body/items/item[2]")])
+
+
+class XmlByteOrderMarkTestCase(unittest.TestCase):
+    """A byte-order mark is not whitespace, and `str.strip()` leaves it in.
+
+    The cost is not a missed point but the wrong branch: a body with a prolog
+    contains `=`, so a capture whose XML begins with U+FEFF fell through to the
+    form branch and produced the single bogus point named after the prolog --
+    the exact point the xml kind exists to replace. .NET clients emit a mark
+    routinely."""
+
+    BOM = "\ufeff"
+
+    def test_the_mark_survives_strip_which_is_why_this_case_exists(self):
+        self.assertEqual(self.BOM.strip(), self.BOM)
+        self.assertFalse(self.BOM.isspace())
+
+    def test_a_marked_envelope_is_enumerated_as_xml(self):
+        body = self.BOM + '<?xml version="1.0"?><root><cmd>x</cmd></root>'
+        req = parse_raw_request("POST /s HTTP/1.1\r\nHost: t.example\r\n"
+                                "Content-Type: text/xml\r\n\r\n" + body)
+        points = rcekit.enumerate_injection_points(req)
+        self.assertEqual([p.name for p in points if p.kind == "xml"], ["root/cmd"])
+        self.assertFalse([p for p in points if p.kind == "form"],
+                         "the prolog must not come back as a form point")
+
+    def test_a_marked_body_picks_an_xml_encoding_with_or_without_the_type(self):
+        kit = RCEKit()
+        marked = self.BOM + "<root><cmd>FUZZ</cmd></root>"
+        self.assertEqual(kit._detect_body_location(marked, ["Content-Type: text/xml"]),
+                         "xml_text")
+        # Without an XML content type the first character was the only signal,
+        # so this is the half that was wrong on its own.
+        self.assertEqual(
+            kit._detect_body_location(marked, ["Content-Type: application/octet-stream"]),
+            "xml_text")
+
+    def test_an_unmarked_body_is_unaffected(self):
+        kit = RCEKit()
+        self.assertEqual(
+            kit._detect_body_location("<root><cmd>FUZZ</cmd></root>",
+                                      ["Content-Type: text/xml"]), "xml_text")
+        self.assertTrue(rcekit.starts_xml_body("<a/>"))
+        self.assertFalse(rcekit.starts_xml_body("a=1"))
+        self.assertFalse(rcekit.starts_xml_body(""))
+
+
 class XmlBodyLocationTestCase(unittest.TestCase):
     """The escaping an XML payload needs is a property of its *position*.
 

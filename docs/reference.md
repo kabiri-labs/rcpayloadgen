@@ -678,13 +678,24 @@ character for character, so a lone newline inside an uploaded text file
 survives. The payload-free control is rendered the same way, so it differs from
 the probe in the field under test and in nothing else.
 
-An **XML or SOAP** body is recognised from its first character, and every
-element's character data, every attribute value and every CDATA section is a
-candidate. A repeated sibling is indexed from the second occurrence —
-`items/item`, `items/item[2]` — so the later ones are reachable rather than
-counted as covered; `xmlns` declarations are not candidates, because a payload
-in a namespace URI renames the element instead of reaching anything that reads
-its value.
+An **XML or SOAP** body is recognised from its first character, byte-order mark
+and all, and every element's character data, every attribute value and every
+CDATA section is a candidate. A repeated sibling is indexed from the second
+occurrence — `items/item`, `items/item[2]` — so the later ones are reachable
+rather than counted as covered; `xmlns` declarations are not candidates, because
+a payload in a namespace URI renames the element instead of reaching anything
+that reads its value.
+
+An element with no element children is a candidate **even when it is empty or
+holds only whitespace**: `<cmd></cmd>` and `<cmd>   </cmd>` are the ordinary
+shape of a field in a SOAP template, and a JSON `""` leaf and a form `key=` are
+candidates already. Whitespace between two *elements* is still formatting and
+yields nothing — the test is whether the element had an element child, not
+whether its text is blank, because the blank test answers the same for a
+placeholder field and for the indentation of a pretty-printed envelope. A
+self-closing `<cmd/>` is not a candidate, for the reason a missing JSON key is
+not: it has no text node, so rewriting it would test a shape the application
+never sends.
 
 The document is **spliced at the value's offsets**, never parsed and re-emitted.
 Two reasons, and the second is the one that decided it. A signed envelope
@@ -701,6 +712,12 @@ A signed body is therefore not probed at all, and the run says so rather than
 reporting zero points: every probe would come back refused for a reason that has
 nothing to do with the sink, which reads exactly like a filter. Capture the
 request before it is signed, or name a point outside the body.
+
+"Signed" means a `Signature` element **in** the XML-DSig namespace, and both
+halves are required. The namespace URI on its own appears wherever a schema
+predeclares the prefix without signing anything, and an element named
+`Signature` is ordinary in plenty of schemas — so either test alone would
+suppress every point in a document that is perfectly testable.
 
 The payload is escaped for the position it lands in — `xml_text` for character
 data, `xml_attr` which also escapes both quotes, `xml_cdata` which leaves the
