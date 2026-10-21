@@ -70,6 +70,54 @@ formats, or the template schema.
 
 ### Fixed
 
+- **The quick start told readers to run a command two of its three install
+  paths do not provide.** Every example in the section was spelled `rcekit`,
+  which exists only after a PyPI install -- while the same section offers
+  `curl -O rcekit.py` and `git clone` as the other two ways to get the tool.
+  `docs/guide.md` spells it `python rcekit.py` in all 28 of its examples, so the
+  README was the single inconsistent page, and a reader following its own
+  install advice could not run any of its commands. Every example now spells it
+  the way the guide does, which works from a checkout and from the single file,
+  with one line saying an installed copy answers to `rcekit`.
+
+  `--insecure` never appeared in the section either, although an internal target
+  with a self-signed certificate is the common case rather than the exception.
+  Reproduced against a local HTTPS sink: all four probes come back `error`, with
+  `NEVER REACHED THE TARGET` and the hint to pass the flag. The run is right to
+  refuse to call that `negative`, but to someone copying a line out of the
+  README it reads as a broken command, so the flag is now in the examples and
+  the paragraph above them says what it costs.
+
+  The section is now 6 scenarios named for the situation each answers, with a
+  query-string command and a captured-request command for every one: output
+  comes back; nothing comes back but the target has egress (a bare IP for `oob`,
+  a delegated name for the DNS shapes, `lookup` and `deser`); no output and no
+  egress but a read-back channel; your own request stores the file; everything
+  the tool has; and a known target narrowed for speed. That covers `lookup`,
+  `deser`, `boolean`, `--bridges`, `--observe-url`, `--auto-params`,
+  `--confirm-depth` and the `--sink-env`/`--sink-shape` pair, none of which had
+  a runnable example before.
+
+  All 12 commands were run against a local sink that really executes, over HTTP
+  and over HTTPS with a self-signed certificate, which is how the one broken
+  example in the draft was caught: `--environments windows --contexts raw
+  --sink-env powershell --sink-shape sq` builds no probes at all and reports
+  `NOTHING WAS TESTED`. The Windows example is now the pairing the `--sink-env`
+  help describes -- a .NET runtime with a PowerShell sink -- and the paragraph
+  under it says that pinning the pair wrong is the one way to narrow into
+  nothing. The `--environments` values offered in that scenario are the ones
+  measured to build detection probes; `sql`, `powershell` and `kubernetes` build
+  none and are left out.
+
+  The probe-count arithmetic and the two meanings of `--max-payloads` move out
+  to `docs/guide.md`, which already carried both in more detail, leaving a
+  one-line warning and a link. The counts that stay were re-measured at 3.1.2
+  against a confirming Unix sink -- 1154 probes, 124 with `--environments unix`,
+  17 adding `--contexts raw` -- and the sample transcript is a real run rather
+  than counts from one run spliced onto an evidence line from another.
+
+  No version bump -- this is documentation only.
+
 - **The comparison table named seven of the nine registered methods.** `lookup`
   and `boolean` had no row in "How RCEKit compares", although `lookup` is the
   Log4Shell row the CVE table directly above it already carries, and `boolean`
