@@ -78,7 +78,9 @@ formats, or the template schema.
   README was the single inconsistent page, and a reader following its own
   install advice could not run any of its commands. Every example now spells it
   the way the guide does, which works from a checkout and from the single file,
-  with one line saying an installed copy answers to `rcekit`.
+  with one line saying an installed copy answers to `rcekit`. The `--doctor`
+  check, which every path runs first, carries both spellings, because that one
+  is reached before the examples and before the line explaining them.
 
   `--insecure` never appeared in the section either, although an internal target
   with a self-signed certificate is the common case rather than the exception.
