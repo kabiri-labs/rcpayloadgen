@@ -124,14 +124,11 @@ server to answer on.
 
 ## Quick start
 
-RCEKit has **two supported shapes**, and neither is a fallback for the other.
-
 **Install it** — `pipx` keeps the CLI in its own environment, which is what you
 want for a tool rather than a library:
 
 ```bash
 pipx install rcekit          # or: pip install rcekit
-rcekit --doctor              # confirms the corpus it will run with
 ```
 
 **Or take just the one file.** The payload corpus is built into the module, so
@@ -141,222 +138,283 @@ host, or anywhere `pip install` is not an option:
 
 ```bash
 curl -O https://raw.githubusercontent.com/kabiri-labs/rcekit/main/rcekit.py
-python rcekit.py --doctor    # same corpus, same check, zero installation
 ```
 
-Both run the same code and report the same verdicts. Working from a checkout is
-the third way, and needs no install either:
+Working from a checkout is the third way, and needs no install either:
 
 ```bash
 git clone https://github.com/kabiri-labs/rcekit.git
 cd rcekit                    # Python 3.8+, standard library only
 ```
 
-Put a `FUZZ` marker where your input lands (or select a parameter with `-p` when
-using a captured request), and ask RCEKit to prove RCE:
+All three run the same code and report the same verdicts. Confirm the corpus
+before you point it at anything:
 
 ```bash
-rcekit --acknowledge-consent \
+python rcekit.py --doctor
+```
+
+Every example below spells the command `python rcekit.py`, which works from a
+checkout and from the single downloaded file. An installed copy answers to
+`rcekit` with exactly the same arguments.
+
+RCEKit takes a target in **two shapes**, and neither is a fallback for the
+other. A `--verify-url` carries a URL and nothing else; `-r` takes a request
+saved from your proxy whole — method, path, headers, body and cookies — which is
+what a sink behind a session needs. Mark the injection point with `FUZZ` (or
+`*`), or name a field with `-p`. Each scenario below is shown in both shapes.
+
+**Internal targets usually need `--insecure`.** A self-signed or mismatched
+certificate fails the handshake, and RCEKit reports that as `error`, never as
+`negative` — it will not let a TLS failure read as "not vulnerable". The flag
+drops every TLS assurance, including OpenSSL's security level and minimum
+protocol version, because dated software needs that to complete a handshake at
+all.
+
+### 1. Output comes back in the response — the first pass
+
+Cheap, safe, no state change, and between them `reflected` and `eval` cover
+command injection and expression injection. Start here on every target.
+
+```bash
+# query string
+python rcekit.py --acknowledge-consent \
   --verify-url "https://target.example/lookup?host=FUZZ" \
-  --methods reflected,eval
+  --methods reflected,eval --insecure
 ```
-
-```
-[detect] methods: reflected, eval
-[detect] sent 1430 probes (1430 result(s)): executed=17, negative=1413
-
-[detect] EXECUTED (17):
-  [reflected/unix/raw] | awk 'BEGIN{print "RKDXCXU" 206334+786088 "RKLMVXZ"}'
-      (target computed 'RKDXCXU992422RKLMVXZ' (random operands, absent from control))
-```
-
-**That is 1430 requests against this target.** With no `--environments`, RCEKit
-sweeps every sink dialect it knows — POSIX, `cmd.exe`, PowerShell, and the
-language runtimes that reach a shell — because which one is behind the parameter
-is the thing you do not know yet. 17 of them computed the value, which is one
-sink answering in seventeen dialects, not seventeen findings.
-
-The target moves the number: at the default `--confirm-depth first`, a carrier
-stops once it confirms, so a sink that answers sends **fewer** probes than one
-that never does. The same command against an endpoint that only echoes sent
-1684.
-
-Narrow it when you already know something. Against the same target, the same
-command plus `--environments unix` sends 177 requests; adding `--contexts raw`
-as well sends 32.
-
-Every probe count in this quick start was measured at **3.0.0**, and like the
-benchmark's they are point-in-time rather than constants. 3.0.1 retired a probe
-shape, which took a measured 44 requests per point off a comparable sink —
-without costing a single confirmation, which is why the `executed` counts are
-the figures least likely to have moved.
-
-**`--max-payloads` means two different things, and both will surprise you once.**
-
-On a single point — a `--verify-url`, or `-r` without `--auto-params` — it is
-one allowance **shared by every method you selected**. `--methods
-reflected,deser --max-payloads 5` sends 5 probes in total, and `reflected` can
-spend all five: `deser` then never runs, and the run reports nothing about
-deserialization because it never asked. That is the shape to watch, because a
-budget set for politeness quietly becomes a coverage gap.
-
-Under `--auto-params` it is the opposite — a budget *per injection point, per
-question*, where execution, lookup and deserialization are three questions, and
-each point's payload-free control sits outside it. Measured: `--max-payloads 5`
-across 3 points and 2 questions sent 30 probes, not 5.
-
-So read the cost line. It prints before any traffic and names the multiplier it
-is applying:
-
-```
-[detect] cost: 3 points x ~10 probes (capped by --max-payloads 5 per question,
-         2 question(s) asked) = at least 36 requests (each point carries its
-         own payload-free control)
-```
-
-### From a captured request — the shape most real targets have
-
-A `--verify-url` carries a URL and nothing else. Most sinks worth testing sit
-behind a POST with a session cookie, a content type and a body, and RCEKit takes
-that request whole: save it from your proxy or your browser's devtools and name
-the field to inject into.
 
 ```bash
-rcekit --acknowledge-consent \
+# captured request
+python rcekit.py --acknowledge-consent \
   -r search.req -p q \
-  --methods reflected,eval
+  --methods reflected,eval --insecure
 ```
 
-```
-[detect] EXECUTED (17):
-  [reflected/unix/raw] | awk 'BEGIN{print "RKXJTON" 570247+922635 "RKJCVJT"}'
-      (target computed 'RKXJTON1492882RKJCVJT' (random operands, absent from control))
-```
+With no `--environments` this sweeps every sink dialect RCEKit knows — POSIX,
+`cmd.exe`, PowerShell and the language runtimes that reach a shell — because
+which one sits behind the parameter is the thing you do not know yet. The run
+prints its request count before anything fires, and scenario 6 cuts it.
 
-Same corpus, so the same scale as above — what changes is that the session
-cookie, the content type and the body go with every probe.
+### 2. Nothing comes back, but the target has egress
 
-The method, path, headers, body and cookies are reused as captured, and each
-value is encoded for the context it lands in — a JSON leaf, a form field and a
-cookie are not escaped the same way, and inside an XML body an attribute value
-and a CDATA section are not either. Drop `-p` and mark the spot with `FUZZ` or
-`*` instead, if you prefer.
-
-### Everything the tool has
-
-Two things are only reachable from a captured request: **injection-point
-enumeration** (`--auto-params`), and any sink that needs a session. So the
-fullest run RCEKit can make starts from `-r`, not from a URL — which is worth
-knowing before concluding a target is clean.
+A `negative` from `reflected` and `eval` is an answer about the **channel**, not
+about the sink: a sink that returns no output has nowhere to render the computed
+value. `oob` reaches `executed` anyway, by making the target carry a token to a
+listener RCEKit runs in-process.
 
 ```bash
-rcekit --acknowledge-consent \
-  -r search.req --auto-params all --point-order thorough \
-  --methods reflected,eval,time,oob,lookup,deser,boolean \
-  --oob-host oob.yourdomain.example --listen-dns-port 53 \
-  --verify-active-risk stateful --probe-depth full \
-  --detect-json findings.json
-```
-
-That is **7 of the 9 methods**. The two left out are the ones that need a path
-only you can supply: `file` wants somewhere writable the target also serves
-(`--file-write-path` + `--file-read-url`), and `write` wants the URL your own
-upload lands at (`--write-url-template`). Both are below.
-
-```
-[verify] loaded request from search.req: enumerating 4 injection point(s)
-[detect] enumerating 4 injection point(s) x 3 method(s)
-[detect] cost: 4 points x ~1739 probes = at least 6964 requests
-[detect]   body param 'q': executed (1544 probes)  <-- EXECUTED
-[detect] sent 6371 probes: executed=446, negative=5925
-```
-
-What each flag opens up:
-
-| | |
-|---|---|
-| `--auto-params all` | every query value, JSON leaf, XML element, attribute and CDATA section, form field, multipart part, cookie and header, instead of one named field |
-| `--point-order thorough` | every non-hop-by-hop header, not just the high-yield ones |
-| `--methods ...,lookup,deser` | expression-lookup and deserialization sinks, which the shell-shaped methods cannot reach |
-| `--oob-host` | a callback host for the blind methods. An IP the target can reach serves `oob`; `lookup` and `deser`'s gadget can only put a token in a DNS label, so both need a domain delegated to you, and port 53 needs root |
-| `--verify-active-risk stateful` | the top rung — adds the probe shapes that make the target fetch from an address RCEKit did not choose |
-| `--probe-depth full` | every break-out shape per sink, not the cheap ones only |
-| `--detect-json` | the same verdicts as machine-readable JSON |
-
-**This is a lot of requests.** The cost line prints before anything fires, and
-`--max-points` / `--max-payloads` bound it. Run it against an instance you are
-allowed to break: `--verify-active-risk stateful` is the tier for a disposable
-target, not for production.
-
-No external infrastructure, no config file.
-
-### When nothing comes back
-
-The most common way to call a target clean when it is not: `reflected` and
-`eval` need the computed value rendered somewhere, and a sink that returns no
-output has nowhere to render it. A `negative` from those two is not an answer
-about the sink, only about the channel.
-
-Two methods still reach **`executed`** there, and which one you can use depends
-on what you have:
-
-```bash
-# The target can reach something of yours. An address is enough: `oob` carries
-# the token in a URL path, so the HTTP channel alone can reach `executed`.
-rcekit --acknowledge-consent \
+# query string — a bare IP the target can reach is enough: the token rides in
+# the URL path, so the HTTP channel alone reaches executed
+python rcekit.py --acknowledge-consent \
   --verify-url "https://target.example/render?q=FUZZ" \
   --methods oob --oob-host 203.0.113.9 \
-  --verify-active-risk intrusive
+  --verify-active-risk intrusive --insecure
 ```
-
-Give it a **delegated name** and `--listen-dns-port 53` instead when you have
-them, and the DNS shapes come alive too — those often cross egress filtering
-that blocks outbound HTTP. They cannot work off an address: a resolver reaches
-the authority for a name on port 53 only, and RCEKit says so rather than sending
-probes that silently never fire. The benchmark's OpenTSDB case runs the plain
-address form and reaches `executed`.
 
 ```bash
-# No egress at all — but something writable you can also read back.
-# Writes a random token, fetches it, and prints a cleanup line per finding.
-rcekit --acknowledge-consent \
+# captured request — a delegated name adds the DNS shapes, which often cross
+# egress filtering that blocks outbound HTTP, and is the only form lookup and
+# deser can use at all
+python rcekit.py --acknowledge-consent \
   -r search.req -p q \
-  --methods file \
-  --file-write-path /var/www/html/uploads \
-  --file-read-url "https://target.example/uploads/{name}" \
-  --verify-active-risk stateful
+  --methods oob,lookup,deser --oob-host oob.yourdomain.example \
+  --listen-dns-port 53 --verify-active-risk intrusive --insecure
 ```
 
-The read-back does not have to be a web root. `--file-read-url` takes `{name}`
-for a handler that wants a filename, and `{path}` or `{path_enc}` for one that
-takes the whole server-side path — so a writable `/tmp` plus an LFI parameter,
-a download handler or an export endpoint is enough.
+`--listen-dns-port 53` needs root and an NS record pointing at the listener.
+Handed an address instead, `lookup` and the `deser` gadget build no probes and
+say so — a DNS label is the only place either can put a token. `lookup` reaches
+`lookup-sink`, and `deser` reaches `deserialization-sink` with the gadget and
+`needs-review` without it; none of the three is execution.
+[Blind targets](docs/guide.md#blind-targets).
 
-With neither, `--methods time` still measures a controlled delay series — but it
-reports `timing-sink`, which proves the target honoured a delay and not that a
-shell ran. [Blind targets](docs/guide.md#blind-targets) and
-[No-egress targets](docs/guide.md#no-egress-targets) work each of these through.
+### 3. No output and no egress, but something writable you can read back
 
-### When your own request stores the file
+`file` writes a random token through the sink and fetches it back in a second
+request. The read-back channel does not have to be a web root — `{name}`,
+`{path}` and `{path_enc}` cover a download handler, an export endpoint or an LFI
+parameter just as well. Every finding prints its own cleanup line.
+
+```bash
+# query string — a writable web root, served by the same host
+python rcekit.py --acknowledge-consent \
+  --verify-url "https://target.example/lookup?host=FUZZ" \
+  --methods file \
+  --webroot /var/www/html --web-base-url "https://target.example" \
+  --verify-active-risk stateful --insecure
+```
+
+```bash
+# captured request — a writable /tmp plus any endpoint that reads a path back
+python rcekit.py --acknowledge-consent \
+  -r search.req -p q \
+  --methods file \
+  --file-write-path /tmp \
+  --file-read-url "https://target.example/download?f={path_enc}" \
+  --verify-active-risk stateful --insecure
+```
+
+With neither egress nor a read-back channel, `--methods time` still measures a
+controlled 0/N/2N delay series — but it reports `timing-sink`, which proves the
+target honoured a delay and not that a shell ran.
+[No-egress targets](docs/guide.md#no-egress-targets).
+
+### 4. Your own request stores the file
 
 An upload, or a `PUT` the server accepts. Nothing in the response is computed,
 so `reflected` and `eval` report `negative` against a target that is fully
 exploitable. `write` inverts the question: it stores a one-liner that *computes*
-a product, fetches the file back, and reads which of three things happened —
-the product (`executed`), the source verbatim (`file-write`, an arbitrary write
-that is served but not interpreted), or neither.
+a product, fetches the file back, and reads which of three things happened — the
+product (`executed`), the source verbatim (`file-write`, an arbitrary write that
+is served but not interpreted), or neither.
 
 ```bash
-rcekit --acknowledge-consent \
+# query string — PUT a JSP into the web root, the CVE-2017-12615 shape
+python rcekit.py --acknowledge-consent \
   --verify-url "https://target.example/probe.jsp/" \
   --verify-method PUT --verify-data FUZZ --verify-body-location raw \
   --methods write --write-url-template "https://target.example/probe.jsp" \
-  --verify-active-risk stateful
+  --verify-active-risk stateful --insecure
 ```
 
-That is the CVE-2017-12615 shape, and it is one of the benchmark's cases.
-[Upload and write-primitive targets](docs/guide.md#upload-and-write-primitive-targets)
-covers the others.
+```bash
+# captured request — a multipart upload, with FUZZ as the part's content
+python rcekit.py --acknowledge-consent \
+  -r upload.req \
+  --methods write --write-url-template "https://target.example/uploads/probe.jsp" \
+  --verify-active-risk stateful --insecure
+```
+
+`--write-url-template` has to point at exactly the file your own request writes —
+it is the channel the proof comes back on. The first of those two is the
+CVE-2017-12615 shape and one of the benchmark's cases.
+[Upload and write-primitive targets](docs/guide.md#upload-and-write-primitive-targets).
+
+### 5. Everything the tool has — the widest run
+
+Two things are reachable only from a captured request: **injection-point
+enumeration** (`--auto-params`), and any sink that needs a session. So the
+fullest run RCEKit can make starts from `-r`, which is worth knowing before
+concluding a target is clean.
+
+```bash
+# query string — the widest a single point can carry
+python rcekit.py --acknowledge-consent \
+  --verify-url "https://target.example/lookup?host=FUZZ" \
+  --methods reflected,eval,time,oob,lookup,deser,boolean \
+  --oob-host oob.yourdomain.example --listen-dns-port 53 \
+  --probe-depth full --confirm-depth every --bridges auto \
+  --observe-url "https://target.example/profile" \
+  --verify-active-risk stateful --insecure --detect-json findings.json
+```
+
+```bash
+# captured request — the same, plus every injection point in the capture
+python rcekit.py --acknowledge-consent \
+  -r search.req --auto-params all --point-order thorough --include-path-segments \
+  --methods reflected,eval,time,oob,lookup,deser,boolean \
+  --oob-host oob.yourdomain.example --listen-dns-port 53 \
+  --probe-depth full --confirm-depth every --bridges auto \
+  --verify-active-risk stateful --insecure --detect-json findings.json
+```
+
+That is 7 of the 9 methods; `file` and `write` need a path only you can supply
+and are scenarios 3 and 4 above. `--auto-params all` takes every query value,
+JSON leaf, XML element, attribute and CDATA section, form field, multipart part,
+cookie and header; `--point-order thorough` adds every non-hop-by-hop header;
+`--confirm-depth every` maps every shape the sink accepts instead of stopping at
+the first; `--bridges auto` carries the command probes through SQL and XML query
+languages; `--observe-url` catches execution that lands on a different request.
+
+**This is a lot of requests, and it changes state.** The cost line prints before
+anything fires, and `--max-points` / `--max-payloads` bound it. Run it against
+an instance you are allowed to break: `--verify-active-risk stateful` is the
+tier for a disposable target, not for production.
+
+No external infrastructure and no config file — the OOB listener runs in-process.
+
+### 6. The target is known — narrow it and go fast
+
+Everything above widens the sweep because the sink is unknown. Once you know it,
+pinning the dialect, the context and the shape turns a thousand requests into a
+few dozen. Measured at **3.1.2** against a confirming Unix sink: the scenario 1
+command sent **1154** probes, `--environments unix` cut that to **124**, and
+adding `--contexts raw` to **17**.
+
+```bash
+# query string — a known POSIX sink that runs the input as the whole command
+python rcekit.py --acknowledge-consent \
+  --verify-url "https://target.example/lookup?host=FUZZ" \
+  --methods reflected \
+  --environments unix --contexts raw \
+  --sink-env unix --sink-shape raw \
+  --probe-depth quick --evade none --insecure
+```
+
+```bash
+# captured request — a .NET app on Windows whose sink is PowerShell, with the
+# value landing inside single quotes
+python rcekit.py --acknowledge-consent \
+  -r search.req -p q \
+  --methods reflected \
+  --environments dotnet --sink-env powershell --sink-shape sq \
+  --probe-depth quick --max-payloads 50 --insecure
+```
+
+`--environments` names the *runtime* the corpus probes are written for and
+`--sink-env` the *shell* behind it, which is why those two differ here: a .NET
+application is not itself a shell. Pinning the pair wrong is the one way to
+narrow into nothing, and the run says `NOTHING WAS TESTED` rather than
+`negative` when it happens.
+
+An example can only name one value per flag; these are the others.
+`--environments`: `unix`, `windows`, `java`, `php`, `python`, `nodejs`, `ruby`,
+`perl`, `go`, `dotnet`, `docker` for the shell-shaped methods, and `graphql` or
+`mongodb` for `eval` and `boolean`.
+`--sink-env`: `auto`, `unix`, `windows`, `powershell`.
+`--sink-shape`: `auto`, `sep`, `chain`, `newline`, `raw`, `sq`, `dq`,
+`subshell`. `--contexts`: `raw`, `json`, `xml`, `xml_cdata`, `yaml`,
+`attribute`, `http_header` and the rest of the
+[context list](docs/reference.md#contexts). `--separators`: any subset of
+`'; '`, `'| '`, `'|| '`, `'&& '` and a newline written `\n`.
+`--probe-depth`: `quick`, `full`. `--evade`: `none`, `low`, `high`. And
+`--max-points N` bounds the candidate count under `--auto-params`, where
+`--max-payloads` bounds the probes per point.
+
+**`--max-payloads` means two different things**, and a budget set for politeness
+quietly becomes a coverage gap: on a single point it is one allowance shared by
+every method, so `--methods reflected,deser --max-payloads 5` can spend all five
+on `reflected` and never ask about deserialization at all. Under `--auto-params`
+it is a budget per point per question instead.
+[Keeping the run quiet](docs/guide.md#keeping-the-run-quiet) has the measured
+numbers, and [Choosing methods](docs/guide.md#choosing-methods) has the per-method
+costs.
+
+### What a result looks like
+
+One run, so the output is familiar before you read a real one. The evidence line
+is the whole point: the value was computed from operands RCEKit drew at random
+for that probe, and it is absent from the payload-free control that every point
+carries.
+
+```
+[detect] methods: reflected, eval
+[detect] sent 1154 probes (1154 result(s)): executed=32, negative=1122
+
+[detect] EXECUTED (32):
+  [reflected/unix/attribute] "; echo RKLWBIO$((601914+888755))RKKGSTT$(echo RKICXCE)RKLWBIO"
+      (target computed 'RKLWBIO1490669RKKGSTTRKICXCERKLWBIO' (random operands, absent from control))
+  [reflected/unix/shell_subshell] $(echo RKGNUKK$((386983+688354))RKSKOKD$(echo RKMNMMP)RKGNUKK)
+      (target computed 'RKGNUKK1075337RKSKOKDRKMNMMPRKGNUKK' (random operands, absent from control))
+  [reflected/nodejs/shell_backtick] `echo RKFASJY$((586881+137779))RKRROJW$(echo RKGYNAW)RKFASJY`
+      (target computed 'RKFASJY724660RKRROJWRKGYNAWRKFASJY' (random operands, absent from control))
+  ...
+```
+
+Those 32 are one sink answering in 32 probe shapes — the same parameter reached
+as a quoted attribute, through a subshell, through a backtick — not 32 findings.
+Add `--detect-json` for the same verdicts as machine-readable JSON; the exit
+status does not distinguish a confirmation from a clean negative.
 
 **Don't take the GIFs on trust** — [reproduce them yourself](docs/verify-it-yourself.md)
 against dockerised Webmin and Struts2 targets in about five minutes.
@@ -618,8 +676,9 @@ else. `needs-review` is the exception: it is the parser fingerprint `deser`
 reads when it has no gadget to fire, a real candidate and **not proof** — review
 it by hand rather than reporting it. [What a verdict
 means](#what-a-verdict-means) spells each one out,
-[Choosing methods](docs/guide.md#choosing-methods) has the costs, and the rows
-below have the worked commands.
+[Choosing methods](docs/guide.md#choosing-methods) has the costs, and the
+[Quick start](#quick-start) scenarios have a worked command for each row in both
+target shapes.
 
 ### Getting the payload to land
 
