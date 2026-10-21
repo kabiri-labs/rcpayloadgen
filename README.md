@@ -148,15 +148,17 @@ cd rcekit                    # Python 3.8+, standard library only
 ```
 
 All three run the same code and report the same verdicts. Confirm the corpus
-before you point it at anything:
+before you point it at anything, spelling the command the way your own path
+provides it:
 
 ```bash
-python rcekit.py --doctor
+rcekit --doctor              # installed with pipx or pip
+python rcekit.py --doctor    # the single file, or a checkout
 ```
 
-Every example below spells the command `python rcekit.py`, which works from a
-checkout and from the single downloaded file. An installed copy answers to
-`rcekit` with exactly the same arguments.
+Every example below uses the second spelling, which works from a checkout and
+from the single downloaded file. An installed copy answers to `rcekit` with
+exactly the same arguments.
 
 RCEKit takes a target in **two shapes**, and neither is a fallback for the
 other. A `--verify-url` carries a URL and nothing else; `-r` takes a request
