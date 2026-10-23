@@ -8682,39 +8682,54 @@ class BodyLocationChoicesTestCase(unittest.TestCase):
             [sys.executable, str(SCRIPT), *args],
             cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=120)
 
-    def _offered_by_argparse(self):
-        """The choices the *parser* really has, read from its own error.
+    def _accepts(self, value):
+        """Whether the parser accepts the value, judged by the exit status.
 
-        Asked of argparse rather than of `body_location_choices()`: comparing
-        the helper with the registry would pass while someone re-hardcoded the
-        parser's list, which is the drift this test exists for."""
-        result = self._parse("--verify-body-location", "nonsense")
-        self.assertEqual(result.returncode, 2, result.stderr[-400:])
-        message = re.search(r"choose from ([^)]+)\)", result.stderr)
-        self.assertIsNotNone(message, result.stderr[-400:])
-        return set(re.findall(r"'([^']+)'", message.group(1)))
+        Not by reading argparse's `choose from ...` wording, which an earlier
+        version of this test did. That string is a human-readable message and
+        not an interface: the parse came back empty on the CI runner while
+        passing on every interpreter here, including the same 3.12, and when it
+        failed the log showed a set difference rather than what it had actually
+        read. Acceptance is the thing worth asserting anyway, because it is what
+        the operator meets.
+
+        With no target named, a value argparse took exits 1 -- `main` then has
+        nothing to point at -- and one it refused exits 2."""
+        result = self._parse("--verify-body-location", value)
+        self.assertIn(result.returncode, (1, 2),
+                      f"unexpected exit for {value!r}: {result.stderr[-300:]}")
+        return result.returncode != 2
 
     def test_every_body_encoder_is_offered_by_the_flag(self):
-        offered = self._offered_by_argparse()
-        registry = set(RCEKit._INJECTION_ENCODERS)
-        non_body = set(RCEKit._NON_BODY_LOCATIONS)
-        self.assertEqual(offered, registry - non_body,
-                         "the flag's choices and the encoder registry have drifted")
-        self.assertEqual(offered, set(RCEKit.body_location_choices()))
-        self.assertIn("multipart_filename", offered)
-        self.assertIn("xml_cdata", offered)
+        # The derivation itself...
+        self.assertEqual(set(RCEKit.body_location_choices()),
+                         set(RCEKit._INJECTION_ENCODERS) - set(RCEKit._NON_BODY_LOCATIONS))
+        # ...and that the parser really took every one of them. This is the
+        # half that catches someone re-hardcoding the choices, which comparing
+        # the helper against the registry cannot: both would still agree.
+        for name in RCEKit.body_location_choices():
+            self.assertTrue(self._accepts(name),
+                            f"{name} is a body encoder the flag refuses")
+        self.assertIn("multipart_filename", RCEKit.body_location_choices())
+        self.assertIn("xml_cdata", RCEKit.body_location_choices())
+
+    def test_a_value_that_is_not_an_encoder_is_refused(self):
+        self.assertFalse(self._accepts("nonsense"))
 
     def test_an_encoder_that_renders_elsewhere_is_not_a_body_location(self):
         # The near neighbour: deriving the list must not sweep in the URL and
-        # header encoders, which have their own flag or no flag at all.
+        # header encoders, which have their own flag or no flag at all. Each is
+        # a real encoder, so a test that only checked "is it in the registry"
+        # would pass while the flag offered it.
         for name in RCEKit._NON_BODY_LOCATIONS:
             self.assertIn(name, RCEKit._INJECTION_ENCODERS, name)
             self.assertNotIn(name, RCEKit.body_location_choices(), name)
+            self.assertFalse(self._accepts(name),
+                             f"{name} renders somewhere other than the body")
 
     def test_every_url_location_the_flag_offers_is_a_real_encoder(self):
-        # The mirror of the same bug, for the other location flag.
-        result = self._parse("--verify-body-location", "nonsense")
-        self.assertEqual(result.returncode, 2)
+        # The mirror of the same bug, for the other location flag, whose
+        # choices are still written out by hand.
         for name in ("query_value", "url_path", "raw"):
             self.assertIn(name, RCEKit._INJECTION_ENCODERS, name)
 
