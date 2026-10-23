@@ -25,10 +25,15 @@ formats, or the template schema.
   (`\/`, or a surrogate pair) is reachable *only* through the parsed leaf, and
   measured, it is found on no channel at all once the mark is there. That is a
   lost confirmation rather than a lost label. No method is exposed to it today
-  because every expected value is tag-bracketed decimal digits and no conforming
-  encoder escapes `[A-Za-z0-9]` — a property of the probes, now asserted by a
-  test, so a method whose expected value stopped being alphanumeric fails
-  loudly instead of quietly losing findings.
+  because every expected value is tag-bracketed decimal digits or a lowercase
+  token, and no conforming encoder escapes `[A-Za-z0-9]` — a property of the
+  probes rather than of the channel, so it is asserted across the **whole**
+  registry: every method in `DETECTION_METHODS`, every probe it builds over a
+  spread of environments and contexts, with a method that builds none failing
+  rather than passing quietly. `time` and `boolean` are named as the two that
+  search no value at all, so a third falling silent is something to look at
+  rather than absorb. A method whose expected value stopped being alphanumeric
+  now fails loudly instead of quietly losing findings.
 
   `response_shape`: a marked JSON response takes the word-count reading instead
   of the structural one, which is the weaker guard, so `boolean`'s resistance to

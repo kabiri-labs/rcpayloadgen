@@ -9721,9 +9721,10 @@ class ResponseChannelTestCase(unittest.TestCase):
         #
         # No method is exposed to it today, because every `expected` value the
         # methods build is tag-bracketed decimal digits and no conforming JSON
-        # encoder escapes [A-Za-z0-9]. That is a property of the probes, so it
-        # is asserted here too: a method whose expected value stopped being
-        # alphanumeric would lose findings, and this test says where.
+        # encoder escapes [A-Za-z0-9]. That is a property of the probes rather
+        # than of the channel, so it is asserted over the whole registry in
+        # test_no_method_builds_a_non_alphanumeric_expected_value below --
+        # here it is only the reason this loss costs nothing yet.
         import warnings
         bs = chr(92)
         bom = rcekit._BOM
@@ -9748,12 +9749,62 @@ class ResponseChannelTestCase(unittest.TestCase):
                 found_marked = self.method._search_channels(wanted, marked)
             self.assertEqual(found_clean, "JSON field p", body)
             self.assertIsNone(found_marked, body)
-        # The probes' own expected values stay out of that reach.
+
+    def test_no_method_builds_a_non_alphanumeric_expected_value(self):
+        """The reason the leaf-only loss above costs nothing today.
+
+        Every ``expected`` value the methods build is tag-bracketed decimal
+        digits or a lowercase token, and no conforming JSON encoder escapes
+        ``[A-Za-z0-9]`` -- so none of them can land in the leaf-only case.
+
+        That is a property of the *probes*, not of the channel, so it is
+        asserted over the whole registry. An earlier version of this test read
+        one probe of ``ReflectedMath`` while the note beside it claimed
+        something about every method, which is a guard narrower than its own
+        docstring: a change to ``EvalExpr``, to a file or OOB token, or a method
+        added later would never have reached it.
+
+        ``time`` and ``boolean`` are named rather than skipped. Both search no
+        value in a response -- one measures a delay, the other compares response
+        shape -- so an empty ``expected`` is right for them and only for them. A
+        third method falling silent here is a change worth looking at, not one to
+        absorb."""
         import random as _random
-        probe = self.method.build_probes(self.rec, _random.Random(5))[0]
-        self.assertTrue(probe.expected.isalnum(),
-                        "an expected value that is not alphanumeric would be "
-                        "exposed to the leaf-only case above")
+        searches_no_value = {"time", "boolean"}
+        # Enough configuration that every method is willing to build: `file`
+        # and `write` are gated on their paths, the callback methods on a host.
+        config = {
+            "oob_host": "oob.test", "oob_listener": None,
+            "file_write_path": "/var/www/html", "file_read_url": "http://t.example/{name}",
+            "write_read_url": "http://t.example/probe.jsp", "probe_depth": "full",
+        }
+        checked = 0
+        for name, cls in rcekit.DETECTION_METHODS.items():
+            method = cls(self.gen, config)
+            probes = []
+            for environment in ("unix", "windows", "powershell", "java", "php",
+                                "nodejs", "dotnet"):
+                for context in ("raw", "json", "html", "xml", "yaml"):
+                    record = make_record(environment=environment, context=context,
+                                         mode="detection", category="detection")
+                    if method.applicable(record):
+                        probes.extend(method.build_probes(record, _random.Random(7)))
+            # A loop that built nothing for a method would report coverage it
+            # does not have, which is the failure this whole file is about.
+            self.assertTrue(probes, f"{name} built no probes, so it was not checked")
+            values = [p.expected for p in probes if p.expected]
+            if name in searches_no_value:
+                self.assertEqual(values, [], f"{name} is listed as searching no value")
+                continue
+            self.assertTrue(values, f"{name} built no expected value to check")
+            for value in values:
+                self.assertTrue(
+                    value.isalnum(),
+                    f"{name} builds expected={value!r}, which is not alphanumeric "
+                    "and so could be lost to a JSON escape that the encoded-value "
+                    "search does not peel -- see the leaf-only test above")
+                checked += 1
+        self.assertGreater(checked, 500, "the sweep should cover the whole registry")
 
     def test_a_marked_json_response_takes_the_weaker_shape_reading(self):
         # The other half, and the reason the first is left alone: this function
