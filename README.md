@@ -2,7 +2,7 @@
 
 **`executed` means the target executed the input. `negative` means the probes reached it.**
 
-**Version 3.1.2** · MIT · Python 3.8+ · zero third-party dependencies
+**Version 3.2.0** · MIT · Python 3.8+ · zero third-party dependencies
 
 RCEKit is an **RCE detection &amp; confirmation toolkit** for authorised penetration
 testing, red teaming and security research. Point it at a target you are allowed
@@ -322,8 +322,9 @@ python rcekit.py --acknowledge-consent \
 
 That is 7 of the 9 methods; `file` and `write` need a path only you can supply
 and are scenarios 3 and 4 above. `--auto-params all` takes every query value,
-JSON leaf, XML element, attribute and CDATA section, form field, multipart part,
-cookie and header; `--point-order thorough` adds every non-hop-by-hop header;
+JSON leaf, XML element, attribute and CDATA section, form field, multipart part
+and upload filename, cookie and header; `--point-order thorough` adds every
+non-hop-by-hop header;
 `--confirm-depth every` maps every shape the sink accepts instead of stopping at
 the first; `--bridges auto` carries the command probes through SQL and XML query
 languages; `--observe-url` catches execution that lands on a different request.
@@ -526,14 +527,18 @@ them will call `executed`:
   `xp_cmdshell`, `expect://`. A bridge is a carrier, not an oracle: it wraps the
   command the methods already build, so the same tiers apply through it.
 - **Injection-point enumeration** (`-p all`) — query, JSON leaves, XML and SOAP
-  elements, attributes and CDATA sections, form fields, multipart parts, cookies,
-  headers and path segments, each encoded for where it lands, with the probe cost
-  printed before anything fires. A GraphQL body is ordered by what can actually
-  confirm: the `variables` a resolver reads before the operation document itself.
-  An XML body is spliced at the value's offsets rather than re-emitted, so a
-  whitespace-significant envelope survives and a DOCTYPE in an XXE capture is
-  never resolved by RCEKit itself; a *signed* envelope is not probed, and the run
-  says so instead of reporting zero points.
+  elements, attributes and CDATA sections, form fields, multipart parts and the
+  **filenames** their uploads declare, cookies, headers and path segments, each
+  encoded for where it lands, with the probe cost printed before anything fires.
+  A GraphQL body is ordered by what can actually confirm: the `variables` a
+  resolver reads before the operation document itself. An XML body is spliced at
+  the value's offsets rather than re-emitted, so a whitespace-significant
+  envelope survives and a DOCTYPE in an XXE capture is never resolved by RCEKit
+  itself; a *signed* envelope is not probed, and the run says so instead of
+  reporting zero points. A filename is rewritten in the part *header* while the
+  upload's content is left alone, and a newline is never put there: in a part
+  header it forges a new part rather than corrupting the request, which is an
+  effect no notice afterwards can undo.
 
 Mix methods freely: `--methods reflected,eval,time` runs all three and reports each
 tier separately.
@@ -698,6 +703,7 @@ target shapes.
 | No output comes back at all | [Blind targets](docs/guide.md#blind-targets) |
 | No output *and* no egress | [No-egress targets](docs/guide.md#no-egress-targets) |
 | The request stores a file instead of running anything | [Upload and write-primitive targets](docs/guide.md#upload-and-write-primitive-targets) |
+| The app builds a path or shells out with the upload's filename | [Enumerating injection points](docs/reference.md#enumerating-injection-points) |
 | The payload runs later, on a different request | [When execution happens on another request](docs/guide.md#when-execution-happens-on-another-request) |
 | The injection point is SQL and the sink is the database host | [Query-language bridges](docs/reference.md#query-language-bridges) |
 | The endpoint takes a serialized object | [Deserialization sinks](docs/reference.md#deserialization-sinks-and-the-verdict-that-is-not-rce) |

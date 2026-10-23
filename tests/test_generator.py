@@ -7867,6 +7867,196 @@ class RepeatedMultipartFieldTestCase(unittest.TestCase):
             point, "FUZZ"))
 
 
+RAW_UPLOAD = (
+    "POST /upload HTTP/1.1\r\n"
+    "Host: target.example\r\n"
+    "Content-Type: multipart/form-data; boundary=----B1\r\n"
+    "\r\n"
+    "------B1\r\n"
+    'Content-Disposition: form-data; name="user"\r\n'
+    "\r\n"
+    "alice\r\n"
+    "------B1\r\n"
+    'Content-Disposition: form-data; name="avatar"; filename="a.txt"\r\n'
+    "Content-Type: text/plain\r\n"
+    "\r\n"
+    "line one\r\n"
+    "------B1\r\n"
+    # Parameter order is free in RFC 7578 and libraries differ, so the
+    # filename-first spelling is an ordinary capture rather than a curiosity.
+    'Content-Disposition: form-data; filename="second.png"; name="report"\r\n'
+    "\r\n"
+    "PNGDATA\r\n"
+    "------B1--\r\n"
+)
+
+
+class MultipartFilenameInjectionPointTestCase(unittest.TestCase):
+    """An upload's filename is a value the application reads, and it had no point.
+
+    Only part *content* was replaceable: `place_injection_point` rebuilt each
+    part as `[head, content]` and preserved the header verbatim, so
+    `filename="a.txt"` was unreachable. A filename is where a traversal, a
+    double extension or a name a converter shells out with has to go, and those
+    are the routes from an upload to execution.
+
+    This kind is the inverse of `multipart`: the part header changes and the
+    content is left alone."""
+
+    def setUp(self):
+        self.req = parse_raw_request(RAW_UPLOAD)
+        self.points = rcekit.enumerate_injection_points(self.req)
+
+    def _place(self, index, mark="FUZZ"):
+        point = next(p for p in self.points
+                     if p.kind == "filename" and p.tokens == (index,))
+        return rcekit.place_injection_point(
+            self.req["target"], self.req["headers"], self.req["body"], point, mark)[2]
+
+    def test_only_parts_declaring_a_filename_are_candidates(self):
+        # The plain `user` field is not an upload and has no filename to probe.
+        self.assertEqual([(p.name, p.tokens) for p in self.points if p.kind == "filename"],
+                         [("avatar", (1,)), ("report", (2,))])
+
+    def test_a_filename_point_is_labelled_by_the_field_that_carries_it(self):
+        labels = [p.label for p in self.points if p.kind == "filename"]
+        self.assertEqual(labels, ["multipart filename of 'avatar'",
+                                  "multipart filename of 'report'"])
+
+    def test_content_points_still_come_first(self):
+        kinds = [p.kind for p in self.points]
+        self.assertLess(kinds.index("multipart"), kinds.index("filename"),
+                        "a part's content is the higher-yield half of it")
+
+    def test_placement_rewrites_the_header_and_leaves_the_content(self):
+        body = self._place(1)
+        self.assertIn('name="avatar"; filename="FUZZ"', body)
+        self.assertIn("line one", body, "the upload's content is untouched")
+        # Every other part survives byte for byte.
+        self.assertIn('name="user"', body)
+        self.assertIn('filename="second.png"; name="report"', body)
+
+    def test_placement_handles_the_filename_first_spelling(self):
+        body = self._place(2)
+        self.assertIn('filename="FUZZ"; name="report"', body)
+        self.assertIn("PNGDATA", body)
+        self.assertIn('filename="a.txt"', body, "the other upload is untouched")
+
+    def test_a_point_that_no_longer_describes_the_body_places_nothing(self):
+        point = rcekit.InjectionPoint("filename", "avatar", "x", (2,))
+        self.assertIsNone(rcekit.place_injection_point(
+            self.req["target"], self.req["headers"], self.req["body"], point, "FUZZ"))
+
+    def test_a_part_with_no_filename_places_nothing(self):
+        point = rcekit.InjectionPoint("filename", "user", "x", (0,))
+        self.assertIsNone(rcekit.place_injection_point(
+            self.req["target"], self.req["headers"], self.req["body"], point, "FUZZ"))
+
+    def test_the_kind_can_be_narrowed(self):
+        only = rcekit.enumerate_injection_points(self.req, kinds=("filename",))
+        self.assertEqual({p.kind for p in only}, {"filename"})
+        without = rcekit.enumerate_injection_points(self.req, kinds=("multipart",))
+        self.assertFalse([p for p in without if p.kind == "filename"])
+
+    def test_the_point_names_its_own_encoder(self):
+        # A filename sits in a part header, so its escaping is a property of
+        # the position rather than of the body -- the same reason an XML point
+        # names one.
+        point = next(p for p in self.points if p.kind == "filename")
+        self.assertEqual(rcekit.point_body_location(point), "multipart_filename")
+        content = next(p for p in self.points if p.kind == "multipart")
+        self.assertIsNone(rcekit.point_body_location(content))
+
+
+class MultipartFilenameEncodingTestCase(unittest.TestCase):
+    """Three characters cannot reach a part header as themselves.
+
+    The quote and the backslash are syntax: RFC 7578's quoted-string form needs
+    them escaped, or the name is truncated at the payload's own quote. CR and LF
+    are a safety matter and not a syntactic one -- a newline in a part header
+    does not corrupt the request, it *forges a new part*, which is a different
+    vulnerability and one no notice afterwards can undo."""
+
+    def setUp(self):
+        self.kit = RCEKit()
+
+    def _encode(self, payload):
+        return self.kit._encode_for_location(payload, "multipart_filename")
+
+    def test_the_payloads_this_kind_exists_for_pass_through_untouched(self):
+        # A traversal and a double extension are the point of the kind, and
+        # neither contains a character the header reserves.
+        for payload in ("../../../webroot/x.jsp", "x.jsp.", "shell.php%00.png",
+                        "; id", "$(id)", "a|b&&c"):
+            self.assertEqual(self._encode(payload), payload)
+
+    def test_a_quote_is_escaped_rather_than_dropped(self):
+        # The Windows `for /f "delims="` probe carries quotes, so dropping such
+        # probes would cost the cmd.exe dialect this whole carrier.
+        self.assertEqual(self._encode('a"b'), 'a\\"b')
+        self.assertIn('\\"delims=\\"', self._encode('for /f "delims=" %i in (1) do x'))
+
+    def test_the_backslash_is_escaped_before_the_quote(self):
+        # Order matters: escaping the quote first would then escape the escape
+        # it just added.
+        self.assertEqual(self._encode("a\\b"), "a\\\\b")
+        self.assertEqual(self._encode('a\\"b'), 'a\\\\\\"b')
+
+    def test_a_newline_cannot_forge_a_part(self):
+        forged = 'x.txt\r\n\r\n------B1\r\nContent-Disposition: form-data; name="evil"'
+        encoded = self._encode(forged)
+        self.assertNotIn("\r", encoded)
+        self.assertNotIn("\n", encoded)
+        self.assertEqual(self._encode("a\r\nb"), "a  b")
+
+    def test_an_encoded_filename_round_trips_through_the_readers(self):
+        # Whatever the escaping produces has to be a filename RCEKit's own
+        # parsers still read back, or a finding would name a value nobody sent.
+        head = ('Content-Disposition: form-data; name="f"; filename="'
+                + self._encode('a"b') + '"')
+        self.assertEqual(rcekit._multipart_field_name(head), "f")
+        self.assertEqual(rcekit._multipart_filename(head), 'a\\"b')
+
+
+class MultipartDispositionOrderTestCase(unittest.TestCase):
+    """`filename` ends in `name`, and the field-name pattern had no boundary.
+
+    Pre-existing, and found while building the filename kind rather than
+    reported: `form-data; filename="second.png"; name="report"` enumerated as a
+    field called `second.png`, because an unanchored `name="..."` matches inside
+    `filename="..."`. Parameter order is free in RFC 7578 and libraries differ.
+
+    It is fixed here rather than separately because the filename kind uses the
+    field name as its identity and as the key its placement re-checks, so the
+    new kind is wrong without it. The near neighbours are the two orderings and
+    the part that has only a name."""
+
+    def _field(self, disposition):
+        return rcekit._multipart_field_name("Content-Disposition: " + disposition)
+
+    def test_the_field_name_is_read_in_either_parameter_order(self):
+        self.assertEqual(self._field('form-data; name="avatar"; filename="a.txt"'), "avatar")
+        self.assertEqual(self._field('form-data; filename="a.txt"; name="avatar"'), "avatar")
+
+    def test_a_filename_is_not_mistaken_for_the_field_name(self):
+        # The exact failure: before the boundary, this returned "second.png".
+        self.assertEqual(self._field('form-data; filename="second.png"; name="report"'),
+                         "report")
+
+    def test_a_part_with_only_a_filename_has_no_field_name(self):
+        self.assertIsNone(self._field('form-data; filename="orphan.txt"'))
+
+    def test_a_disposition_with_no_space_before_the_parameter_still_reads(self):
+        self.assertEqual(rcekit._multipart_field_name('Content-Disposition:name="x"'), "x")
+
+    def test_an_unquoted_parameter_is_not_read(self):
+        # Quoted form only, as before: RFC 7578 requires the quotes and every
+        # library that writes a multipart body emits them.
+        self.assertIsNone(self._field("form-data; name=plain"))
+        self.assertIsNone(rcekit._multipart_filename("Content-Disposition: form-data; "
+                                                     "name=\"f\"; filename=plain.txt"))
+
+
 SOAP_BODY = (
     '<?xml version="1.0" encoding="UTF-8"?>\n'
     '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">\n'
@@ -8978,6 +9168,64 @@ class EnumerationEndToEndTestCase(unittest.TestCase):
         # Checked last, so a failure names the behaviour rather than the wording.
         self.assertIn("already contains the literal FUZZ", result.stdout,
                       "the run should say it is using a marker of its own")
+
+    def _upload_run(self, path):
+        """Point the whole CLI at an endpoint that shells an upload's filename.
+
+        The realistic shape: a converter, a thumbnailer or an archiver invoked
+        with the name the client supplied. `/vuln` runs it; `/reflect` returns
+        it. Nothing here reaches the network -- `local_target` binds 127.0.0.1
+        on an ephemeral port."""
+        import tempfile
+
+        def route(method, path_, params, headers, body_):
+            filename = rcekit._multipart_filename(body_ or "") or ""
+            # The far side reads the quoted-string form, so it undoes the
+            # escaping before the name reaches the command -- which is the half
+            # a unit test of the encoder cannot show.
+            filename = filename.replace('\\"', '"').replace("\\\\", "\\")
+            if path_.startswith("/vuln"):
+                pipe = sh_popen("echo converting " + filename + " 2>&1")
+                out = pipe.read()
+                pipe.close()
+            else:  # /reflect: name it back, never run it
+                out = "converting " + filename
+            return 200, out
+
+        with local_target(route) as base, tempfile.TemporaryDirectory() as tmp:
+            host = base.split("//", 1)[1]
+            capture = Path(tmp) / "upload.txt"
+            capture.write_text(
+                f"POST {path} HTTP/1.1\n"
+                f"Host: {host}\n"
+                "Content-Type: multipart/form-data; boundary=----B1\n"
+                "\n"
+                "------B1\n"
+                'Content-Disposition: form-data; name="avatar"; filename="a.txt"\n'
+                "Content-Type: text/plain\n"
+                "\n"
+                "file content\n"
+                "------B1--\n")
+            return self._run("--acknowledge-consent", "-r", str(capture),
+                             "--auto-params", "filename", "--methods", "reflected",
+                             "--request-scheme", "http", "--environments", "unix",
+                             "--contexts", "raw", "--probe-depth", "quick")
+
+    def test_a_filename_sink_is_found_and_confirmed_end_to_end(self):
+        result = self._upload_run("/vuln")
+        self.assertEqual(result.returncode, 0, result.stdout[-2000:])
+        self.assertIn("multipart filename of 'avatar'", result.stdout)
+        self.assertIn("EXECUTED (", result.stdout)
+        self.assertIn("at multipart filename of 'avatar'", result.stdout)
+
+    def test_a_filename_endpoint_that_only_echoes_is_never_confirmed(self):
+        # The other half of the gate: the same capture, the same probes, a
+        # target that names the file back instead of running it.
+        result = self._upload_run("/reflect")
+        self.assertEqual(result.returncode, 0, result.stdout[-2000:])
+        self.assertIn("multipart filename of 'avatar'", result.stdout)
+        self.assertNotIn("EXECUTED (", result.stdout)
+        self.assertNotIn("<-- EXECUTED", result.stdout)
 
     def test_enumeration_without_methods_is_refused(self):
         import tempfile

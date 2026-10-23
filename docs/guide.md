@@ -174,6 +174,7 @@ body. Override it when the guess is wrong:
 | `--verify-body-location form_value` | `application/x-www-form-urlencoded` body |
 | `--verify-body-location xml_text` / `xml_attr` | XML body — escapes the characters the parser undoes, the attribute form also escaping both quotes |
 | `--verify-body-location xml_cdata` | the marker sits inside a CDATA section, where nothing is escaped |
+| `--verify-body-location multipart_filename` | the marker sits in an upload's `filename="…"`, so the quote and backslash are escaped and CR/LF neutralised |
 | `--verify-body-location raw` | the payload must go on the wire verbatim — including an envelope the application scrapes with a regex rather than parses |
 | `--verify-url-location url_path` | `FUZZ` sits in the path, not a query value |
 | `--verify-url-location raw` | no URL encoding at all |
