@@ -38,7 +38,7 @@ starting point — this page is for looking things up once you know what you wan
 | `-p`, `--param` | Parameter/field/header/cookie to inject into for `-r` (query → body → header → cookie) | None |
 | `--request-scheme` | `http` / `https` for the URL built from `-r` | auto |
 | `--verify-url-location` | Where `FUZZ` sits in the URL: `query_value`, `url_path`, `raw` | `query_value` |
-| `--verify-body-location` | How to encode `FUZZ` in the body: `json_string`, `form_value`, `xml_text`, `xml_attr`, `xml_cdata`, `raw` | auto |
+| `--verify-body-location` | How to encode `FUZZ` in the body: `json_string`, `form_value`, `xml_text`, `xml_attr`, `xml_cdata`, `multipart_filename`, `raw` | auto |
 | `--verify-delay` | Seconds between verification requests (rate limiting) | `0` |
 | `--verify-timeout` | Per-request timeout in seconds | `8` |
 | `--insecure` | Drop every TLS assurance: no certificate or hostname check, and OpenSSL's security level and minimum protocol version lowered so a legacy stack still completes a handshake | Off |
@@ -680,6 +680,7 @@ serialization rather than blanket-encoded:
 | `xml` | path — `soap:Body/getUser/name`, `getUser/@id`, `note/cdata()` | the document spliced at the value's offsets, XML-escaped for its position |
 | `form` | field name | the `a=1&b=2` encoder |
 | `multipart` | part name from `Content-Disposition` | the part's own body, re-serialised with CRLF delimiters |
+| `filename` | the field whose part declares it | the `filename="…"` parameter in the part *header*, quoted-string escaped |
 | `cookie` | crumb name | the `Cookie` header, other crumbs untouched |
 | `header` | header name | single-line header escaping |
 | `path` | segment index | the URL path (opt-in, see below) |
@@ -706,12 +707,39 @@ the application's own parser sees the mark too.
 
 A **multipart** body is recognised from `Content-Type`, and each part is a
 candidate — including a file part, whose content is the value under test while
-its `filename` and `Content-Type` stay as captured. The body is re-serialised
+its `Content-Type` stays as captured. The body is re-serialised
 with the CRLF delimiters RFC 2046 requires, which a capture loses: `-r` reads
 the whole request with its line endings normalised. Part *content* is left
 character for character, so a lone newline inside an uploaded text file
 survives. The payload-free control is rendered the same way, so it differs from
 the probe in the field under test and in nothing else.
+
+A **filename** point is the inverse of that, and the two are separate kinds
+because they are separate values: the content is what an upload *contains*, and
+the filename is what the application is told it is called. The second is where a
+traversal, a double extension, or a name a converter shells out with has to go,
+and those are the routes from an upload to execution. Only parts that declare a
+`filename` are candidates — a part without one is an ordinary form field — and
+each is addressed by part index and verified by its field name, exactly as the
+content points are. The part header is rewritten and the content left alone;
+every other parameter, every other header and every byte outside the quotes stay
+as captured, because a parser on the far side reads them too.
+
+Three characters cannot reach a part header as themselves, and the reasons
+differ. The quote and the backslash are syntax: RFC 7578's quoted-string form
+needs them escaped or the name is truncated at the payload's own quote, and the
+backslash is escaped first so it does not escape the escape the quote just
+gained. **CR and LF are replaced with a space, and that is a safety decision
+rather than a syntactic one** — a newline in a part header does not corrupt the
+request, it *forges a new part*, which is a different vulnerability and one no
+notice afterwards can undo. A payload that needs a newline there is testing
+header injection, not a filename sink. A traversal or a double extension
+contains none of the three and goes on the wire unchanged.
+
+`Content-Disposition` parameter order is free, and both spellings are read:
+`name="f"; filename="a.txt"` and `filename="a.txt"; name="f"` resolve to the same
+field. Unquoted parameters are not read, as before — RFC 7578 requires the
+quotes and every library that writes a multipart body emits them.
 
 An **XML or SOAP** body is recognised from its first character, byte-order mark
 and all, and every element's character data, every attribute value and every

@@ -46,7 +46,7 @@ def configure_logging() -> None:
 
 # Bump on every change: PATCH for fixes, MINOR for new capabilities, MAJOR for
 # breaking changes to the CLI, output formats, or template schema.
-__version__ = "3.1.2"
+__version__ = "3.2.0"
 
 SAFETY_ORDER = {"safe": 0, "intrusive": 1, "stateful": 2}
 
@@ -2168,6 +2168,19 @@ class RCEKit:
     #                              sequence that *ends* the section is handled, by
     #                              splitting it across a section boundary. The bytes
     #                              the sink receives are unchanged.
+    #   * multipart_filename     — a filename sits in a quoted parameter of a part
+    #                              *header*, so three characters cannot go on the
+    #                              wire as themselves. The quote and the backslash
+    #                              are escaped as RFC 7578's quoted-string form
+    #                              requires, backslash first so it does not escape
+    #                              the escape the quote just gained. CR and LF are
+    #                              replaced with a space, and that one is a safety
+    #                              decision rather than a syntactic one: a newline
+    #                              in a part header does not corrupt the request,
+    #                              it *forges a new part*, which is a different
+    #                              vulnerability and one no notice afterwards can
+    #                              undo. A payload that needs a newline there is
+    #                              testing header injection, not a filename sink.
     #   * raw                    — send verbatim (unknown/custom body).
     _INJECTION_ENCODERS = {
         "query_value": lambda p: urllib.parse.quote(p, safe=""),
@@ -2181,6 +2194,9 @@ class RCEKit:
                                .replace(">", "&gt;").replace('"', "&quot;")
                                .replace("'", "&apos;")),
         "xml_cdata": lambda p: p.replace("]]>", "]]]]><![CDATA[>"),
+        "multipart_filename": lambda p: (
+            p.replace("\r", " ").replace("\n", " ")
+            .replace("\\", "\\\\").replace('"', '\\"')),
         "raw": lambda p: p,
     }
 
@@ -7833,7 +7849,8 @@ NON_INJECTABLE_HEADERS = {
 }
 
 # The candidate kinds, in the order they are tried.
-INJECTION_POINT_KINDS = ("query", "json", "xml", "form", "multipart", "cookie", "header", "path")
+INJECTION_POINT_KINDS = ("query", "json", "xml", "form", "multipart", "filename",
+                         "cookie", "header", "path")
 
 # What a finding calls each shape of XML value. The span's kind also picks the
 # escaping, so the noun and the encoder stay in step.
@@ -7842,7 +7859,17 @@ _XML_POINT_NOUNS = {"text": "element", "attr": "attribute", "cdata": "CDATA"}
 # A part's name in its Content-Disposition line. Quoted form only: RFC 7578
 # requires the quotes, and every library that writes a multipart body emits
 # them.
-_MULTIPART_NAME_RE = re.compile(r'name\s*=\s*"((?:[^"\\]|\\.)*)"')
+#
+# The leading boundary is load-bearing, and it was missing: `filename` ends in
+# `name`, so an unanchored pattern reads the *filename's* value as the field
+# name whenever the disposition puts `filename` first --
+# `form-data; filename="second.png"; name="avatar"` enumerated as a field
+# called `second.png`. Parameter order is free in RFC 7578 and libraries differ,
+# so this is not a hypothetical capture.
+_MULTIPART_NAME_RE = re.compile(r'(?:^|[;\s])name\s*=\s*"((?:[^"\\]|\\.)*)"')
+
+# The same, for the filename parameter, anchored for the same reason.
+_MULTIPART_FILENAME_RE = re.compile(r'(?:^|[;\s])filename\s*=\s*"((?:[^"\\]|\\.)*)"')
 
 # The fields a GraphQL request uses to carry the operation itself rather than
 # the arguments it is called with.
@@ -7932,6 +7959,67 @@ def _multipart_field_name(head: str) -> Optional[str]:
             match = _MULTIPART_NAME_RE.search(value)
             if match:
                 return match.group(1)
+    return None
+
+
+def point_body_location(point: "InjectionPoint") -> Optional[str]:
+    """The body encoder a point names for itself, or ``None`` to let the body's
+    own shape decide.
+
+    Most kinds are encoded by what the body *is* -- a JSON body wants JSON
+    string escaping wherever the value sits in it. Two are encoded by *where*
+    the value sits instead, and for those the point has to say so rather than
+    the engine work it out by locating the marker: an XML value needs one of
+    three escapings depending on whether it is character data, an attribute or
+    CDATA, and a multipart filename sits in a part header rather than in the
+    body's own syntax.
+
+    One function so the list of position-encoded kinds exists once. Reading it
+    off the marker instead is what let a capture carrying its own ``FUZZ``
+    choose the wrong escaping for an XML point."""
+    if point.kind == "xml" and point.span:
+        return "xml_" + point.span
+    if point.kind == "filename":
+        return "multipart_filename"
+    return None
+
+
+def _multipart_filename(head: str) -> Optional[str]:
+    """The filename a part declares, or ``None`` when it declares none.
+
+    A part without one is an ordinary form field; a part with one is an upload,
+    and the name it carries is a value the application reads -- often to build
+    a path with, which is the whole reason it is worth probing."""
+    for line in head.replace("\r\n", "\n").split("\n"):
+        name, sep, value = line.partition(":")
+        if sep and name.strip().lower() == "content-disposition":
+            match = _MULTIPART_FILENAME_RE.search(value)
+            if match:
+                return match.group(1)
+    return None
+
+
+def _mark_multipart_filename(head: str, mark: str) -> Optional[str]:
+    """``head`` with the filename replaced by ``mark``, or ``None`` if it has
+    none.
+
+    The part *header* rather than the part content, which is the inverse of the
+    ``multipart`` kind and the reason this is a kind of its own: the content is
+    what an upload *contains* and the filename is what the application is told
+    it is called. Only the quoted value is rewritten -- the disposition's other
+    parameters, the part's other headers and every byte outside the quotes stay
+    as captured, because a parser on the far side reads them too."""
+    lines = head.replace("\r\n", "\n").split("\n")
+    for index, line in enumerate(lines):
+        name, sep, value = line.partition(":")
+        if not sep or name.strip().lower() != "content-disposition":
+            continue
+        match = _MULTIPART_FILENAME_RE.search(value)
+        if match is None:
+            return None
+        start, end = match.span(1)
+        lines[index] = name + sep + value[:start] + mark + value[end:]
+        return "\n".join(lines)
     return None
 
 
@@ -8399,6 +8487,21 @@ def enumerate_injection_points(req: Dict[str, Any], kinds: Optional[Tuple[str, .
             if field in repeated:
                 label += f" (part {index + 1})"
             points.append(InjectionPoint("multipart", field, label, (index,)))
+        # The filename of each upload part, after the contents: a part's content
+        # is the higher-yield half of it, and the filename is the half an
+        # application turns into a path. Addressed by part index and verified by
+        # field name, exactly as the content points are and for the same reason.
+        # A part needs both to be a candidate -- the index alone cannot be
+        # re-checked against a body that moved, and the filename alone is not a
+        # stable identifier because this point is what rewrites it.
+        for index, (head, _content) in enumerate(parts or [] if "filename" in selected else []):
+            field, filename = fields[index], _multipart_filename(head)
+            if not field or filename is None:
+                continue
+            label = f"multipart filename of '{field}'"
+            if field in repeated:
+                label += f" (part {index + 1})"
+            points.append(InjectionPoint("filename", field, label, (index,)))
     elif stripped[:1] in "{[" and "json" in selected:
         try:
             parsed = json.loads(strip_bom(body))
@@ -8541,6 +8644,30 @@ def place_injection_point(target: str, headers: List[List[str]], body: str,
                 else (not found and here == point.name)
             if hit:
                 content, found = mark, True
+            rebuilt.append([head, content])
+        if not found:
+            return None
+        return target, headers, _render_multipart(rebuilt, boundary or "")
+    if point.kind == "filename":
+        # The same addressing as the content points -- index is the authority,
+        # the field name is re-checked -- and the inverse rewrite: the part
+        # header changes and the content is left alone.
+        boundary = _multipart_boundary(headers, body or "")
+        parts = _split_multipart(body or "", boundary or "") if boundary else None
+        if not parts:
+            return None
+        wanted = point.tokens[0] if point.tokens else None
+        rebuilt = []
+        found = False
+        for index, (head, content) in enumerate(parts):
+            hit = (index == wanted and _multipart_field_name(head) == point.name) \
+                if wanted is not None \
+                else (not found and _multipart_field_name(head) == point.name)
+            if hit:
+                marked_head = _mark_multipart_filename(head, mark)
+                if marked_head is None:
+                    return None
+                head, found = marked_head, True
             rebuilt.append([head, content])
         if not found:
             return None
@@ -9895,14 +10022,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                 results = []
                 for point, point_url, point_method, point_data, point_headers, label in injection_runs:
                     point_results: List[Dict[str, Any]] = []
-                    # An XML point names its own escaping, because it is the one
-                    # kind whose encoding depends on *where* in the body the
-                    # value sits rather than on what the body is. Passed
-                    # explicitly so the engine never has to find the marker to
-                    # work it out: a capture carrying a literal FUZZ of its own
-                    # has more than one, and the first is not this point's.
-                    point_location = args.verify_body_location or (
-                        f"xml_{point.span}" if point.kind == "xml" and point.span else None)
+                    # Some points name their own escaping, because their
+                    # encoding depends on *where* in the body the value sits
+                    # rather than on what the body is -- an XML value's three
+                    # shapes, and a multipart filename, which is in a part
+                    # header. Passed explicitly so the engine never has to find
+                    # the marker to work it out: a capture carrying a literal
+                    # FUZZ of its own has more than one, and the first is not
+                    # this point's.
+                    point_location = args.verify_body_location or point_body_location(point)
                     # Deliveries for this point alone, for the same reason the
                     # run-wide summary counts them: rows and requests are the
                     # same number only while every method answers from each

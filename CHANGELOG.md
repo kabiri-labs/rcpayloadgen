@@ -378,6 +378,64 @@ formats, or the template schema.
 
   No version bump -- this is documentation and tests only.
 
+## [3.2.0] — 2026-10-23
+
+### Added
+
+- **An upload's filename is a value the application reads, and it had no
+  injection point.** Only part *content* was replaceable: `place_injection_point`
+  rebuilt each part as `[head, content]` and preserved the header verbatim, so
+  `filename="a.txt"` was unreachable. A filename is where a traversal, a double
+  extension, or a name a converter shells out with has to go — the routes from an
+  upload to execution — and the reference page said outright that a file part's
+  `filename` "stays as captured".
+
+  The new `filename` kind is the inverse of `multipart`, and they are separate
+  kinds because they are separate values: the content is what an upload
+  *contains*, the filename is what the application is told it is called. Only
+  parts that declare one are candidates, each addressed by part index and
+  verified by its field name, exactly as the content points are and for the same
+  reason — several parts may share a name, and matching on the name alone rewrote
+  the first of them for every candidate. The part header changes; the content,
+  the other parameters, the part's other headers and every byte outside the
+  quotes stay as captured, because a parser on the far side reads them too.
+
+  Three characters cannot reach a part header as themselves, and the reasons are
+  not the same. The quote and the backslash are syntax: RFC 7578's quoted-string
+  form needs them escaped or the name is truncated at the payload's own quote,
+  and the backslash is escaped first so it does not escape the escape the quote
+  just gained — the `cmd.exe` probes carry quotes, so dropping such probes would
+  have cost that dialect this whole carrier. **CR and LF are replaced with a
+  space, and that one is a safety decision rather than a syntactic one:** a
+  newline in a part header does not corrupt the request, it *forges a new part*,
+  which is a different vulnerability and one no notice afterwards can undo. A
+  payload that needs a newline there is testing header injection, not a filename
+  sink. A traversal or a double extension contains none of the three and goes on
+  the wire unchanged.
+
+  `--verify-body-location` gained `multipart_filename` for a hand-written
+  capture, and the point names that encoder for itself rather than the engine
+  locating the marker to work it out — the same mechanism an XML point uses, and
+  now one function (`point_body_location`) so the list of position-encoded kinds
+  exists once.
+
+### Fixed
+
+- **`filename` ends in `name`, and the field-name pattern had no boundary.**
+  Pre-existing, and found while building the kind above rather than reported:
+  `Content-Disposition: form-data; filename="second.png"; name="report"`
+  enumerated as a field called `second.png`, because an unanchored `name="..."`
+  matches inside `filename="..."`. Parameter order is free in RFC 7578 and
+  libraries differ, so that is an ordinary capture rather than a curiosity, and
+  on such a part every content point was labelled with the upload's filename
+  instead of its field.
+
+  Fixed here rather than separately because the new kind uses the field name as
+  its identity and as the key its placement re-checks, so the kind is wrong
+  without it. Both orderings are now read, and the near neighbours are pinned: a
+  part with only a filename, a disposition with no space before its first
+  parameter, and the unquoted form that is still deliberately not read.
+
 ## [3.1.2] — 2026-10-17
 
 ### Fixed
@@ -3025,6 +3083,7 @@ this file and have not been restated here.
 
 
 [Unreleased]: https://github.com/kabiri-labs/rcekit/compare/v2.36.0...HEAD
+[3.2.0]: https://github.com/kabiri-labs/rcekit/compare/v3.1.2...v3.2.0
 [3.1.2]: https://github.com/kabiri-labs/rcekit/compare/v3.1.1...v3.1.2
 [3.1.1]: https://github.com/kabiri-labs/rcekit/compare/v3.1.0...v3.1.1
 [3.1.0]: https://github.com/kabiri-labs/rcekit/compare/v3.0.1...v3.1.0
