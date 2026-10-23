@@ -2396,7 +2396,46 @@ class RCEKit:
         looks: the caller builds channels inside the delivery try/except, so an
         escaping exception would report a response that arrived perfectly well
         as a failed request. A target could then hide a live sink behind a
-        thousand nested arrays."""
+        thousand nested arrays.
+
+        A **byte-order mark is deliberately not stripped here**, and this is the
+        response half of the gap 3.1.2 closed on the request side. ``json.loads``
+        rejects a mark outright, so a marked JSON response yields no leaves at
+        all: measured, two leaves become zero.
+
+        What that costs takes some care to state, because the obvious answer is
+        wrong in both directions.
+
+        Mostly it costs only the *precision of the channel name*: ``response
+        body`` is a channel of its own and carries the whole document, and
+        :meth:`RCEKit._encoded_search` peels URL, HTML, ``\\uXXXX``, base64 and
+        hex from it, so a value escaped those ways is still found — measured,
+        the same value is located on ``response body`` with the mark and
+        without it, and a finding then says ``response body`` where it could
+        have said ``JSON field error.detail``.
+
+        But the leaf is genuinely load-bearing for a value whose JSON rendering
+        uses an escape that peeling does not undo — ``\\/``, or a surrogate pair
+        for an astral character. Measured: searching a clean body finds such a
+        value on ``JSON field p`` and finds it on *no channel at all* once the
+        mark is there. So this can cost a confirmation outright, not merely a
+        label.
+
+        Today it does not, and the reason is a property of the probes rather
+        than of this function: every ``expected`` value the methods build is
+        tag-bracketed decimal digits, and no conforming JSON encoder escapes
+        ``[A-Za-z0-9]``. A method whose expected value were not alphanumeric
+        would lose findings here, which is the part worth knowing before one is
+        written.
+
+        The reason it is left is :func:`response_shape`, which reads the same
+        body for :class:`BooleanDifferential` and falls back to its weakest
+        reading when the parse fails. Stripping the mark in one and not the
+        other would make the two disagree about what a response *is*, which is
+        the shape of the request-side bug this repeats. Doing both changes what a
+        detection method reports, and this project does not settle that on a
+        fixture — and ``boolean`` is the one method with no bench case at all, so
+        there is currently nothing to validate the change against."""
         try:
             parsed = json.loads(body)
         except (ValueError, TypeError, RecursionError):
@@ -7200,7 +7239,27 @@ def response_shape(status: Optional[int], body: str) -> Tuple[Any, ...]:
       whitespace cannot change a word count by being echoed into a line.
 
     ``status`` is part of the shape: an endpoint that answers 200 to one
-    predicate and 500 to another has answered."""
+    predicate and 500 to another has answered.
+
+    A **byte-order mark is deliberately not stripped**, and the consequence is
+    specific: ``str.strip()`` leaves U+FEFF and ``json.loads`` rejects it, so a
+    marked JSON response takes the third reading instead of the first --
+    measured, ``('json', 200)`` becomes ``('text', 200, ...)``. A differential
+    can still appear there, and did in the case measured, but it appears in a
+    word count rather than in a key structure, which is the weaker guard of the
+    two: the second bullet above records how a length-shaped signature behaved
+    against a reflect-only target. So against a JSON API that emits a mark,
+    ``boolean``'s resistance to a false ``evaluation-sink`` is lower than
+    against one that does not.
+
+    It is left because this function is the input to a detection method's
+    verdict, and that is not a change this project makes on a fixture -- the one
+    method it feeds is also the only method with no bench case, so there is
+    nothing live to validate it against. Written down rather than left as a
+    silence: a boundary the code chose and the prose never mentioned reads
+    exactly like an oversight. The request-side half of the same mark was closed
+    in 3.1.2; see :meth:`RCEKit._json_leaf_channels` for the other response-side
+    half and why the two have to move together."""
     shape: Any
     stripped = body.strip()
     if stripped[:1] in ("{", "["):
