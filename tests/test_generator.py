@@ -9681,6 +9681,93 @@ class ResponseChannelTestCase(unittest.TestCase):
         self.assertEqual(channels[0], ("response body", '{"a": 1}'))
         self.assertIn(("header X-Debug", "v"), channels)
 
+    def test_a_marked_json_response_loses_its_leaf_channels(self):
+        # NOT an endorsement of this behaviour, and not a target to preserve.
+        # It pins the response half of the byte-order-mark gap 3.1.2 closed on
+        # the request side, so that closing this half is a deliberate act with a
+        # failing test in front of it rather than something done by accident.
+        bom = rcekit._BOM
+        body = '{"out": "RKAAAAA1234RKBBBBB"}'
+        self.assertEqual(self.gen._json_leaf_channels(body),
+                         [("JSON field out", "RKAAAAA1234RKBBBBB")])
+        self.assertEqual(self.gen._json_leaf_channels(bom + body), [],
+                         "json.loads rejects the mark outright")
+
+    def test_a_mark_costs_the_channel_name_for_a_value_peeling_can_reach(self):
+        # The common case, and the reason this is usually a loss of precision
+        # rather than of coverage: the body channel carries the whole document
+        # and _encoded_search peels the escape out of it.
+        #
+        # The escapes below are built from chr(92) rather than written as
+        # literals on purpose. An editor -- or a tool writing this file -- that
+        # interprets a backslash-u sequence turns the escaped form into the
+        # character itself, and the assertion then passes while testing nothing.
+        bs = chr(92)
+        bom = rcekit._BOM
+        body = '{"msg": "id=20' + bs + 'u0035' + bs + 'u0038"}'
+        self.assertNotIn("2058", body)
+        for candidate in (body, bom + body):
+            channels = self.gen._response_channels(
+                [("Content-Type", "application/json")], candidate)
+            self.assertEqual(self.method._search_channels("2058", channels),
+                             "response body", candidate)
+
+    def test_a_mark_costs_the_finding_for_a_value_only_the_leaf_can_reach(self):
+        # The near neighbour of the test above, and the one that corrects it.
+        # JSON's `\/` escape and a surrogate pair are not among the forms
+        # _encoded_search peels, so the parsed leaf is the only channel that
+        # reaches such a value -- and a marked response has no leaves. This is a
+        # lost confirmation, not a lost label.
+        #
+        # No method is exposed to it today, because every `expected` value the
+        # methods build is tag-bracketed decimal digits and no conforming JSON
+        # encoder escapes [A-Za-z0-9]. That is a property of the probes, so it
+        # is asserted here too: a method whose expected value stopped being
+        # alphanumeric would lose findings, and this test says where.
+        import warnings
+        bs = chr(92)
+        bom = rcekit._BOM
+        for body, wanted in (
+                ('{"p": "RK' + bs + '/1234' + bs + '/ZZ"}', "RK/1234/ZZ"),
+                ('{"p": "RK' + bs + 'ud83d' + bs + 'ude00ZZ"}',
+                 "RK" + chr(0x1F600) + "ZZ")):
+            self.assertNotIn(wanted, body)
+            # `\/` is a valid JSON escape and an invalid Python one, so handing
+            # this body to _encoded_search's `unicode_escape` peeling warns on
+            # 3.14. Harmless -- that decode sits in its own try/except, so the
+            # candidate is skipped and the search keeps its other layers -- but
+            # it is the test's own data producing it, so it is kept out of the
+            # suite's output rather than left as noise for everyone.
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                clean = self.gen._response_channels(
+                    [("Content-Type", "application/json")], body)
+                found_clean = self.method._search_channels(wanted, clean)
+                marked = self.gen._response_channels(
+                    [("Content-Type", "application/json")], bom + body)
+                found_marked = self.method._search_channels(wanted, marked)
+            self.assertEqual(found_clean, "JSON field p", body)
+            self.assertIsNone(found_marked, body)
+        # The probes' own expected values stay out of that reach.
+        import random as _random
+        probe = self.method.build_probes(self.rec, _random.Random(5))[0]
+        self.assertTrue(probe.expected.isalnum(),
+                        "an expected value that is not alphanumeric would be "
+                        "exposed to the leaf-only case above")
+
+    def test_a_marked_json_response_takes_the_weaker_shape_reading(self):
+        # The other half, and the reason the first is left alone: this function
+        # is the input to `boolean`'s verdict. Stripping the mark in one and not
+        # the other would make the two disagree about what a response is, which
+        # is the shape of the request-side bug. Pinned so that moving them
+        # together is a choice someone makes on purpose, with live-target
+        # evidence -- `boolean` has no bench case, so there is nothing yet to
+        # validate it against.
+        bom = rcekit._BOM
+        body = '{"rows": [{"a": 1}, {"a": 2}]}'
+        self.assertEqual(rcekit.response_shape(200, body)[:2], ("json", 200))
+        self.assertEqual(rcekit.response_shape(200, bom + body)[:2], ("text", 200))
+
     def test_leaf_walk_is_bounded_by_depth_and_count(self):
         nested = json.dumps({"a": {"b": {"c": "deep"}}})
         self.assertEqual(self.gen._json_leaf_channels(nested, max_depth=1), [])

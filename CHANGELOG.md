@@ -8,6 +8,39 @@ formats, or the template schema.
 
 ## [Unreleased]
 
+### Documentation
+
+- **The response side of the byte-order mark is a decision, and nothing said
+  so.** 3.1.2 stripped the mark everywhere RCEKit decides what a *request* body
+  is. The response side was left alone on purpose and that purpose was written
+  down nowhere, so the next reader had no way to tell a boundary from an
+  oversight. Both halves are now stated where someone would meet them, with
+  what each costs measured rather than asserted.
+
+  `_json_leaf_channels`: a marked response yields no leaves, because
+  `json.loads` rejects the mark. Mostly that costs only the precision of the
+  channel name a finding reports — `response body` carries the whole document
+  and the encoded-value search peels URL, HTML, `\uXXXX`, base64 and hex out of
+  it. But a value whose JSON rendering uses an escape that peeling does not undo
+  (`\/`, or a surrogate pair) is reachable *only* through the parsed leaf, and
+  measured, it is found on no channel at all once the mark is there. That is a
+  lost confirmation rather than a lost label. No method is exposed to it today
+  because every expected value is tag-bracketed decimal digits and no conforming
+  encoder escapes `[A-Za-z0-9]` — a property of the probes, now asserted by a
+  test, so a method whose expected value stopped being alphanumeric fails
+  loudly instead of quietly losing findings.
+
+  `response_shape`: a marked JSON response takes the word-count reading instead
+  of the structural one, which is the weaker guard, so `boolean`'s resistance to
+  a false `evaluation-sink` is lower against a mark-emitting JSON API.
+
+  Neither is fixed here, and the reason is the same for both: this is the input
+  to a detection method's verdict, which this project does not settle on a
+  fixture, and `boolean` is the one method with no bench case to settle it
+  against. Pinned by tests worded so that closing either half is a deliberate
+  act with a failing test in front of it, rather than something done by
+  accident — and so that neither reads as an endorsement.
+
 ### Added
 
 - **A coverage ledger, so a measured result and a reproduced one stop looking

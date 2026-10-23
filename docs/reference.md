@@ -427,6 +427,24 @@ connective above, which it supplies itself. Contexts that *wrap* the value stay
 on the predicate side however elaborate their delimiters are, `xml_cdata` and
 `yaml` included.
 
+**A known limit, against a JSON API that emits a byte-order mark.** The oracle
+compares what a response *is*, and it reads a JSON body by its keys, nesting and
+list lengths — every scalar dropped, so a request id or a timestamp cannot make
+two identical answers look different. `json.loads` rejects a leading U+FEFF
+outright, so a marked response takes the fallback reading instead: one marker
+per whitespace-separated word, per line. A differential can still appear there,
+but in a word count rather than in a key structure, which is the weaker of the
+two guards. Against such a target `boolean`'s resistance to a false
+`evaluation-sink` is lower than it is against the same API without the mark.
+
+The mark is stripped on the **request** side, everywhere RCEKit decides what a
+body is. It is deliberately not stripped on the response side, because this
+reading is the input to a detection method's verdict and that is not a change
+this project settles on a fixture — and `boolean` is the one method with no
+bench case, so there is nothing live to validate it against. The same mark also
+costs a marked JSON response its per-leaf channels; what that does and does not
+cost a confirmation is in `RCEKit._json_leaf_channels`.
+
 ### When a filter answers instead of the target
 
 A run whose payloads are refused has learned nothing about the sink. Measured
