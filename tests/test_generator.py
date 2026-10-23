@@ -8664,6 +8664,71 @@ class XmlByteOrderMarkTestCase(unittest.TestCase):
         self.assertFalse(rcekit.starts_xml_body(""))
 
 
+class BodyLocationChoicesTestCase(unittest.TestCase):
+    """The CLI's choices and the encoder registry cannot be two lists.
+
+    `multipart_filename` was added to `_INJECTION_ENCODERS`, documented as a
+    `--verify-body-location` value in the reference, the guide and the
+    changelog, and left out of the parser's hand-maintained copy -- so the CLI
+    answered `invalid choice` to its own documentation, and the encoder was
+    reachable only through an enumerated point.
+
+    The choices are derived now, and these pin the derivation: an encoder added
+    later is offered without anyone remembering to, and one that encodes
+    somewhere other than the body is still refused."""
+
+    def _parse(self, *args):
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), *args],
+            cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=120)
+
+    def _offered_by_argparse(self):
+        """The choices the *parser* really has, read from its own error.
+
+        Asked of argparse rather than of `body_location_choices()`: comparing
+        the helper with the registry would pass while someone re-hardcoded the
+        parser's list, which is the drift this test exists for."""
+        result = self._parse("--verify-body-location", "nonsense")
+        self.assertEqual(result.returncode, 2, result.stderr[-400:])
+        message = re.search(r"choose from ([^)]+)\)", result.stderr)
+        self.assertIsNotNone(message, result.stderr[-400:])
+        return set(re.findall(r"'([^']+)'", message.group(1)))
+
+    def test_every_body_encoder_is_offered_by_the_flag(self):
+        offered = self._offered_by_argparse()
+        registry = set(RCEKit._INJECTION_ENCODERS)
+        non_body = set(RCEKit._NON_BODY_LOCATIONS)
+        self.assertEqual(offered, registry - non_body,
+                         "the flag's choices and the encoder registry have drifted")
+        self.assertEqual(offered, set(RCEKit.body_location_choices()))
+        self.assertIn("multipart_filename", offered)
+        self.assertIn("xml_cdata", offered)
+
+    def test_an_encoder_that_renders_elsewhere_is_not_a_body_location(self):
+        # The near neighbour: deriving the list must not sweep in the URL and
+        # header encoders, which have their own flag or no flag at all.
+        for name in RCEKit._NON_BODY_LOCATIONS:
+            self.assertIn(name, RCEKit._INJECTION_ENCODERS, name)
+            self.assertNotIn(name, RCEKit.body_location_choices(), name)
+
+    def test_every_url_location_the_flag_offers_is_a_real_encoder(self):
+        # The mirror of the same bug, for the other location flag.
+        result = self._parse("--verify-body-location", "nonsense")
+        self.assertEqual(result.returncode, 2)
+        for name in ("query_value", "url_path", "raw"):
+            self.assertIn(name, RCEKit._INJECTION_ENCODERS, name)
+
+    def test_the_documented_filename_value_is_accepted(self):
+        # The finding itself: this invocation exited 2 with `invalid choice`
+        # while three documents told the operator to use it.
+        result = self._parse(
+            "--acknowledge-consent", "--verify-url", "http://127.0.0.1:9/?q=FUZZ",
+            "--verify-body-location", "multipart_filename", "--methods", "reflected",
+            "--environments", "unix", "--contexts", "raw", "--probe-depth", "quick")
+        self.assertNotEqual(result.returncode, 2, result.stderr[-400:])
+        self.assertNotIn("invalid choice", result.stderr)
+
+
 class XmlBodyLocationTestCase(unittest.TestCase):
     """The escaping an XML payload needs is a property of its *position*.
 

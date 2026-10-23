@@ -419,6 +419,16 @@ formats, or the template schema.
   now one function (`point_body_location`) so the list of position-encoded kinds
   exists once.
 
+  **The flag's choices are now derived from the encoder registry** rather than
+  written out beside it. They were two lists, and that is exactly how far they
+  drifted inside this change: the encoder was registered, documented as a flag
+  value in the reference, the guide and this entry, and left out of the parser's
+  copy, so the CLI answered `invalid choice` to its own documentation and the
+  encoder was reachable only through an enumerated point. A test now reads the
+  choices out of argparse's own error rather than off the helper, because
+  comparing the helper with the registry would pass while someone re-hardcoded
+  the parser's list.
+
 ### Fixed
 
 - **`filename` ends in `name`, and the field-name pattern had no boundary.**

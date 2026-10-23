@@ -2200,6 +2200,21 @@ class RCEKit:
         "raw": lambda p: p,
     }
 
+    # The encoders that render somewhere other than the body: two URL positions
+    # and the header line. `--verify-body-location` offers everything else,
+    # derived from the registry above rather than written out beside it --
+    # `multipart_filename` was added to the registry, documented as a flag
+    # value in three places, and left out of the parser's hand-maintained copy,
+    # so the CLI answered `invalid choice` to its own documentation. Every
+    # hand-written list naming things in this file has gone stale at least once.
+    _NON_BODY_LOCATIONS = ("query_value", "url_path", "header")
+
+    @classmethod
+    def body_location_choices(cls) -> List[str]:
+        """The values ``--verify-body-location`` accepts, in registry order."""
+        return [name for name in cls._INJECTION_ENCODERS
+                if name not in cls._NON_BODY_LOCATIONS]
+
     def _encode_for_location(self, payload: str, location: str) -> str:
         encoder = self._INJECTION_ENCODERS.get(location)
         if encoder is None:
@@ -9023,8 +9038,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="How to encode the payload where FUZZ appears in --verify-url "
                              "(default query_value: percent-encoded, as a query parameter)")
     parser.add_argument("--verify-body-location",
-                        choices=["json_string", "form_value", "xml_text", "xml_attr",
-                                 "xml_cdata", "raw"], default=None,
+                        choices=RCEKit.body_location_choices(), default=None,
                         help="How to encode the payload where FUZZ appears in --verify-data "
                              "(default: auto-detected from Content-Type/body shape, and for an XML "
                              "body from the marker's own position). json_string "
@@ -9032,7 +9046,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "encodes for x-www-form-urlencoded; xml_text and xml_attr apply XML "
                              "character escaping, which the target's parser undoes, the attribute "
                              "form also escaping both quotes; xml_cdata leaves the payload alone "
-                             "except for the sequence that would end the section; raw sends it "
+                             "except for the sequence that would end the section; "
+                             "multipart_filename escapes the quote and backslash an upload's "
+                             "filename= parameter reserves and neutralises CR/LF, which in a part "
+                             "header would forge a new part; raw sends it "
                              "verbatim — which is what an envelope the application scrapes with a "
                              "regex rather than parses needs")
     parser.add_argument("--verify-allow-destructive", action="store_true",
